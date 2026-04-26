@@ -1,0 +1,31 @@
+{
+  "name": "owncord",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted minimal messenger with voice/video calls and screen sharing",
+  "license": "MIT",
+  "author": "Restez",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Restezzz/OwnCord.git"
+  },
+  "homepage": "https://github.com/Restezzz/OwnCord#readme",
+  "bugs": {
+    "url": "https://github.com/Restezzz/OwnCord/issues"
+  },
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "install:all": "npm install && npm --workspace server install && npm --workspace client install",
+    "dev": "npm-run-all --parallel dev:server dev:client",
+    "dev:server": "npm --workspace server run dev",
+    "dev:client": "npm --workspace client run dev",
+    "build": "npm --workspace client run build",
+    "start": "npm --workspace server start"
+  },
+  "devDependencies": {
+    "npm-run-all": "^4.1.5"
+  }
+}

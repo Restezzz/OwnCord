@@ -1,0 +1,46 @@
+# =====================================================================
+# systemd unit для OwnCord. Установка:
+#
+#   sudo cp deploy/owncord.service /etc/systemd/system/owncord.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now owncord
+#   sudo systemctl status owncord
+#
+# Логи:  journalctl -u owncord -f
+# Рестарт после правки .env: sudo systemctl restart owncord
+#
+# Перед первым запуском поправь:
+#   - WorkingDirectory  — куда склонен репозиторий
+#   - User / Group      — от какого юзера запускать (создай отдельного, например `owncord`)
+# =====================================================================
+
+[Unit]
+Description=OwnCord self-hosted messenger
+After=network.target
+
+[Service]
+Type=simple
+User=owncord
+Group=owncord
+WorkingDirectory=/opt/owncord
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/owncord/server/.env
+ExecStart=/usr/bin/node server/src/index.js
+Restart=always
+RestartSec=3
+
+# Безопасность: не давать сервису доступ к чему попало.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# Папка для базы и загрузок должна быть писабельной — указываем.
+ReadWritePaths=/opt/owncord/server/uploads /opt/owncord/server/data
+# better-sqlite3 кладёт data.sqlite в server/ — оставим всю папку server писабельной.
+ReadWritePaths=/opt/owncord/server
+
+# Базовые лимиты ресурсов (опционально, для маленького VPS).
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

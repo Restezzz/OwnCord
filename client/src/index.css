@@ -1,0 +1,151 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-bg-0 text-slate-100 font-sans antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #232735;
+    border-radius: 10px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #2d3243;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium
+           transition-colors disabled:opacity-50 disabled:cursor-not-allowed select-none;
+  }
+  .btn-primary {
+    @apply btn bg-accent hover:bg-accent-hover text-white;
+  }
+  .btn-ghost {
+    @apply btn bg-transparent hover:bg-bg-3 text-slate-200;
+  }
+  .btn-danger {
+    @apply btn bg-danger hover:bg-danger-hover text-white;
+  }
+  .btn-icon {
+    @apply inline-flex items-center justify-center rounded-full w-10 h-10 transition-colors select-none;
+  }
+
+  .input {
+    @apply w-full rounded-lg bg-bg-2 border border-border px-3 py-2 text-sm
+           outline-none focus:border-accent focus:ring-2 focus:ring-accent/30
+           placeholder:text-slate-500;
+  }
+  /* select-варианту нельзя позволять focus-ring "выпадать" за родителя
+     с overflow: hidden — заменим на border + ring внутрь. */
+  select.input {
+    @apply pr-9 cursor-pointer appearance-none bg-no-repeat;
+    /* стрелка-шеврон, серая, справа */
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+    background-position: right 12px center;
+    background-size: 12px 12px;
+  }
+  select.input:hover {
+    @apply border-accent/60;
+  }
+  select.input:focus {
+    @apply border-accent;
+    box-shadow: inset 0 0 0 1px rgb(124 108 255 / 0.6);
+  }
+  select.input option {
+    @apply bg-bg-2 text-slate-100;
+  }
+
+  .card {
+    @apply rounded-xl bg-bg-1 border border-border shadow-soft;
+  }
+
+  .list-row {
+    @apply flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors;
+  }
+  .list-row-active {
+    @apply bg-bg-3;
+  }
+  .list-row:not(.list-row-active):hover {
+    @apply bg-bg-2;
+  }
+
+  .avatar {
+    @apply inline-flex items-center justify-center rounded-full font-semibold text-white select-none;
+  }
+
+  /* Кастомный диапазон-ползунок: тёмный трек, заливка до thumb, круглый thumb. */
+  .range {
+    @apply w-full h-2 rounded-full appearance-none cursor-pointer outline-none;
+    background: linear-gradient(
+      to right,
+      theme(colors.accent.DEFAULT) 0%,
+      theme(colors.accent.DEFAULT) var(--range-progress, 0%),
+      #1f2330 var(--range-progress, 0%),
+      #1f2330 100%
+    );
+  }
+  .range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 9999px;
+    background: #fff;
+    border: 2px solid theme(colors.accent.DEFAULT);
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    cursor: pointer;
+    transition: transform .15s ease;
+  }
+  .range::-webkit-slider-thumb:hover { transform: scale(1.15); }
+  .range::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 9999px;
+    background: #fff;
+    border: 2px solid theme(colors.accent.DEFAULT);
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    cursor: pointer;
+  }
+  .range::-moz-range-track {
+    height: 8px;
+    border-radius: 9999px;
+    background: #1f2330;
+  }
+  .range::-moz-range-progress {
+    height: 8px;
+    border-radius: 9999px;
+    background: theme(colors.accent.DEFAULT);
+  }
+  .range:focus-visible {
+    box-shadow: 0 0 0 3px rgb(124 108 255 / 0.25);
+  }
+}
+
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 rgba(124, 108, 255, 0.6); }
+  70% { box-shadow: 0 0 0 14px rgba(124, 108, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(124, 108, 255, 0); }
+}
+.pulse-ring { animation: pulse-ring 1.6s infinite; }
