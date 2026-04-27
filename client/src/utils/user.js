@@ -1,19 +1,28 @@
 /**
  * Унифицированный доступ к отображаемому имени и аватарке.
  * Если пользователь не задал displayName, показываем логин.
+ * Для удалённых аккаунтов (deleted=true) — заглушка.
  */
+export const DELETED_USER_LABEL = 'Удалённый пользователь';
+
+export function isDeletedUser(user) {
+  return !!(user && user.deleted);
+}
+
 export function getDisplayName(user) {
   if (!user) return '';
+  if (isDeletedUser(user)) return DELETED_USER_LABEL;
   return user.displayName || user.username || '';
 }
 
 export function getAvatarUrl(user) {
   if (!user) return null;
+  if (isDeletedUser(user)) return null; // заставит компонент Avatar показать дефолт
   return user.avatarPath || null;
 }
 
 export function hasCustomDisplayName(user) {
-  if (!user || !user.username) return false;
+  if (!user || !user.username || isDeletedUser(user)) return false;
   return !!user.displayName && user.displayName !== user.username;
 }
 

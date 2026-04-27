@@ -63,3 +63,17 @@ export function leaveUserFromGroup(userId, groupId) {
     if (s) s.leave(groupRoomOf(groupId));
   }
 }
+
+// Принудительно разорвать все сокет-соединения пользователя — нужен при
+// удалении аккаунта, чтобы текущие подключённые вкладки разлогинились.
+export function disconnectUserSockets(userId, reason = 'account-deleted') {
+  if (!io) return;
+  const room = io.sockets.adapter.rooms.get(roomOf(userId));
+  if (!room) return;
+  for (const sid of [...room]) {
+    const s = io.sockets.sockets.get(sid);
+    if (!s) continue;
+    try { s.emit('account:deleted', { reason }); } catch { /* */ }
+    try { s.disconnect(true); } catch { /* */ }
+  }
+}

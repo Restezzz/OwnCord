@@ -120,12 +120,13 @@ router.post('/login', async (req, res) => {
   }
   const row = db
     .prepare(
-      `SELECT id, username, password, display_name, avatar_path, hide_on_delete, created_at
+      `SELECT id, username, password, display_name, avatar_path, hide_on_delete, created_at, deleted_at
        FROM users WHERE username = ?`,
     )
     .get(username);
   if (!row) return res.status(401).json({ error: 'invalid credentials' });
-  const ok = await bcrypt.compare(password, row.password);
+  if (row.deleted_at) return res.status(401).json({ error: 'invalid credentials' });
+  const ok = await bcrypt.compare(password, row.password || '');
   if (!ok) return res.status(401).json({ error: 'invalid credentials' });
   const user = publicUser(row);
   const token = signToken({ id: user.id, username: user.username });

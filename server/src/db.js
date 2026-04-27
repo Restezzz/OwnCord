@@ -52,6 +52,11 @@ addColumn('users', 'avatar_path', 'TEXT');
 // Если включено — при удалении автором сообщения оно полностью исчезает
 // у обеих сторон (вместо плашки "сообщение удалено").
 addColumn('users', 'hide_on_delete', 'INTEGER NOT NULL DEFAULT 0');
+// Soft-delete для аккаунта пользователя. Сообщения и история звонков
+// остаются (история переписок не должна терять контекст), но логин
+// блокируется, аватар стирается, имя подменяется на «Удалённый
+// пользователь», и юзер пропадает из всех групп.
+addColumn('users', 'deleted_at', 'INTEGER');
 
 addColumn('messages', 'kind', "TEXT NOT NULL DEFAULT 'text'");
 addColumn('messages', 'attachment_path', 'TEXT');

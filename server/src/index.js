@@ -16,6 +16,7 @@ import inviteRoutes from './routes/invites.js';
 import pushRoutes from './routes/push.js';
 import { attachSocket } from './socket.js';
 import { UPLOADS_DIR, MAX_UPLOAD_BYTES } from './uploads.js';
+import { startRetention } from './retention.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -82,3 +83,6 @@ const PORT = Number(process.env.PORT || 3001);
 server.listen(PORT, () => {
   console.log(`[owncord] listening on http://localhost:${PORT}`);
 });
+
+// Фоновая чистка старых сообщений и файлов (см. RETENTION_DAYS в .env).
+startRetention();

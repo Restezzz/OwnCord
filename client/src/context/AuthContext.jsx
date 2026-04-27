@@ -59,13 +59,21 @@ export function AuthProvider({ children }) {
   // Управляем жизненным циклом сокета
   useEffect(() => {
     if (auth?.token) {
-      connectSocket(auth.token);
-    } else {
-      disconnectSocket();
+      const sock = connectSocket(auth.token);
+      // Сервер присылает `account:deleted`, если аккаунт удалили из
+      // другой вкладки или админом. Мгновенно гасим текущую сессию.
+      const onDeleted = () => {
+        setAuth(null);
+        writeStored(null);
+        try { disconnectSocket(); } catch { /* */ }
+      };
+      sock.on?.('account:deleted', onDeleted);
+      return () => {
+        try { sock.off?.('account:deleted', onDeleted); } catch { /* */ }
+      };
     }
-    return () => {
-      // Не отключаем при каждом ререндере — только при логауте (через else выше)
-    };
+    disconnectSocket();
+    return undefined;
   }, [auth?.token]);
 
   const login = useCallback(async (username, password) => {

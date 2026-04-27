@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import fs from 'node:fs';
+import bcrypt from 'bcryptjs';
 import db from '../db.js';
 import { authRequired } from '../auth.js';
 import { isAdminUser } from '../admin.js';
 import { uploadAvatar, publicPathFor, absolutePathFor } from '../uploads.js';
 import { emitToUser } from '../ioHub.js';
+import { softDeleteUser } from '../accountDeletion.js';
 
 const router = Router();
 
@@ -82,6 +84,30 @@ router.post('/avatar', authRequired, uploadAvatar.single('avatar'), (req, res) =
   const user = readUser(req.user.id);
   emitToUser(req.user.id, 'profile:self', user);
   res.json({ user });
+});
+
+// Удаление собственного аккаунта. Требует подтверждения паролем — это
+// необратимо, лучше дважды переспросить. Сообщения и звонки в истории
+// у других участников остаются (имя/аватар клиент заменит на «Удалённый
+// пользователь»). Метод идемпотентен относительно повторного вызова —
+// уже удалённый аккаунт не может авторизоваться, поэтому второго раза
+// не будет.
+router.delete('/', authRequired, async (req, res) => {
+  const { password } = req.body || {};
+  if (typeof password !== 'string' || !password) {
+    return res.status(400).json({ error: 'password required' });
+  }
+  const row = db
+    .prepare('SELECT password FROM users WHERE id = ?')
+    .get(req.user.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+
+  const ok = await bcrypt.compare(password, row.password || '');
+  if (!ok) return res.status(403).json({ error: 'wrong password' });
+
+  const result = softDeleteUser(req.user.id);
+  if (!result.ok) return res.status(400).json({ error: result.error });
+  res.json({ ok: true });
 });
 
 router.delete('/avatar', authRequired, (req, res) => {

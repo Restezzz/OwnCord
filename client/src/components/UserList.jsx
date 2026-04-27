@@ -31,7 +31,11 @@ export default function UserList({
   const match = (s) => !needle || (s || '').toLowerCase().includes(needle);
 
   const filteredUsers = useMemo(() => {
-    const list = users.filter((u) => u.id !== selfId);
+    // Удалённые аккаунты в списке не показываем — звонить и писать им
+    // нельзя, в общий контакт-лист им делать нечего. Их сообщения и
+    // системные плашки в истории чатов отображаются отдельно (через
+    // глобальный usersById, см. ChatPanel).
+    const list = users.filter((u) => u.id !== selfId && !u.deleted);
     if (!needle) return list;
     return list.filter((u) => match(u.username) || match(u.displayName));
   }, [users, selfId, needle]);

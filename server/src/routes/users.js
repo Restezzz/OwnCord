@@ -6,21 +6,31 @@ import { getOnlineUserIds } from '../presence.js';
 const router = Router();
 
 function publicUser(row, online) {
+  const deleted = !!row.deleted_at;
   return {
     id: row.id,
-    username: row.username,
-    displayName: row.display_name || row.username,
-    avatarPath: row.avatar_path || null,
+    // Для удалённых имя не светим — клиент сам подставит «Удалённый
+    // пользователь». Username тоже зануляем, чтобы он нигде случайно
+    // не отрисовался.
+    username: deleted ? null : row.username,
+    displayName: deleted ? null : (row.display_name || row.username),
+    avatarPath: deleted ? null : (row.avatar_path || null),
     createdAt: row.created_at,
-    online,
+    online: deleted ? false : online,
+    deleted,
   };
 }
 
 router.get('/', authRequired, (req, res) => {
+  // Возвращаем всех, включая удалённых, чтобы фронт смог отрисовать
+  // авторов исторических сообщений и контакты из старых DM. У удалённых
+  // публичные поля занулены, флаг `deleted: true` — клиент сам решит,
+  // показывать в списке для звонков/писем или нет.
   const rows = db
     .prepare(
-      `SELECT id, username, display_name, avatar_path, created_at
-       FROM users ORDER BY COALESCE(display_name, username) COLLATE NOCASE`,
+      `SELECT id, username, display_name, avatar_path, created_at, deleted_at
+       FROM users
+        ORDER BY COALESCE(display_name, username) COLLATE NOCASE`,
     )
     .all();
   const online = getOnlineUserIds();
@@ -36,7 +46,7 @@ router.get('/:id', authRequired, (req, res) => {
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
   const row = db
     .prepare(
-      `SELECT id, username, display_name, avatar_path, created_at
+      `SELECT id, username, display_name, avatar_path, created_at, deleted_at
        FROM users WHERE id = ?`,
     )
     .get(id);

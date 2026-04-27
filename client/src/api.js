@@ -107,6 +107,10 @@ export const api = {
     request(`/api/groups/${id}/avatar`, { method: 'DELETE', token }),
   groupHistory: (token, id) => request(`/api/groups/${id}/messages`, { token }),
 
+  // Удалить собственный аккаунт (требует пароль).
+  deleteMe: (token, password) =>
+    request('/api/me', { method: 'DELETE', body: { password }, token }),
+
   // --- Web Push -----------------------------------------------------------
   pushConfig: () => request('/api/push/config'),
   pushSubscribe: (token, subscription) =>

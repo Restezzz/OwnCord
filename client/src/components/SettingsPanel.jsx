@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Mic, Volume2, X, Bell, BellOff, Upload, Trash2, User, ShieldCheck, Headphones, Play,
-  KeyRound, Copy, Check, RefreshCw, Smartphone,
+  KeyRound, Copy, Check, RefreshCw, Smartphone, UserX, AlertTriangle,
 } from 'lucide-react';
 import {
   pushSupported, getPushStatus, enablePush, disablePush,
@@ -86,12 +86,13 @@ export default function SettingsPanel({ open, onClose }) {
 // ---------------- Profile ---------------------------------------------------
 
 function ProfileTab() {
-  const { auth, updateUser } = useAuth();
+  const { auth, updateUser, logout } = useAuth();
   const toast = useToast();
   const user = auth?.user;
   const [displayDraft, setDisplayDraft] = useState(getDisplayName(user));
   const [savingName, setSavingName] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const fileRef = useRef(null);
 
   const avatarUrl = getAvatarUrl(user);
@@ -242,7 +243,144 @@ function ProfileTab() {
           )}
         </div>
       </div>
+
+      {/* Опасная зона: удаление аккаунта. */}
+      <div className="h-px bg-border" />
+      <div className="space-y-2">
+        <div className="text-xs text-red-400 uppercase tracking-wider flex items-center gap-1.5">
+          <AlertTriangle size={12} /> Опасная зона
+        </div>
+        <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 space-y-2">
+          <div className="text-sm font-medium">Удалить аккаунт</div>
+          <p className="text-xs text-slate-400">
+            Логин будет заблокирован, аватар и ник стёрты. Сообщения, которые
+            ты отправлял, останутся в истории у собеседников, но твоё имя в
+            них будет заменено на «Удалённый пользователь». Это действие
+            необратимо.
+          </p>
+          <button
+            type="button"
+            className="h-9 px-3 rounded-lg bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-300 text-sm inline-flex items-center gap-2"
+            onClick={() => setDeleteOpen(true)}
+          >
+            <UserX size={14} /> Удалить аккаунт…
+          </button>
+        </div>
+      </div>
+
+      <DeleteAccountModal
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        token={auth?.token}
+        onDeleted={() => {
+          toast.info('Аккаунт удалён');
+          setDeleteOpen(false);
+          logout();
+        }}
+      />
     </section>
+  );
+}
+
+function DeleteAccountModal({ open, onClose, token, onDeleted }) {
+  const toast = useToast();
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setPassword('');
+      setConfirm('');
+      setBusy(false);
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  const canSubmit = password.length > 0 && confirm.trim().toUpperCase() === 'УДАЛИТЬ' && !busy;
+
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setBusy(true);
+    try {
+      await api.deleteMe(token, password);
+      onDeleted?.();
+    } catch (err) {
+      toast.error(err?.message || 'Не удалось удалить аккаунт');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] grid place-items-center bg-black/60 backdrop-blur-sm p-4"
+      onClick={onClose}
+    >
+      <form
+        className="card w-full max-w-md p-5 space-y-4"
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={onSubmit}
+      >
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl bg-red-500/15 grid place-items-center text-red-400 shrink-0">
+            <AlertTriangle size={20} />
+          </div>
+          <div>
+            <div className="text-base font-semibold">Удалить аккаунт навсегда?</div>
+            <div className="text-xs text-slate-400 mt-0.5">
+              Восстановить будет невозможно.
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-xs text-slate-400">Текущий пароль</label>
+          <input
+            className="input"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            required
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-xs text-slate-400">
+            Чтобы подтвердить, напиши <span className="text-red-300 font-mono">УДАЛИТЬ</span>
+          </label>
+          <input
+            className="input"
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            placeholder="УДАЛИТЬ"
+            autoComplete="off"
+            required
+          />
+        </div>
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            type="button"
+            className="btn-ghost h-9 px-3"
+            onClick={onClose}
+            disabled={busy}
+          >
+            Отмена
+          </button>
+          <button
+            type="submit"
+            className="h-9 px-4 rounded-lg bg-red-500/80 hover:bg-red-500 text-white text-sm inline-flex items-center gap-2 disabled:opacity-50"
+            disabled={!canSubmit}
+          >
+            <UserX size={14} />
+            {busy ? 'Удаление…' : 'Удалить навсегда'}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 

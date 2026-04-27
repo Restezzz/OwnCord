@@ -11,7 +11,7 @@ import CallMessage from './CallMessage.jsx';
 import SystemMessage from './SystemMessage.jsx';
 import GroupCallMessage from './GroupCallMessage.jsx';
 import AttachmentMessage from './AttachmentMessage.jsx';
-import { getAvatarUrl, getDisplayName, hasCustomDisplayName } from '../utils/user.js';
+import { getDisplayName, getAvatarUrl, hasCustomDisplayName, formatDuration, isDeletedUser } from '../utils/user.js';
 import { renderMarkdown } from '../utils/markdown.jsx';
 
 function formatTime(ts) {
@@ -181,6 +181,9 @@ export default function ChatPanel({
 
   const displayName = isGroup ? (group.name || 'Группа') : getDisplayName(peer);
   const avatarUrl = isGroup ? (group.avatarPath || null) : getAvatarUrl(peer);
+  // Удалённому аккаунту нельзя звонить и писать — история остаётся
+  // read-only. Сами кнопки скрываем, а поле ввода делаем disabled.
+  const peerDeleted = !isGroup && isDeletedUser(peer);
 
   return (
     <div className="flex flex-col h-full">
@@ -222,7 +225,9 @@ export default function ChatPanel({
             <div className="text-xs text-slate-500 truncate">
               {isGroup
                 ? `${group.members?.length || 0} участ.`
-                : (hasCustomDisplayName(peer) ? `@${peer.username} • ` : '') + (peer.online ? 'в сети' : 'не в сети')
+                : peerDeleted
+                  ? 'аккаунт удалён'
+                  : (hasCustomDisplayName(peer) ? `@${peer.username} • ` : '') + (peer.online ? 'в сети' : 'не в сети')
               }
             </div>
           </div>
@@ -261,7 +266,7 @@ export default function ChatPanel({
                 <SettingsIcon size={16} />
               </button>
             </>
-          ) : (
+          ) : peerDeleted ? null : (
             <>
               <button
                 className="btn-icon bg-bg-3 hover:bg-bg-2 text-slate-100 disabled:opacity-40"
@@ -335,7 +340,11 @@ export default function ChatPanel({
       </div>
 
       <div className="p-3 border-t border-border">
-        {recording ? (
+        {peerDeleted ? (
+          <div className="px-3 py-2 rounded-lg bg-bg-3 text-slate-400 text-sm text-center">
+            Этот аккаунт был удалён. Написать или позвонить уже не получится — история остаётся только для чтения.
+          </div>
+        ) : recording ? (
           <VoiceRecorder
             onSend={async (blob, durationMs) => {
               await onSendVoice?.(blob, durationMs);

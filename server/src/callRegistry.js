@@ -247,6 +247,15 @@ export function isCalleeMuted(callerId, calleeId) {
  * Используется при создании нового invite, чтобы отфиналить «висящие»
  * waiting-сессии и не оставлять в чате две системные плашки одновременно.
  */
+export function findActiveCallsForUser(userId) {
+  const out = [];
+  for (const c of calls.values()) {
+    if (c.status === 'ended') continue;
+    if (c.callerId === userId || c.calleeId === userId) out.push(c);
+  }
+  return out;
+}
+
 export function findActiveCallsBetween(userA, userB) {
   const out = [];
   for (const c of calls.values()) {
