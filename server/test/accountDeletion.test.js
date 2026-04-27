@@ -159,6 +159,43 @@ describe('account deletion', () => {
     expect(row).toBeUndefined();
   });
 
+  it('admin can delete another user; non-admin gets 403; cannot delete self via admin route', async () => {
+    // Явно фиксируем админа через env — чтобы не зависеть от того, кто
+    // оказался id=1 в этом тестовом процессе. ADMIN_USERNAMES читается
+    // динамически в admin.js, поэтому переопределение здесь работает.
+    const prevAdmins = process.env.ADMIN_USERNAMES;
+    process.env.ADMIN_USERNAMES = 'admin_root';
+    try {
+      const admin = await register('admin_root');
+      const victim = await register('admin_victim');
+      const stranger = await register('admin_stranger');
+
+      // Не-админ не может удалить чужого.
+      const forbidden = await request(app)
+        .delete(`/api/users/${victim.user.id}`)
+        .set('Authorization', `Bearer ${stranger.token}`);
+      expect(forbidden.status).toBe(403);
+
+      // Админ может.
+      const ok = await request(app)
+        .delete(`/api/users/${victim.user.id}`)
+        .set('Authorization', `Bearer ${admin.token}`);
+      expect(ok.status).toBe(200);
+
+      const row = db.prepare('SELECT deleted_at FROM users WHERE id = ?').get(victim.user.id);
+      expect(row.deleted_at).toBeTruthy();
+
+      // Себя через admin-route — нельзя, отдельный код 400.
+      const self = await request(app)
+        .delete(`/api/users/${admin.user.id}`)
+        .set('Authorization', `Bearer ${admin.token}`);
+      expect(self.status).toBe(400);
+    } finally {
+      if (prevAdmins === undefined) delete process.env.ADMIN_USERNAMES;
+      else process.env.ADMIN_USERNAMES = prevAdmins;
+    }
+  });
+
   it('users list hides deleted accounts but /:id still serves them', async () => {
     const a = await register('list_a');
     const b = await register('list_b');

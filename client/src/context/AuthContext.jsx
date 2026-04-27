@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { connectSocket, disconnectSocket } from '../socket.js';
+import { useToast } from './ToastContext.jsx';
 
 const AuthContext = createContext(null);
 
@@ -26,6 +27,7 @@ function writeStored(auth) {
 export function AuthProvider({ children }) {
   const [auth, setAuth] = useState(() => readStored());
   const [ready, setReady] = useState(false);
+  const toast = useToast();
 
   // При монтировании проверяем токен (если есть) через /me
   useEffect(() => {
@@ -63,6 +65,10 @@ export function AuthProvider({ children }) {
       // Сервер присылает `account:deleted`, если аккаунт удалили из
       // другой вкладки или админом. Мгновенно гасим текущую сессию.
       const onDeleted = () => {
+        // Покажем toast до того как разлогинимся — после отключения сокета
+        // и обнуления auth дерево перерисуется, но ToastProvider живёт
+        // выше AuthProvider, так что уведомление не пропадёт.
+        try { toast?.info?.('Аккаунт удалён', { ttl: 8000 }); } catch { /* */ }
         setAuth(null);
         writeStored(null);
         try { disconnectSocket(); } catch { /* */ }
@@ -74,7 +80,7 @@ export function AuthProvider({ children }) {
     }
     disconnectSocket();
     return undefined;
-  }, [auth?.token]);
+  }, [auth?.token, toast]);
 
   const login = useCallback(async (username, password) => {
     const res = await api.login(username, password);

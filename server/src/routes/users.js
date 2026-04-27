@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import db from '../db.js';
 import { authRequired } from '../auth.js';
+import { adminRequired } from '../admin.js';
 import { getOnlineUserIds } from '../presence.js';
+import { softDeleteUser } from '../accountDeletion.js';
 
 const router = Router();
 
@@ -53,6 +55,25 @@ router.get('/:id', authRequired, (req, res) => {
   if (!row) return res.status(404).json({ error: 'not found' });
   const online = getOnlineUserIds();
   res.json({ user: publicUser(row, online.has(row.id)) });
+});
+
+// Админ может удалить чужой аккаунт (например, когда юзер потерял пароль
+// и просит). Логика идентична самостоятельному удалению — те же чистки,
+// тот же дисконнект сокетов. Самого себя через этот эндпоинт сносить
+// нельзя: для своего аккаунта используется DELETE /api/me с пароль-
+// подтверждением, чтобы случайно не выпилиться.
+router.delete('/:id', authRequired, adminRequired, (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
+  if (id === req.user.id) {
+    return res.status(400).json({ error: 'use DELETE /api/me to delete your own account' });
+  }
+  const result = softDeleteUser(id);
+  if (!result.ok) {
+    const status = result.error === 'no such user' ? 404 : 400;
+    return res.status(status).json({ error: result.error });
+  }
+  res.json({ ok: true });
 });
 
 export default router;
