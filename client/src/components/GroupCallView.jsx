@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Mic, MicOff, Video, VideoOff, PhoneOff, Users as UsersIcon,
-  ScreenShare, ScreenShareOff, Volume2, VolumeX,
+  ScreenShare, ScreenShareOff, Volume2, VolumeX, Settings,
 } from 'lucide-react';
 import Avatar from './Avatar.jsx';
+import SettingsPanel from './SettingsPanel.jsx';
 import { useSettings } from '../context/SettingsContext.jsx';
 import { getAvatarUrl, getDisplayName } from '../utils/user.js';
 
@@ -85,6 +86,7 @@ function Tile({ stream, user, self, muted, mirror, className = '' }) {
 
 export default function GroupCallView({ call, usersById, selfId }) {
   const { settings } = useSettings();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const {
     state, group, localStream, remotes, participants,
     muted, deafened, cameraOn, sharingScreen, withVideo,
@@ -202,6 +204,12 @@ export default function GroupCallView({ call, usersById, selfId }) {
         >
           {sharingScreen ? <ScreenShareOff size={20} /> : <ScreenShare size={20} />}
         </ToolButton>
+        <ToolButton
+          onClick={() => setSettingsOpen(true)}
+          title="Настройки"
+        >
+          <Settings size={20} />
+        </ToolButton>
         <button
           onClick={() => leave()}
           className="btn-icon bg-danger hover:bg-danger-hover text-white ml-2"
@@ -211,6 +219,10 @@ export default function GroupCallView({ call, usersById, selfId }) {
           <PhoneOff size={22} />
         </button>
       </div>
+
+      {settingsOpen && (
+        <SettingsPanel onClose={() => setSettingsOpen(false)} />
+      )}
     </div>
   );
 }

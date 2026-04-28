@@ -142,21 +142,22 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     setState('idle');
   }, [closePeer]);
 
-  // Применить актуальные локальные треки на все sender'ы pc.
-  // Используется и при создании (для callee — после setRemoteDescription),
-  // и при toggleScreenShare/toggleCamera, чтобы не делать addTrack/renegotiate.
+  // Применить актуальные локальные треки на sender'ы pc.
+  // Используется при toggleScreenShare/toggleCamera, чтобы не делать
+  // renegotiation. Полагается на то, что sender'ы по audio/video были
+  // сохранены в pc.__audioSender / pc.__videoSender внутри
+  // createPeerConnection — это надёжнее, чем определять kind через
+  // tr.sender.track.kind (который может быть undefined, если track=null).
   const applyLocalTracksToPc = useCallback((pc) => {
-    const want = {
-      audio: audioTrackRef.current,
-      video: currentVideoTrack(),
-    };
-    for (const tr of pc.getTransceivers()) {
-      const kind = tr.receiver?.track?.kind || tr.sender?.track?.kind;
-      if (!kind) continue;
-      const target = want[kind] ?? null;
-      if (tr.sender.track !== target) {
-        try { tr.sender.replaceTrack(target); } catch { /* */ }
-      }
+    const aS = pc.__audioSender;
+    const vS = pc.__videoSender;
+    const aTrack = audioTrackRef.current || null;
+    const vTrack = currentVideoTrack() || null;
+    if (aS && aS.track !== aTrack) {
+      try { aS.replaceTrack(aTrack); } catch { /* */ }
+    }
+    if (vS && vS.track !== vTrack) {
+      try { vS.replaceTrack(vTrack); } catch { /* */ }
     }
   }, []);
 
@@ -174,6 +175,10 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     // по порядку при negotiation.
     const audioTr = pc.addTransceiver('audio', { direction: 'sendrecv' });
     const videoTr = pc.addTransceiver('video', { direction: 'sendrecv' });
+    // Сохраняем sender'ы по типу прямо на PC, чтобы дальнейший replaceTrack
+    // не зависел от sender.track.kind (он undefined пока track=null).
+    pc.__audioSender = audioTr.sender;
+    pc.__videoSender = videoTr.sender;
     if (audioTrackRef.current) {
       try { audioTr.sender.replaceTrack(audioTrackRef.current); } catch { /* */ }
     }
@@ -423,8 +428,10 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
       if (!pc) pc = createPeerConnection(from, false);
       try {
         await pc.setRemoteDescription(sdp);
-        // На стороне отвечающего sender'ы создаются автоматически из offer'а —
-        // прицепим к ним наши локальные треки (или null, если их нет).
+        // PC уже создан с sendrecv-transceivers и привязанными локальными
+        // треками (см. createPeerConnection). На случай renegotiation
+        // (когда pc существовал) — синхронизируем sender'ы с актуальными
+        // треками из refs.
         applyLocalTracksToPc(pc);
         // flush ICE queue
         const q = iceQueueRef.current.get(from) || [];

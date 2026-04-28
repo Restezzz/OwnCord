@@ -220,6 +220,25 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       audioSenderRef.current = audioTr.sender;
       videoSenderRef.current = videoTr.sender;
 
+      // Если локальные треки уже захвачены к моменту создания PC —
+      // сразу прикрепляем к sender'ам. Это устраняет race condition,
+      // когда rtc:offer прилетает между createPeerConnection и
+      // applyLocalTracks: иначе onOffer вызывал бы setRemoteDescription
+      // и createAnswer ДО того, как мы подцепили audio/video, и пир бы
+      // получил answer без msid — звука/видео от нас не было бы.
+      // Все источники читаем через refs, чтобы не зависеть от state-замыкания.
+      const existingAudio = processedAudioTrackRef.current;
+      if (existingAudio) {
+        try { audioTr.sender.replaceTrack(existingAudio); } catch { /* */ }
+      }
+      // Приоритет: screen > camera. Камера/экран реально захвачены, только
+      // когда соответствующий ref не null — флаги cameraOn/sharingScreen
+      // намеренно не читаем здесь, чтобы избежать stale-замыкания.
+      const existingVideo = screenTrackRef.current || cameraTrackRef.current || null;
+      if (existingVideo) {
+        try { videoTr.sender.replaceTrack(existingVideo); } catch { /* */ }
+      }
+
       pc.ontrack = (ev) => {
         // Каждый раз собираем ВСЕ актуальные треки и кладём в новый MediaStream,
         // чтобы React точно перерендерил.
@@ -384,9 +403,10 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       sounds?.startOutgoing?.();
 
       try {
+        // Сначала захватываем медиа, чтобы createPeerConnection сразу
+        // прицепил треки к sender'ам и SDP офера содержал msid.
+        await getLocalMedia(wantVideo);
         const pc = createPeerConnection('caller');
-        const media = await getLocalMedia(wantVideo);
-        await applyLocalTracks(media);
 
         socket.emit('call:invite', { to: targetUser.id, callId, withVideo: wantVideo });
 
@@ -398,7 +418,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         hangup('start-failed');
       }
     },
-    [applyLocalTracks, createPeerConnection, getLocalMedia, hangup, selfUser, socket, sounds, state, toast],
+    [createPeerConnection, getLocalMedia, hangup, selfUser, socket, sounds, state, toast],
   );
 
   // --- Реджойн из waiting в роли инициатора -----------------------------
@@ -445,18 +465,21 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     sounds?.stopIncoming?.();
     setState('connecting');
     try {
-      const pc = createPeerConnection('callee');
-      const media = await getLocalMedia(withVideo);
+      // ВАЖНЫЙ ПОРЯДОК: сначала захватываем медиа, потом создаём PC.
+      // createPeerConnection сам прицепит треки из refs к sender'ам, поэтому
+      // даже если rtc:offer прилетит между ними, в onOffer уже не нужно
+      // ждать и track будет в SDP answer-а.
+      await getLocalMedia(withVideo);
 
+      const pc = createPeerConnection('callee');
       socket.emit('call:accept', { to: peerRef.current.id, callId: callIdRef.current });
 
       const pending = pendingOfferRef.current;
       if (pending) {
         pendingOfferRef.current = null;
         await pc.setRemoteDescription(pending);
-        findSendersFromTransceivers(pc);
-        await applyLocalTracks(media);
-        // flush ICE queue
+        // Senders уже инициализированы и привязаны к трекам внутри
+        // createPeerConnection. Доп. applyLocalTracks тут не нужен.
         for (const c of iceQueueRef.current) {
           try { await pc.addIceCandidate(c); } catch { /* */ }
         }
@@ -468,15 +491,13 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
           callId: callIdRef.current,
           sdp: pc.localDescription,
         });
-      } else {
-        // Офера ещё нет — дождёмся в rtc:offer обработчике.
-        // (на этом этапе у нас уже есть локальные треки, но нет transceivers/senders)
       }
+      // Если pending нет — onOffer обработает позже. PC и треки уже готовы.
     } catch (e) {
       toast?.error?.(prettyMediaError('Не удалось принять звонок', e));
       hangup('accept-failed');
     }
-  }, [applyLocalTracks, createPeerConnection, findSendersFromTransceivers, getLocalMedia, hangup, socket, sounds, state, toast, withVideo]);
+  }, [createPeerConnection, getLocalMedia, hangup, socket, sounds, state, toast, withVideo]);
 
   const reject = useCallback(() => {
     if (state !== 'incoming') return;
@@ -676,20 +697,24 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     const onOffer = async ({ from, callId, sdp }) => {
       if (!peerRef.current || peerRef.current.id !== from || callIdRef.current !== callId) return;
       if (!pcRef.current) {
-        // accept ещё не нажат — сохраним
+        // accept ещё не нажат — сохраним до accept().
         pendingOfferRef.current = sdp;
         return;
       }
-      // Если accept уже нажат и pc создан, но offer пришёл позже
+      // accept уже создал PC и прицепил треки в createPeerConnection.
+      // Просто завершаем negotiation: setRemoteDescription → answer.
       try {
         await pcRef.current.setRemoteDescription(sdp);
-        findSendersFromTransceivers(pcRef.current);
-        // Применим локальные треки, если ещё не применили
-        if (processedAudioTrackRef.current && audioSenderRef.current?.track == null) {
+        // Safety-net: если по какой-то причине трек не привязан,
+        // попробуем привязать сейчас (refs уже точно заполнены).
+        if (audioSenderRef.current && !audioSenderRef.current.track && processedAudioTrackRef.current) {
           try { await audioSenderRef.current.replaceTrack(processedAudioTrackRef.current); } catch { /* */ }
         }
-        if (cameraTrackRef.current && videoSenderRef.current?.track == null) {
-          try { await videoSenderRef.current.replaceTrack(cameraTrackRef.current); } catch { /* */ }
+        if (videoSenderRef.current && !videoSenderRef.current.track) {
+          const v = screenTrackRef.current || cameraTrackRef.current || null;
+          if (v) {
+            try { await videoSenderRef.current.replaceTrack(v); } catch { /* */ }
+          }
         }
         for (const c of iceQueueRef.current) {
           try { await pcRef.current.addIceCandidate(c); } catch { /* */ }
