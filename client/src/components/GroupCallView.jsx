@@ -93,19 +93,21 @@ export default function GroupCallView({ call, usersById, selfId }) {
     toggleMute, toggleDeafen, toggleCamera, toggleScreenShare, leave,
   } = call;
 
-  if (state === 'idle') return null;
-
-  const selfUser = usersById?.[selfId] || null;
-
-  // Build tiles: self first, others — in order they joined.
+  // ВСЕ хуки должны вызываться ДО любого early return — иначе React
+  // ругается «Rendered more/fewer hooks than during the previous render»
+  // и весь оверлей уходит в чёрный экран при первом переходе из idle.
   const tiles = useMemo(() => {
     const list = [{ kind: 'self' }];
-    for (const uid of participants) {
+    for (const uid of (participants || [])) {
       if (uid === selfId) continue;
       list.push({ kind: 'remote', userId: uid });
     }
     return list;
   }, [participants, selfId]);
+
+  if (state === 'idle') return null;
+
+  const selfUser = usersById?.[selfId] || null;
 
   // Grid cols: адаптивно по количеству
   const cols = tiles.length <= 1 ? 1
@@ -220,9 +222,7 @@ export default function GroupCallView({ call, usersById, selfId }) {
         </button>
       </div>
 
-      {settingsOpen && (
-        <SettingsPanel onClose={() => setSettingsOpen(false)} />
-      )}
+      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }

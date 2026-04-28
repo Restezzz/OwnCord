@@ -142,12 +142,9 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     setState('idle');
   }, [closePeer]);
 
-  // Применить актуальные локальные треки на sender'ы pc.
-  // Используется при toggleScreenShare/toggleCamera, чтобы не делать
-  // renegotiation. Полагается на то, что sender'ы по audio/video были
-  // сохранены в pc.__audioSender / pc.__videoSender внутри
-  // createPeerConnection — это надёжнее, чем определять kind через
-  // tr.sender.track.kind (который может быть undefined, если track=null).
+  // Заменить локальные треки на sender'ах pc (без renegotiation).
+  // Используется при toggleScreenShare/toggleCamera. Опирается на ссылки,
+  // сохранённые внутри createPeerConnection (pc.__audioSender / pc.__videoSender).
   const applyLocalTracksToPc = useCallback((pc) => {
     const aS = pc.__audioSender;
     const vS = pc.__videoSender;
@@ -161,31 +158,42 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     }
   }, []);
 
+  // ВАЖНО: createPeerConnection нужно вызывать ПОСЛЕ getUserMedia —
+  // на момент создания pc нам нужны audioTrackRef.current/videoTrackRef.current,
+  // чтобы прикрепить их через addTrack. Если их нет — медиа не польётся.
   const createPeerConnection = useCallback((peerId, isInitiator) => {
     const pc = new RTCPeerConnection({
       iceServers: iceServersRef.current || [{ urls: 'stun:stun.l.google.com:19302' }],
     });
     pcsRef.current.set(peerId, pc);
 
-    // Симметрично ОБЕ стороны создают sendrecv-transceiver'ы ДО negotiation.
-    // Это критично для mesh: если неинициатор их не создаст, то после
-    // setRemoteDescription его transceiver'ы будут recvonly (спецификация),
-    // и его микрофон/камера не будут транслироваться — другие участники
-    // услышат/увидят только инициатора. При симметричной схеме mid совпадёт
-    // по порядку при negotiation.
-    const audioTr = pc.addTransceiver('audio', { direction: 'sendrecv' });
-    const videoTr = pc.addTransceiver('video', { direction: 'sendrecv' });
-    // Сохраняем sender'ы по типу прямо на PC, чтобы дальнейший replaceTrack
-    // не зависел от sender.track.kind (он undefined пока track=null).
-    pc.__audioSender = audioTr.sender;
-    pc.__videoSender = videoTr.sender;
-    if (audioTrackRef.current) {
-      try { audioTr.sender.replaceTrack(audioTrackRef.current); } catch { /* */ }
+    // Стандартный pattern: addTrack для всех имеющихся локальных треков.
+    // Это автоматически создаёт sendrecv-transceiver и SDP сразу содержит
+    // msid → пир получает наш звук/видео с первого офера/ответа.
+    const ls = localStreamRef.current;
+    const aTrack = audioTrackRef.current;
+    const vTrack = currentVideoTrack();
+
+    let audioSender = null;
+    let videoSender = null;
+
+    if (aTrack) {
+      audioSender = pc.addTrack(aTrack, ls || new MediaStream([aTrack]));
+    } else {
+      const tr = pc.addTransceiver('audio', { direction: 'sendrecv' });
+      audioSender = tr.sender;
     }
-    const v = currentVideoTrack();
-    if (v) {
-      try { videoTr.sender.replaceTrack(v); } catch { /* */ }
+
+    if (vTrack) {
+      videoSender = pc.addTrack(vTrack, ls || new MediaStream([vTrack]));
+    } else {
+      // Пустой sendrecv-transceiver, чтобы можно было включить камеру/screen
+      // позже простым replaceTrack (без renegotiation).
+      const tr = pc.addTransceiver('video', { direction: 'sendrecv' });
+      videoSender = tr.sender;
     }
+    pc.__audioSender = audioSender;
+    pc.__videoSender = videoSender;
 
     pc.ontrack = (ev) => {
       // Собираем все актуальные треки пира в один stream

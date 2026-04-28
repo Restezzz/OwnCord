@@ -201,6 +201,16 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   }, [sounds]);
 
   // --- PeerConnection ----------------------------------------------------
+  // Создание PeerConnection построено по классической схеме:
+  //   1) создаём pc;
+  //   2) НА ОБЕИХ сторонах сразу addTrack() для имеющихся локальных треков,
+  //      что гарантирует direction='sendrecv' и наличие msid в SDP;
+  //   3) если video-трека нет (звонок без камеры), всё равно создаём
+  //      пустой sendrecv video-transceiver — так screen-share/camera toggle
+  //      позже сможет просто replaceTrack() без renegotiation.
+  // ВАЖНО: вызывать createPeerConnection ТОЛЬКО ПОСЛЕ того, как локальные
+  // треки захвачены (await getLocalMedia()) — иначе addTrack нечего будет
+  // прикреплять и связь пойдёт в одну сторону.
   const createPeerConnection = useCallback(
     (_role) => {
       const pc = new RTCPeerConnection({
@@ -208,40 +218,9 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       });
       pcRef.current = pc;
 
-      // ВАЖНО: обе стороны должны ЗАРАНЕЕ создать sendrecv-transceiver'ы.
-      // Если callee этого не сделает, то после setRemoteDescription(offer)
-      // его transceiver'ы по спецификации получат direction='recvonly' —
-      // и replaceTrack(...) на sender не будет транслировать звук/видео
-      // (медиа пойдёт только в одну сторону, от инициатора). Симметричные
-      // sendrecv с обеих сторон гарантируют двусторонний поток, а mid
-      // корректно сматчится по порядку при negotiation.
-      const audioTr = pc.addTransceiver('audio', { direction: 'sendrecv' });
-      const videoTr = pc.addTransceiver('video', { direction: 'sendrecv' });
-      audioSenderRef.current = audioTr.sender;
-      videoSenderRef.current = videoTr.sender;
-
-      // Если локальные треки уже захвачены к моменту создания PC —
-      // сразу прикрепляем к sender'ам. Это устраняет race condition,
-      // когда rtc:offer прилетает между createPeerConnection и
-      // applyLocalTracks: иначе onOffer вызывал бы setRemoteDescription
-      // и createAnswer ДО того, как мы подцепили audio/video, и пир бы
-      // получил answer без msid — звука/видео от нас не было бы.
-      // Все источники читаем через refs, чтобы не зависеть от state-замыкания.
-      const existingAudio = processedAudioTrackRef.current;
-      if (existingAudio) {
-        try { audioTr.sender.replaceTrack(existingAudio); } catch { /* */ }
-      }
-      // Приоритет: screen > camera. Камера/экран реально захвачены, только
-      // когда соответствующий ref не null — флаги cameraOn/sharingScreen
-      // намеренно не читаем здесь, чтобы избежать stale-замыкания.
-      const existingVideo = screenTrackRef.current || cameraTrackRef.current || null;
-      if (existingVideo) {
-        try { videoTr.sender.replaceTrack(existingVideo); } catch { /* */ }
-      }
-
+      // ontrack/onice/onstate ставим ДО addTrack — на старых браузерах
+      // addTrack может синхронно срабатывать как изменение состояния.
       pc.ontrack = (ev) => {
-        // Каждый раз собираем ВСЕ актуальные треки и кладём в новый MediaStream,
-        // чтобы React точно перерендерил.
         setRemoteStream((prev) => {
           const set = new Set(prev ? prev.getTracks() : []);
           if (ev.streams[0]) {
@@ -270,7 +249,6 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
           sounds?.stopOutgoing?.();
           sounds?.stopIncoming?.();
           sounds?.playConnect?.();
-          // Сразу сообщить пиру актуальное состояние медиа.
           emitMyMedia();
         }
         if (s === 'failed' || s === 'closed') {
@@ -278,23 +256,37 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         }
       };
 
+      // Прикрепляем локальные треки. addTrack() автоматически создаёт
+      // sendrecv transceiver, и SDP-офер/ответ сразу содержит msid.
+      const ls = localStreamRef.current;
+      const audioTrack = processedAudioTrackRef.current;
+      const videoTrack = screenTrackRef.current || cameraTrackRef.current || null;
+
+      if (audioTrack) {
+        const s = pc.addTrack(audioTrack, ls || new MediaStream([audioTrack]));
+        audioSenderRef.current = s;
+      } else {
+        // Аудио должен быть всегда. Если по какой-то причине нет —
+        // создаём пустой transceiver, чтобы negotiation не сломался.
+        const tr = pc.addTransceiver('audio', { direction: 'sendrecv' });
+        audioSenderRef.current = tr.sender;
+      }
+
+      if (videoTrack) {
+        const s = pc.addTrack(videoTrack, ls || new MediaStream([videoTrack]));
+        videoSenderRef.current = s;
+      } else {
+        // Пустой video-transceiver: позволяет включить камеру/демонстрацию
+        // экрана позже без renegotiation (просто replaceTrack на sender).
+        const tr = pc.addTransceiver('video', { direction: 'sendrecv' });
+        videoSenderRef.current = tr.sender;
+      }
+
       return pc;
       // eslint-disable-next-line react-hooks/exhaustive-deps
     },
     [emitMyMedia, socket, sounds],
   );
-
-  const findSendersFromTransceivers = useCallback((pc) => {
-    // Senders теперь инициализируются сразу в createPeerConnection
-    // (симметричные sendrecv transceiver'ы с обеих сторон). Функция
-    // оставлена как safety-net на случай старых PC-объектов без ref'ов.
-    if (audioSenderRef.current && videoSenderRef.current) return;
-    for (const tr of pc.getTransceivers()) {
-      const kind = tr.receiver?.track?.kind || tr.sender?.track?.kind;
-      if (kind === 'audio' && !audioSenderRef.current) audioSenderRef.current = tr.sender;
-      if (kind === 'video' && !videoSenderRef.current) videoSenderRef.current = tr.sender;
-    }
-  }, []);
 
   // --- Локальный медиа-стрим --------------------------------------------
   const ensureAudioCtx = useCallback(() => {
@@ -367,14 +359,8 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     [prepareInputAudio, setLocal, settings.inputDeviceId],
   );
 
-  const applyLocalTracks = useCallback(async ({ processedAudio, videoTrack }) => {
-    if (processedAudio && audioSenderRef.current) {
-      try { await audioSenderRef.current.replaceTrack(processedAudio); } catch { /* */ }
-    }
-    if (videoTrack && videoSenderRef.current) {
-      try { await videoSenderRef.current.replaceTrack(videoTrack); } catch { /* */ }
-    }
-  }, []);
+  // applyLocalTracks больше не нужен — createPeerConnection сам подвязывает
+  // треки через addTrack/addTransceiver. Оставлено как явный no-op-маркер.
 
   // --- Завершение --------------------------------------------------------
   const hangup = useCallback(
@@ -438,12 +424,9 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     sounds?.startOutgoing?.();
 
     try {
+      // Локальные треки в waiting не уничтожались — createPeerConnection
+      // сразу прицепит их через addTrack из refs.
       const pc = createPeerConnection('caller');
-      const processedAudio = processedAudioTrackRef.current;
-      const videoTrack = sharingScreen && screenTrackRef.current
-        ? screenTrackRef.current
-        : (cameraOn && cameraTrackRef.current ? cameraTrackRef.current : null);
-      await applyLocalTracks({ processedAudio, videoTrack });
 
       socket.emit('call:invite', { to: target.id, callId: newCallId, withVideo });
 
@@ -454,10 +437,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       toast?.error?.(prettyMediaError('Не удалось переподключиться', e));
       cleanup('rejoin-failed');
     }
-  }, [
-    applyLocalTracks, createPeerConnection, cleanup, selfUser, socket, sounds,
-    toast, withVideo, sharingScreen, cameraOn,
-  ]);
+  }, [createPeerConnection, cleanup, selfUser, socket, sounds, toast, withVideo]);
 
   // --- Входящий вызов — принять ------------------------------------------
   const accept = useCallback(async () => {
@@ -662,11 +642,10 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         // Как callee: создаём свежий PC, шлём accept и ждём offer.
         (async () => {
           try {
+            // Треки уже сохранены в refs (не удалялись в waiting),
+            // createPeerConnection прикрепит их через addTrack.
             const pc = createPeerConnection('callee');
-            // Треки уже есть — достаточно повесить их, когда узнаем senders
             socket.emit('call:accept', { to: from, callId });
-            // applyLocalTracks вызовется в onOffer после setRemoteDescription
-            // (как в обычном принятии через accept()).
             void pc;
           } catch (e) {
             toast?.error?.(prettyMediaError('Не удалось переподключиться', e));
@@ -818,7 +797,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       socket.off('rtc:ice', onIce);
       socket.off('media:state', onMediaState);
     };
-  }, [cleanup, createPeerConnection, enterWaiting, findSendersFromTransceivers, hangup, socket, sounds, toast]);
+  }, [cleanup, createPeerConnection, enterWaiting, hangup, socket, sounds, toast]);
 
   // Авто-выход из waiting по истечении окна реконнекта.
   useEffect(() => {
