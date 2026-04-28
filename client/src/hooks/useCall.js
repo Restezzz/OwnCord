@@ -26,6 +26,10 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   const [waitingUntil, setWaitingUntil] = useState(null);
 
   const [muted, setMuted] = useState(false);
+  // Локальный «глухой режим»: заставляет наш <audio> НЕ воспроизводить
+  // входящий звук. Микрофон продолжает работать — собеседник слышит нас
+  // как обычно. На серверной/WebRTC-стороне ничего не меняется.
+  const [deafened, setDeafened] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
   const [sharingScreen, setSharingScreen] = useState(false);
 
@@ -161,6 +165,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       setRemoteStream(null);
       setPeer(null);
       setMuted(false);
+      setDeafened(false);
       setCameraOn(false);
       setSharingScreen(false);
       setWithVideo(false);
@@ -197,20 +202,23 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
 
   // --- PeerConnection ----------------------------------------------------
   const createPeerConnection = useCallback(
-    (role) => {
+    (_role) => {
       const pc = new RTCPeerConnection({
         iceServers: iceServersRef.current || [{ urls: 'stun:stun.l.google.com:19302' }],
       });
       pcRef.current = pc;
 
-      if (role === 'caller') {
-        // Инициатор: заранее задаём transceivers, чтобы replaceTrack не требовал renegotiation.
-        const audioTr = pc.addTransceiver('audio', { direction: 'sendrecv' });
-        const videoTr = pc.addTransceiver('video', { direction: 'sendrecv' });
-        audioSenderRef.current = audioTr.sender;
-        videoSenderRef.current = videoTr.sender;
-      }
-      // Для callee senders определим после setRemoteDescription (из SDP).
+      // ВАЖНО: обе стороны должны ЗАРАНЕЕ создать sendrecv-transceiver'ы.
+      // Если callee этого не сделает, то после setRemoteDescription(offer)
+      // его transceiver'ы по спецификации получат direction='recvonly' —
+      // и replaceTrack(...) на sender не будет транслировать звук/видео
+      // (медиа пойдёт только в одну сторону, от инициатора). Симметричные
+      // sendrecv с обеих сторон гарантируют двусторонний поток, а mid
+      // корректно сматчится по порядку при negotiation.
+      const audioTr = pc.addTransceiver('audio', { direction: 'sendrecv' });
+      const videoTr = pc.addTransceiver('video', { direction: 'sendrecv' });
+      audioSenderRef.current = audioTr.sender;
+      videoSenderRef.current = videoTr.sender;
 
       pc.ontrack = (ev) => {
         // Каждый раз собираем ВСЕ актуальные треки и кладём в новый MediaStream,
@@ -258,8 +266,12 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   );
 
   const findSendersFromTransceivers = useCallback((pc) => {
+    // Senders теперь инициализируются сразу в createPeerConnection
+    // (симметричные sendrecv transceiver'ы с обеих сторон). Функция
+    // оставлена как safety-net на случай старых PC-объектов без ref'ов.
+    if (audioSenderRef.current && videoSenderRef.current) return;
     for (const tr of pc.getTransceivers()) {
-      const kind = tr.receiver?.track?.kind;
+      const kind = tr.receiver?.track?.kind || tr.sender?.track?.kind;
       if (kind === 'audio' && !audioSenderRef.current) audioSenderRef.current = tr.sender;
       if (kind === 'video' && !videoSenderRef.current) videoSenderRef.current = tr.sender;
     }
@@ -487,6 +499,13 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     // emit отправим после setMuted
     setTimeout(emitMyMedia, 0);
   }, [emitMyMedia]);
+
+  // Локальный «мьют наушников» — просто тумблер. Применяется в UI через
+  // <audio muted={deafened}> без затрагивания входящего трека, поэтому
+  // ре-подписывания WebRTC не требуется.
+  const toggleDeafen = useCallback(() => {
+    setDeafened((d) => !d);
+  }, []);
 
   const turnOffVideoSender = useCallback(async () => {
     if (videoSenderRef.current) {
@@ -810,6 +829,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     localStream,
     remoteStream,
     muted,
+    deafened,
     cameraOn,
     sharingScreen,
     peerMedia,
@@ -820,6 +840,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     hangup,
     rejoinAsCaller,
     toggleMute,
+    toggleDeafen,
     toggleCamera,
     toggleScreenShare,
   };

@@ -157,7 +157,10 @@ export function markActive(callId) {
   if (!c) return null;
   if (c.status === 'active') return c;
   c.status = 'active';
-  c.startedAt = nowTs();
+  // При реджойне startedAt уже проставлен — сохраняем, чтобы длительность
+  // считалась от начала ПЕРВОГО сеанса, а не обнулялась с момента выхода
+  // первого участника.
+  if (!c.startedAt) c.startedAt = nowTs();
   clearTimer(c, 'pendingTimer');
   clearTimer(c, 'reconnectTimer');
   writePayload(c.messageId, {
@@ -264,4 +267,46 @@ export function findActiveCallsBetween(userA, userB) {
     if (pair.has(userA) && pair.has(userB)) out.push(c);
   }
   return out;
+}
+
+/**
+ * Переиспользует существующий waiting-звонок под новый callId при реджойне.
+ * Это критически важно, чтобы НЕ плодить в чате «завершён» + «новый звонок»
+ * при каждом нажатии «Подключиться». В результате:
+ *   - тот же messageId продолжает обновляться (одно системное сообщение);
+ *   - startedAt сохраняется — длительность звонка продолжает тикать
+ *     от первого ответа, а не от рестарта;
+ *   - callId меняется, т.к. у клиента при rejoin он свежий.
+ * Возвращает обновлённый call (уже под новым id) или null, если исходный
+ * не найден / не в waiting.
+ */
+export function rebindForRejoin(oldCallId, newCallId, withVideo) {
+  const c = calls.get(oldCallId);
+  if (!c) return null;
+  if (c.status === 'ended') return null;
+  calls.delete(oldCallId);
+  c.callId = newCallId;
+  c.status = 'pending';
+  c.withVideo = !!withVideo;
+  clearTimer(c, 'reconnectTimer');
+  clearTimer(c, 'pendingTimer');
+  // 30 сек на ответ второй стороны, иначе — missed с сохранением
+  // прежнего startedAt (durationMs всё равно посчитается корректно).
+  c.pendingTimer = setTimeout(() => {
+    const cur = calls.get(newCallId);
+    if (!cur || cur.status !== 'pending') return;
+    finalize(newCallId, 'missed');
+  }, PENDING_TIMEOUT_MS);
+  calls.set(newCallId, c);
+  writePayload(c.messageId, {
+    callId: newCallId,
+    withVideo: c.withVideo,
+    status: 'pending',
+    startedAt: c.startedAt,
+    endedAt: null,
+    durationMs: null,
+    outcome: null,
+  });
+  emitMessageUpdate(c.messageId);
+  return c;
 }

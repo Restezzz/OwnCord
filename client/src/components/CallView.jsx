@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Mic, MicOff, Video, VideoOff, Monitor, MonitorOff, PhoneOff, Settings, Loader2,
+  Volume2, VolumeX,
 } from 'lucide-react';
 import Avatar from './Avatar.jsx';
 import SettingsPanel from './SettingsPanel.jsx';
@@ -31,7 +32,7 @@ function StreamVideo({ stream, muted = false, className = '', mirror = false }) 
  * Нужен, т.к. без видео звука у `<video>` может не быть, а также
  * чтобы применять outputDeviceId через setSinkId и управлять громкостью.
  */
-function RemoteAudio({ stream, sinkId, volume }) {
+function RemoteAudio({ stream, sinkId, volume, muted = false }) {
   const ref = useRef(null);
 
   useEffect(() => {
@@ -49,6 +50,14 @@ function RemoteAudio({ stream, sinkId, volume }) {
     el.volume = Math.max(0, Math.min(1, volume ?? 1));
   }, [volume]);
 
+  // Локальный deafen: глушим <audio> на нашей стороне, не трогая сам
+  // WebRTC-трек — микрофон продолжает идти собеседнику.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.muted = !!muted;
+  }, [muted]);
+
   useEffect(() => {
     const el = ref.current;
     if (!el || !sinkId || typeof el.setSinkId !== 'function') return;
@@ -65,9 +74,9 @@ export default function CallView({ call }) {
 
   const {
     state, peer, localStream, remoteStream,
-    muted, cameraOn, sharingScreen, peerMedia,
+    muted, deafened, cameraOn, sharingScreen, peerMedia,
     waitingUntil,
-    toggleMute, toggleCamera, toggleScreenShare, hangup,
+    toggleMute, toggleDeafen, toggleCamera, toggleScreenShare, hangup,
   } = call;
 
   // Тикалка для обновления countdown в waiting.
@@ -140,6 +149,7 @@ export default function CallView({ call }) {
           stream={remoteStream}
           sinkId={settings.outputDeviceId}
           volume={settings.outputVolume}
+          muted={deafened}
         />
 
         {/* Локальное превью */}
@@ -178,6 +188,14 @@ export default function CallView({ call }) {
           title={muted ? 'Включить микрофон' : 'Выключить микрофон'}
         >
           {muted ? <MicOff size={20} /> : <Mic size={20} />}
+        </ToolButton>
+        <ToolButton
+          onClick={toggleDeafen}
+          active={deafened}
+          activeDanger
+          title={deafened ? 'Включить звук собеседника' : 'Заглушить собеседника (только у вас)'}
+        >
+          {deafened ? <VolumeX size={20} /> : <Volume2 size={20} />}
         </ToolButton>
         <ToolButton
           onClick={toggleCamera}

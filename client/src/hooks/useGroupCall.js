@@ -37,6 +37,9 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
   const [remotes, setRemotes] = useState({});      // userId -> MediaStream
   const [participants, setParticipants] = useState([]);
   const [muted, setMuted] = useState(false);
+  // Локальный «глухой режим» — только для UI: все <audio> получают
+  // muted=true, микрофон при этом продолжает идти в сеть.
+  const [deafened, setDeafened] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
   const [sharingScreen, setSharingScreen] = useState(false);
   const [withVideo, setWithVideo] = useState(false);
@@ -131,6 +134,7 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     setRemotes({});
     setParticipants([]);
     setMuted(false);
+    setDeafened(false);
     setCameraOn(false);
     setWithVideo(false);
     setGroup(null);
@@ -162,21 +166,20 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     });
     pcsRef.current.set(peerId, pc);
 
-    // Инициатор всегда заводит audio+video transceivers, чтобы:
-    //   1) обе стороны имели video-сендер (для будущей демонстрации экрана);
-    //   2) replaceTrack не требовал renegotiation.
-    // Отвечающая сторона создаст соответствующие транссиверы автоматически
-    // при setRemoteDescription, и мы прицепим к ним треки в onOffer.
-    if (isInitiator) {
-      const audioTr = pc.addTransceiver('audio', { direction: 'sendrecv' });
-      const videoTr = pc.addTransceiver('video', { direction: 'sendrecv' });
-      if (audioTrackRef.current) {
-        try { audioTr.sender.replaceTrack(audioTrackRef.current); } catch { /* */ }
-      }
-      const v = currentVideoTrack();
-      if (v) {
-        try { videoTr.sender.replaceTrack(v); } catch { /* */ }
-      }
+    // Симметрично ОБЕ стороны создают sendrecv-transceiver'ы ДО negotiation.
+    // Это критично для mesh: если неинициатор их не создаст, то после
+    // setRemoteDescription его transceiver'ы будут recvonly (спецификация),
+    // и его микрофон/камера не будут транслироваться — другие участники
+    // услышат/увидят только инициатора. При симметричной схеме mid совпадёт
+    // по порядку при negotiation.
+    const audioTr = pc.addTransceiver('audio', { direction: 'sendrecv' });
+    const videoTr = pc.addTransceiver('video', { direction: 'sendrecv' });
+    if (audioTrackRef.current) {
+      try { audioTr.sender.replaceTrack(audioTrackRef.current); } catch { /* */ }
+    }
+    const v = currentVideoTrack();
+    if (v) {
+      try { videoTr.sender.replaceTrack(v); } catch { /* */ }
     }
 
     pc.ontrack = (ev) => {
@@ -297,6 +300,10 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     if (!t) return;
     t.enabled = !t.enabled;
     setMuted(!t.enabled);
+  }, []);
+
+  const toggleDeafen = useCallback(() => {
+    setDeafened((d) => !d);
   }, []);
 
   const toggleCamera = useCallback(() => {
@@ -504,12 +511,14 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     remotes,
     participants,
     muted,
+    deafened,
     cameraOn,
     sharingScreen,
     withVideo,
     join,
     leave,
     toggleMute,
+    toggleDeafen,
     toggleCamera,
     toggleScreenShare,
   };

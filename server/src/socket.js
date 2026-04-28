@@ -4,7 +4,8 @@ import { verifyToken } from './auth.js';
 import { addUserSocket, removeUserSocket, getOnlineUserIds } from './presence.js';
 import { setIO } from './ioHub.js';
 import {
-  registerInvite, markActive, markWaiting, finalize, getCall, findActiveCallsBetween,
+  registerInvite, markActive, markWaiting, finalize, getCall,
+  findActiveCallsBetween, rebindForRejoin,
 } from './callRegistry.js';
 import {
   joinGroupCall, leaveGroupCall, getCall as getGroupCall,
@@ -280,25 +281,47 @@ export function attachSocket(httpServer) {
       const peer = db.prepare('SELECT id FROM users WHERE id = ?').get(to);
       if (!peer) return;
 
-      // Если между этими двумя есть «висящий» waiting/pending звонок —
-      // финализируем его и убираем сокет-маппинг, чтобы в чате не оставалась
-      // устаревшая плашка с таймером, и чтобы новый звонок не пересекался
-      // по callId-ам.
-      //
-      // ВАЖНО: status='waiting' означает, что был полноценный разговор
-      // (active), который один из пиров поставил «на ожидание» → итог
-      // должен быть 'completed', а не 'cancelled'. Иначе после успешного
-      // переподключения история покажет «звонок отменён».
-      for (const c of findActiveCallsBetween(me.id, to)) {
-        const wasTalking = c.status === 'active' || c.status === 'waiting';
-        finalize(c.callId, wasTalking ? 'completed' : 'cancelled');
-        dropSockets(c.callId);
-      }
+      // Между этими двумя может висеть незакрытый звонок:
+      //   - waiting: был полноценный разговор, один ушёл, второй вернулся
+      //              через кнопку «Подключиться» → это реджойн, НЕ новое
+      //              сообщение. Переиспользуем messageId и сохраняем
+      //              startedAt, чтобы в чате не было «завершён + новый»,
+      //              и таймер не обнулялся.
+      //   - pending/active: аномалия (дубликат invite, зависший звонок).
+      //                     Тихо финалим без создания нового сообщения.
+      const existing = findActiveCallsBetween(me.id, to);
+      const waitingCall = existing.find((c) => c.status === 'waiting');
 
-      const result = registerInvite({
-        callId, callerId: me.id, calleeId: to, withVideo: !!withVideo,
-      });
-      if (!result) return; // дубликат
+      let result;
+      if (waitingCall) {
+        // Забираем сокет-маппинг со старого callId и выкидываем остальных
+        // «зависших» (не должны существовать, но на всякий случай).
+        for (const c of existing) {
+          if (c.callId === waitingCall.callId) continue;
+          if (c.status !== 'ended') finalize(c.callId, c.startedAt ? 'completed' : 'cancelled');
+          dropSockets(c.callId);
+        }
+        dropSockets(waitingCall.callId);
+
+        const rebound = rebindForRejoin(waitingCall.callId, callId, !!withVideo);
+        if (!rebound) return; // внезапно ended — игнор
+        // Узнать, замучен ли callee, тут нужно локально (isMuted в registry
+        // не экспортирован). db уже в scope.
+        const mutedRow = db
+          .prepare('SELECT 1 FROM mutes WHERE user_id = ? AND target_id = ?')
+          .get(to, me.id);
+        result = { call: rebound, calleeMuted: !!mutedRow, reused: true };
+      } else {
+        // Чистим мусор: pending/active без waiting — дубликат или баг.
+        for (const c of existing) {
+          if (c.status !== 'ended') finalize(c.callId, c.startedAt ? 'completed' : 'cancelled');
+          dropSockets(c.callId);
+        }
+        result = registerInvite({
+          callId, callerId: me.id, calleeId: to, withVideo: !!withVideo,
+        });
+        if (!result) return; // дубликат
+      }
 
       setSocketFor(callId, 'caller', socket.id);
 
@@ -374,7 +397,10 @@ export function attachSocket(httpServer) {
             outboundReason = 'peer-leaving';
           }
         } else {
-          finalize(callId, c.status === 'active' ? 'completed' : 'cancelled');
+          // Если звонок был хоть раз активен (startedAt != null) —
+          // это «completed», даже если текущий статус 'waiting'. Иначе
+          // в истории появится «звонок отменён» после успешного разговора.
+          finalize(callId, c.startedAt ? 'completed' : 'cancelled');
         }
       }
       // Форвардим оригинальный/нормализованный reason второй стороне.
@@ -532,7 +558,9 @@ export function attachSocket(httpServer) {
           });
           markWaiting(callId);
         } else {
-          finalize(callId, c.status === 'active' ? 'completed' : 'cancelled');
+          // Для звонков, которые уже были активны — итог 'completed'
+          // (даже если сейчас 'waiting'). Без startedAt — cancelled.
+          finalize(callId, c.startedAt ? 'completed' : 'cancelled');
           if (otherSocketId) {
             io.to(otherSocketId).emit('call:end', {
               from: me.id, fromUsername: me.username, callId, reason: 'peer-disconnected',

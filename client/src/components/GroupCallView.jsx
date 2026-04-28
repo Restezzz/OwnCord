@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Mic, MicOff, Video, VideoOff, PhoneOff, Users as UsersIcon,
-  ScreenShare, ScreenShareOff,
+  ScreenShare, ScreenShareOff, Volume2, VolumeX,
 } from 'lucide-react';
 import Avatar from './Avatar.jsx';
 import { useSettings } from '../context/SettingsContext.jsx';
@@ -26,7 +26,7 @@ function StreamVideo({ stream, muted = false, className = '', mirror = false }) 
   );
 }
 
-function RemoteAudio({ stream, sinkId, volume }) {
+function RemoteAudio({ stream, sinkId, volume, muted = false }) {
   const ref = useRef(null);
   useEffect(() => {
     const el = ref.current;
@@ -39,6 +39,11 @@ function RemoteAudio({ stream, sinkId, volume }) {
     if (!el) return;
     el.volume = Math.max(0, Math.min(1, volume ?? 1));
   }, [volume]);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.muted = !!muted;
+  }, [muted]);
   useEffect(() => {
     const el = ref.current;
     if (!el || !sinkId || typeof el.setSinkId !== 'function') return;
@@ -82,8 +87,8 @@ export default function GroupCallView({ call, usersById, selfId }) {
   const { settings } = useSettings();
   const {
     state, group, localStream, remotes, participants,
-    muted, cameraOn, sharingScreen, withVideo,
-    toggleMute, toggleCamera, toggleScreenShare, leave,
+    muted, deafened, cameraOn, sharingScreen, withVideo,
+    toggleMute, toggleDeafen, toggleCamera, toggleScreenShare, leave,
   } = call;
 
   if (state === 'idle') return null;
@@ -152,6 +157,7 @@ export default function GroupCallView({ call, usersById, selfId }) {
               stream={remotes[uid]}
               sinkId={settings.outputDeviceId}
               volume={settings.outputVolume}
+              muted={deafened}
             />
           ))}
 
@@ -171,6 +177,14 @@ export default function GroupCallView({ call, usersById, selfId }) {
           title={muted ? 'Включить микрофон' : 'Выключить микрофон'}
         >
           {muted ? <MicOff size={20} /> : <Mic size={20} />}
+        </ToolButton>
+        <ToolButton
+          onClick={toggleDeafen}
+          active={deafened}
+          activeDanger
+          title={deafened ? 'Включить звук' : 'Заглушить звук (только у вас)'}
+        >
+          {deafened ? <VolumeX size={20} /> : <Volume2 size={20} />}
         </ToolButton>
         {withVideo && (
           <ToolButton
