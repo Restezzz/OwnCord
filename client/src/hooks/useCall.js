@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
+import {
+  captureLocalMedia,
+  createPlaceholderAudioTrack,
+  createPlaceholderVideoTrack,
+} from '../utils/media.js';
 
 /**
  * useCall — один активный звонок между двумя пользователями.
@@ -50,22 +55,19 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   const videoSenderRef = useRef(null);
   const iceServersRef = useRef(null);
 
-  // локальные треки / обработка
+  // Локальные треки. Аудио берём СЫРЫМ из getUserMedia — без AudioContext-
+  // прослойки. AudioContext в suspended-состоянии (что часто происходит
+  // после async-цепочки accept→getUserMedia) превращал входящий микрофон
+  // в немой трек, и пир слышал тишину. Теперь идёт raw track напрямую в PC.
   const localStreamRef = useRef(null);
-  const rawAudioTrackRef = useRef(null);     // микрофон до gain
-  const processedAudioTrackRef = useRef(null); // после gain — идёт в pc
+  const micTrackRef = useRef(null);
   const cameraTrackRef = useRef(null);
   const screenTrackRef = useRef(null);
-  const audioCtxRef = useRef(null);
-  const inputGainNodeRef = useRef(null);
-  const inputSourceNodeRef = useRef(null);
-
-  // отложенная громкость микрофона
-  useEffect(() => {
-    if (inputGainNodeRef.current) {
-      inputGainNodeRef.current.gain.value = Math.max(0, Math.min(2, settings.inputVolume ?? 1));
-    }
-  }, [settings.inputVolume]);
+  // Placeholder-треки, прицепляемые к sender'ам, когда нет реального
+  // аудио/видео. Существуют, чтобы SDP сразу содержал msid+ssrc и
+  // последующий replaceTrack(realTrack) не требовал renegotiation.
+  const placeholderAudioRef = useRef(null);
+  const placeholderVideoRef = useRef(null);
 
   // Загрузка ICE-серверов один раз.
   useEffect(() => {
@@ -104,7 +106,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
 
   // Текущее состояние "моих" медиа (для emit) — считается на лету
   const getMyMediaState = () => ({
-    mic: processedAudioTrackRef.current && !muted,
+    mic: !!micTrackRef.current && !muted,
     camera:
       !!cameraTrackRef.current &&
       videoSenderRef.current?.track === cameraTrackRef.current,
@@ -148,18 +150,15 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       if (ls) ls.getTracks().forEach((t) => { try { t.stop(); } catch { /* */ } });
       localStreamRef.current = null;
 
-      for (const ref of [cameraTrackRef, screenTrackRef, rawAudioTrackRef, processedAudioTrackRef]) {
+      for (const ref of [
+        cameraTrackRef, screenTrackRef, micTrackRef,
+        placeholderAudioRef, placeholderVideoRef,
+      ]) {
         if (ref.current) {
           try { ref.current.stop(); } catch { /* */ }
           ref.current = null;
         }
       }
-
-      try { inputSourceNodeRef.current?.disconnect(); } catch { /* */ }
-      try { inputGainNodeRef.current?.disconnect(); } catch { /* */ }
-      inputSourceNodeRef.current = null;
-      inputGainNodeRef.current = null;
-      // audioCtxRef оставляем живым, переиспользуем
 
       setLocalStream(null);
       setRemoteStream(null);
@@ -256,31 +255,44 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         }
       };
 
-      // Прикрепляем локальные треки. addTrack() автоматически создаёт
-      // sendrecv transceiver, и SDP-офер/ответ сразу содержит msid.
+      // КЛЮЧЕВОЕ: addTrack() ВСЕГДА с реальным MediaStreamTrack — даже если
+      // у пользователя нет камеры или (теоретически) микрофона. Если трека
+      // нет, прицепляем placeholder. Это даёт SDP с msid+ssrc с первого
+      // обмена, и последующий replaceTrack(realTrack) для toggleCamera /
+      // toggleScreenShare работает БЕЗ renegotiation, а пир сразу видит
+      // через ontrack живой stream.
+      //
+      // Раньше для отсутствующего видео мы создавали пустой sendrecv-
+      // transceiver — Chrome в этом случае не fire-ил ontrack у пира при
+      // последующем replaceTrack, и демонстрация экрана от callee не была
+      // видна caller'у. Placeholder этот сценарий полностью закрывает.
       const ls = localStreamRef.current;
-      const audioTrack = processedAudioTrackRef.current;
+      const micTrack = micTrackRef.current;
       const videoTrack = screenTrackRef.current || cameraTrackRef.current || null;
 
-      if (audioTrack) {
-        const s = pc.addTrack(audioTrack, ls || new MediaStream([audioTrack]));
-        audioSenderRef.current = s;
-      } else {
-        // Аудио должен быть всегда. Если по какой-то причине нет —
-        // создаём пустой transceiver, чтобы negotiation не сломался.
-        const tr = pc.addTransceiver('audio', { direction: 'sendrecv' });
-        audioSenderRef.current = tr.sender;
+      let audioForSender = micTrack;
+      if (!audioForSender) {
+        if (!placeholderAudioRef.current) {
+          placeholderAudioRef.current = createPlaceholderAudioTrack();
+        }
+        audioForSender = placeholderAudioRef.current;
       }
+      audioSenderRef.current = pc.addTrack(
+        audioForSender,
+        ls || new MediaStream([audioForSender]),
+      );
 
-      if (videoTrack) {
-        const s = pc.addTrack(videoTrack, ls || new MediaStream([videoTrack]));
-        videoSenderRef.current = s;
-      } else {
-        // Пустой video-transceiver: позволяет включить камеру/демонстрацию
-        // экрана позже без renegotiation (просто replaceTrack на sender).
-        const tr = pc.addTransceiver('video', { direction: 'sendrecv' });
-        videoSenderRef.current = tr.sender;
+      let videoForSender = videoTrack;
+      if (!videoForSender) {
+        if (!placeholderVideoRef.current) {
+          placeholderVideoRef.current = createPlaceholderVideoTrack();
+        }
+        videoForSender = placeholderVideoRef.current;
       }
+      videoSenderRef.current = pc.addTrack(
+        videoForSender,
+        ls || new MediaStream([videoForSender]),
+      );
 
       return pc;
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -289,74 +301,29 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   );
 
   // --- Локальный медиа-стрим --------------------------------------------
-  const ensureAudioCtx = useCallback(() => {
-    if (!audioCtxRef.current) {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      audioCtxRef.current = new Ctx();
-    }
-    if (audioCtxRef.current.state === 'suspended') {
-      audioCtxRef.current.resume().catch(() => { /* */ });
-    }
-    return audioCtxRef.current;
-  }, []);
-
-  const prepareInputAudio = useCallback(
-    (rawTrack) => {
-      const ctx = ensureAudioCtx();
-      const src = ctx.createMediaStreamSource(new MediaStream([rawTrack]));
-      const gain = ctx.createGain();
-      gain.gain.value = Math.max(0, Math.min(2, settings.inputVolume ?? 1));
-      const dst = ctx.createMediaStreamDestination();
-      src.connect(gain).connect(dst);
-
-      inputSourceNodeRef.current = src;
-      inputGainNodeRef.current = gain;
-      rawAudioTrackRef.current = rawTrack;
-      const processed = dst.stream.getAudioTracks()[0];
-      processedAudioTrackRef.current = processed;
-      return processed;
-    },
-    [ensureAudioCtx, settings.inputVolume],
-  );
-
+  // Захват микрофона/камеры. Аудио идёт сырым в PC — никаких AudioContext-
+  // прослоек, чтобы исключить «немой трек» при suspended-контексте.
   const getLocalMedia = useCallback(
     async (wantVideo) => {
-      const audioConstraints = {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      };
-      if (settings.inputDeviceId && settings.inputDeviceId !== 'default') {
-        audioConstraints.deviceId = { exact: settings.inputDeviceId };
-      }
-
-      const videoConstraints = wantVideo
-        ? { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
-        : false;
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: audioConstraints,
-        video: videoConstraints,
+      const stream = await captureLocalMedia({
+        wantVideo,
+        audioDeviceId: settings.inputDeviceId,
       });
 
-      // Отфильтруем raw audio → прогоняем через gain → processed
-      const rawAudio = stream.getAudioTracks()[0];
+      const micTrack = stream.getAudioTracks()[0] || null;
       const videoTrack = stream.getVideoTracks()[0] || null;
 
-      const processedAudio = rawAudio ? prepareInputAudio(rawAudio) : null;
+      micTrackRef.current = micTrack;
+      if (videoTrack) cameraTrackRef.current = videoTrack;
 
-      // Собираем локальный стрим для отображения (показываем raw-video, процессинг не нужен)
       const outStream = new MediaStream();
-      if (processedAudio) outStream.addTrack(processedAudio);
-      if (videoTrack) {
-        cameraTrackRef.current = videoTrack;
-        outStream.addTrack(videoTrack);
-      }
+      if (micTrack) outStream.addTrack(micTrack);
+      if (videoTrack) outStream.addTrack(videoTrack);
       setLocal(outStream);
       if (videoTrack) setCameraOn(true);
-      return { processedAudio, videoTrack };
+      return { micTrack, videoTrack };
     },
-    [prepareInputAudio, setLocal, settings.inputDeviceId],
+    [setLocal, settings.inputDeviceId],
   );
 
   // applyLocalTracks больше не нужен — createPeerConnection сам подвязывает
@@ -490,12 +457,10 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
 
   // --- Переключения медиа -----------------------------------------------
   const toggleMute = useCallback(() => {
-    const track = processedAudioTrackRef.current;
-    const raw = rawAudioTrackRef.current;
+    const track = micTrackRef.current;
     if (!track) return;
     const nextEnabled = !track.enabled;
     track.enabled = nextEnabled;
-    if (raw) raw.enabled = nextEnabled;
     setMuted(!nextEnabled);
     // emit отправим после setMuted
     setTimeout(emitMyMedia, 0);
@@ -509,9 +474,14 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   }, []);
 
   const turnOffVideoSender = useCallback(async () => {
-    if (videoSenderRef.current) {
-      try { await videoSenderRef.current.replaceTrack(null); } catch { /* */ }
+    if (!videoSenderRef.current) return;
+    // Возвращаем placeholder, чтобы sender имел валидный track —
+    // canale RTP остаётся живым, и при следующем включении камеры/демки
+    // у пира не возникнет проблем с обновлением streams.
+    if (!placeholderVideoRef.current) {
+      placeholderVideoRef.current = createPlaceholderVideoTrack();
     }
+    try { await videoSenderRef.current.replaceTrack(placeholderVideoRef.current); } catch { /* */ }
   }, []);
 
   const toggleCamera = useCallback(async () => {
@@ -599,7 +569,10 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
           if (cameraOn && cameraTrackRef.current) {
             videoSenderRef.current.replaceTrack(cameraTrackRef.current);
           } else {
-            videoSenderRef.current.replaceTrack(null);
+            if (!placeholderVideoRef.current) {
+              placeholderVideoRef.current = createPlaceholderVideoTrack();
+            }
+            videoSenderRef.current.replaceTrack(placeholderVideoRef.current);
           }
         }
         setTimeout(emitMyMedia, 0);
@@ -686,8 +659,8 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         await pcRef.current.setRemoteDescription(sdp);
         // Safety-net: если по какой-то причине трек не привязан,
         // попробуем привязать сейчас (refs уже точно заполнены).
-        if (audioSenderRef.current && !audioSenderRef.current.track && processedAudioTrackRef.current) {
-          try { await audioSenderRef.current.replaceTrack(processedAudioTrackRef.current); } catch { /* */ }
+        if (audioSenderRef.current && !audioSenderRef.current.track && micTrackRef.current) {
+          try { await audioSenderRef.current.replaceTrack(micTrackRef.current); } catch { /* */ }
         }
         if (videoSenderRef.current && !videoSenderRef.current.track) {
           const v = screenTrackRef.current || cameraTrackRef.current || null;

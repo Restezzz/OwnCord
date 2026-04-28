@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
+import {
+  createPlaceholderAudioTrack,
+  createPlaceholderVideoTrack,
+} from '../utils/media.js';
 
 /**
  * useGroupCall — активный групповой звонок (mesh WebRTC).
@@ -50,6 +54,11 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
   const audioTrackRef = useRef(null);
   const videoTrackRef = useRef(null);   // камера
   const screenTrackRef = useRef(null);  // демонстрация экрана (приоритет над камерой)
+  // Placeholder-треки на случай отсутствия камеры — используются при
+  // создании каждого PC, чтобы SDP сразу содержал msid+ssrc и пир
+  // получал ontrack ещё до того, как мы реально включим камеру/демку.
+  const placeholderAudioRef = useRef(null);
+  const placeholderVideoRef = useRef(null);
   const callIdRef = useRef(null);
   const groupRef = useRef(null);
   const stateRef = useRef(state);
@@ -125,6 +134,14 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
       try { screenTrackRef.current.stop(); } catch { /* */ }
     }
     screenTrackRef.current = null;
+    if (placeholderAudioRef.current) {
+      try { placeholderAudioRef.current.stop(); } catch { /* */ }
+      placeholderAudioRef.current = null;
+    }
+    if (placeholderVideoRef.current) {
+      try { placeholderVideoRef.current.stop(); } catch { /* */ }
+      placeholderVideoRef.current = null;
+    }
     setSharingScreen(false);
 
     callIdRef.current = null;
@@ -143,13 +160,26 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
   }, [closePeer]);
 
   // Заменить локальные треки на sender'ах pc (без renegotiation).
-  // Используется при toggleScreenShare/toggleCamera. Опирается на ссылки,
-  // сохранённые внутри createPeerConnection (pc.__audioSender / pc.__videoSender).
+  // Используется при toggleScreenShare/toggleCamera. Если реального трека
+  // нет, оставляем на sender placeholder, чтобы транспортный канал не
+  // ломался (msid/ssrc остаются прежние и пир продолжает receive ontrack).
   const applyLocalTracksToPc = useCallback((pc) => {
     const aS = pc.__audioSender;
     const vS = pc.__videoSender;
-    const aTrack = audioTrackRef.current || null;
-    const vTrack = currentVideoTrack() || null;
+    let aTrack = audioTrackRef.current;
+    if (!aTrack) {
+      if (!placeholderAudioRef.current) {
+        placeholderAudioRef.current = createPlaceholderAudioTrack();
+      }
+      aTrack = placeholderAudioRef.current;
+    }
+    let vTrack = currentVideoTrack();
+    if (!vTrack) {
+      if (!placeholderVideoRef.current) {
+        placeholderVideoRef.current = createPlaceholderVideoTrack();
+      }
+      vTrack = placeholderVideoRef.current;
+    }
     if (aS && aS.track !== aTrack) {
       try { aS.replaceTrack(aTrack); } catch { /* */ }
     }
@@ -167,31 +197,38 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     });
     pcsRef.current.set(peerId, pc);
 
-    // Стандартный pattern: addTrack для всех имеющихся локальных треков.
-    // Это автоматически создаёт sendrecv-transceiver и SDP сразу содержит
-    // msid → пир получает наш звук/видео с первого офера/ответа.
+    // ВСЕГДА addTrack с реальным MediaStreamTrack (или placeholder).
+    // Без этого Chrome не fire-ит ontrack у пира при последующем
+    // replaceTrack — демонстрация экрана/камера от не-инициатора
+    // оказывались невидимыми у других участников.
     const ls = localStreamRef.current;
     const aTrack = audioTrackRef.current;
     const vTrack = currentVideoTrack();
 
-    let audioSender = null;
-    let videoSender = null;
-
-    if (aTrack) {
-      audioSender = pc.addTrack(aTrack, ls || new MediaStream([aTrack]));
-    } else {
-      const tr = pc.addTransceiver('audio', { direction: 'sendrecv' });
-      audioSender = tr.sender;
+    let audioForSender = aTrack;
+    if (!audioForSender) {
+      if (!placeholderAudioRef.current) {
+        placeholderAudioRef.current = createPlaceholderAudioTrack();
+      }
+      audioForSender = placeholderAudioRef.current;
     }
+    const audioSender = pc.addTrack(
+      audioForSender,
+      ls || new MediaStream([audioForSender]),
+    );
 
-    if (vTrack) {
-      videoSender = pc.addTrack(vTrack, ls || new MediaStream([vTrack]));
-    } else {
-      // Пустой sendrecv-transceiver, чтобы можно было включить камеру/screen
-      // позже простым replaceTrack (без renegotiation).
-      const tr = pc.addTransceiver('video', { direction: 'sendrecv' });
-      videoSender = tr.sender;
+    let videoForSender = vTrack;
+    if (!videoForSender) {
+      if (!placeholderVideoRef.current) {
+        placeholderVideoRef.current = createPlaceholderVideoTrack();
+      }
+      videoForSender = placeholderVideoRef.current;
     }
+    const videoSender = pc.addTrack(
+      videoForSender,
+      ls || new MediaStream([videoForSender]),
+    );
+
     pc.__audioSender = audioSender;
     pc.__videoSender = videoSender;
 
