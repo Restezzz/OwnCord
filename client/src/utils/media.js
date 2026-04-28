@@ -18,26 +18,31 @@ let blackCanvasStreamCache = null;
 function getBlackCanvasStream() {
   if (blackCanvasStreamCache) return blackCanvasStreamCache;
   const canvas = document.createElement('canvas');
-  canvas.width = 2;
-  canvas.height = 2;
+  canvas.width = 320;
+  canvas.height = 180;
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, 2, 2);
-  // 1 fps достаточно: трек жив, но почти не нагружает CPU/сеть.
-  // Когда мы захотим реально отправлять видео, мы заменим
-  // содержимое sender'а через replaceTrack(realTrack), и эта канва
-  // больше никогда не будет использоваться.
-  blackCanvasStreamCache = canvas.captureStream(1);
+  ctx.fillRect(0, 0, 320, 180);
+  // Ключ: канва регулярно «перерисовывается» (хотя и тем же
+  // чёрным цветом). Это держит captureStream-track в active state
+  // и заставляет кодер регулярно генерировать keyframe-ы. Без
+  // этого после replaceTrack(real) пир не получает кадры до
+  // очередного PLI/keyframe — зритель видит чёрный экран.
+  blackCanvasStreamCache = canvas.captureStream(15);
+  setInterval(() => {
+    ctx.fillRect(0, 0, 320, 180);
+  }, 200);
   return blackCanvasStreamCache;
 }
 
-// Видео-плейсхолдер: чёрный кадр 2×2, ставится disabled — пакетов в сеть
-// почти нет, но sender имеет валидный track с msid/ssrc.
+// Видео-плейсхолдер: чёрный кадр 320×180 @15fps. enabled=true,
+// чтобы encoder pipeline был прогрет (для пира это «alive»-трек с
+// keyframe-ами), и после replaceTrack на real screen/camera кадры
+// начинают доходить до пира сразу, без ожидания keyframe.
 export function createPlaceholderVideoTrack() {
   const stream = getBlackCanvasStream();
-  // Клонируем, чтобы остановка трека не убивала источник для других PC.
+  // Клонируем, чтобы stop() на одном PC не убил track для других.
   const track = stream.getVideoTracks()[0].clone();
-  track.enabled = false;
   return track;
 }
 
@@ -66,7 +71,9 @@ export function createPlaceholderAudioTrack() {
   osc.connect(gain).connect(dst);
   try { osc.start(); } catch { /* */ }
   const t = dst.stream.getAudioTracks()[0];
-  t.enabled = false;
+  // enabled=true и gain=0: encoder отправляет тихие фреймы, RTP-пайплайн
+  // жив, sender SSRC активен. После replaceTrack(real mic) пир сразу
+  // начинает слышать, без паузы на переинициализацию.
   return t;
 }
 
@@ -75,18 +82,85 @@ export function createPlaceholderAudioTrack() {
 // (gain), но это вызывало одностороннюю связь, когда контекст начинал
 // жизнь в suspended-состоянии после async-цепочки accept(): пир получал
 // трек, но без сэмплов. Теперь трек идёт сырым из getUserMedia.
+//
+// Если сохранённый deviceId больше не существует (другая машина,
+// другой профиль браузера), Chrome бросает OverconstrainedError —
+// отлавливаем и fallback'имся на «default»-источник, иначе юзер будет
+// «немым» без видимых причин.
 export async function captureLocalMedia({ wantVideo = false, audioDeviceId = null } = {}) {
-  const audio = {
+  const baseAudio = {
     echoCancellation: true,
     noiseSuppression: true,
     autoGainControl: true,
   };
-  if (audioDeviceId && audioDeviceId !== 'default') {
-    audio.deviceId = { exact: audioDeviceId };
-  }
   const video = wantVideo
     ? { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
     : false;
 
-  return navigator.mediaDevices.getUserMedia({ audio, video });
+  const tryGet = (audio) => navigator.mediaDevices.getUserMedia({ audio, video });
+
+  if (audioDeviceId && audioDeviceId !== 'default') {
+    try {
+      return await tryGet({ ...baseAudio, deviceId: { exact: audioDeviceId } });
+    } catch (e) {
+      // Устройство пропало — пробуем без deviceId.
+      if (e?.name === 'OverconstrainedError' || e?.name === 'NotFoundError') {
+        return tryGet(baseAudio);
+      }
+      throw e;
+    }
+  }
+  return tryGet(baseAudio);
+}
+
+// Пресеты для getDisplayMedia + setParameters на video sender'е.
+// max-bitrate подобран так, чтобы картинка оставалась читабельной
+// (текст не «разъезжался» при движении), но не забивал канал.
+export const SCREEN_PRESETS = {
+  '480p':  { width: 854,  height: 480,  frameRate: 30, maxBitrate:  1_500_000, label: '480p · 30fps' },
+  '720p':  { width: 1280, height: 720,  frameRate: 30, maxBitrate:  3_000_000, label: '720p · 30fps' },
+  '1080p': { width: 1920, height: 1080, frameRate: 30, maxBitrate:  6_000_000, label: '1080p · 30fps' },
+  '1440p': { width: 2560, height: 1440, frameRate: 30, maxBitrate: 12_000_000, label: '1440p · 30fps (2K)' },
+};
+
+export const SCREEN_PRESET_KEYS = ['480p', '720p', '1080p', '1440p'];
+
+export function getScreenPreset(key) {
+  return SCREEN_PRESETS[key] || SCREEN_PRESETS['720p'];
+}
+
+// Захватить экран с выбранным пресетом. Chrome обычно отдаёт
+// разрешение источника «как есть», но ideal-поля подсказывают браузеру
+// верхнюю планку (иначе браузер может скипалировать вниз).
+export async function captureDisplay(presetKey) {
+  const preset = getScreenPreset(presetKey);
+  return navigator.mediaDevices.getDisplayMedia({
+    video: {
+      width:     { ideal: preset.width },
+      height:    { ideal: preset.height },
+      frameRate: { ideal: preset.frameRate, max: preset.frameRate },
+    },
+    audio: false,
+  });
+}
+
+// Применить maxBitrate к video sender'у. Без этого WebRTC берёт
+// дефолтные ~2–4 Mbps — для 1080p и 1440p это мыло.
+export async function applyVideoSenderQuality(sender, presetKey) {
+  if (!sender) return;
+  const preset = getScreenPreset(presetKey);
+  try {
+    const params = sender.getParameters();
+    if (!params.encodings || !params.encodings.length) {
+      params.encodings = [{}];
+    }
+    for (const enc of params.encodings) {
+      enc.maxBitrate = preset.maxBitrate;
+      enc.maxFramerate = preset.frameRate;
+    }
+    if ('degradationPreference' in params) {
+      params.degradationPreference = 'maintain-resolution';
+    }
+    await sender.setParameters(params);
+  } catch { /* не критично */ }
 }

@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import Avatar from './Avatar.jsx';
 import SettingsPanel from './SettingsPanel.jsx';
+import ScreenQualityModal from './ScreenQualityModal.jsx';
 import { useSettings } from '../context/SettingsContext.jsx';
 import { formatDuration, getAvatarUrl, getDisplayName } from '../utils/user.js';
 
@@ -70,6 +71,7 @@ function RemoteAudio({ stream, sinkId, volume, muted = false }) {
 export default function CallView({ call }) {
   const { settings } = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [qualityOpen, setQualityOpen] = useState(false);
   const [, tick] = useState(0);
 
   const {
@@ -205,7 +207,10 @@ export default function CallView({ call }) {
           {cameraOn ? <Video size={20} /> : <VideoOff size={20} />}
         </ToolButton>
         <ToolButton
-          onClick={toggleScreenShare}
+          onClick={() => {
+            if (sharingScreen) toggleScreenShare();
+            else setQualityOpen(true);
+          }}
           active={sharingScreen}
           title={sharingScreen ? 'Остановить демонстрацию' : 'Показать экран / окно'}
         >
@@ -228,6 +233,15 @@ export default function CallView({ call }) {
       </div>
 
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <ScreenQualityModal
+        open={qualityOpen}
+        defaultPreset={settings.screenQuality || '720p'}
+        onClose={() => setQualityOpen(false)}
+        onConfirm={(preset) => {
+          setQualityOpen(false);
+          toggleScreenShare(preset);
+        }}
+      />
     </div>
   );
 }

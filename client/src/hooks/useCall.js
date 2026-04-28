@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import {
   captureLocalMedia,
+  captureDisplay,
+  applyVideoSenderQuality,
   createPlaceholderAudioTrack,
   createPlaceholderVideoTrack,
 } from '../utils/media.js';
@@ -525,7 +527,23 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     }
   }, [cameraOn, emitMyMedia, setLocal, sharingScreen, toast, turnOffVideoSender]);
 
-  const toggleScreenShare = useCallback(async () => {
+  // Renegotiation — после replaceTrack(real) для screen-share. Без неё
+  // у пира остаются параметры encoder'а от placeholder (мелкое разрешение,
+  // низкий битрейт), и картинка идёт «мылом». Renegotiation также вынуждает
+  // sender отправить keyframe, что снимает чёрный экран у пира.
+  const renegotiate = useCallback(async () => {
+    const pc = pcRef.current;
+    const target = peerRef.current;
+    const cid = callIdRef.current;
+    if (!pc || !target || !cid) return;
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socket.emit('rtc:offer', { to: target.id, callId: cid, sdp: pc.localDescription });
+    } catch { /* */ }
+  }, [socket]);
+
+  const toggleScreenShare = useCallback(async (presetKey = '720p') => {
     if (!pcRef.current || !videoSenderRef.current) return;
 
     if (sharingScreen && screenTrackRef.current) {
@@ -547,10 +565,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     }
 
     try {
-      const display = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: { ideal: 30, max: 60 } },
-        audio: false,
-      });
+      const display = await captureDisplay(presetKey);
       const track = display.getVideoTracks()[0];
       if (!track) return;
       screenTrackRef.current = track;
@@ -587,6 +602,11 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       setLocal(new MediaStream(s.getTracks()));
 
       await videoSenderRef.current.replaceTrack(track);
+      // Поднять maxBitrate под выбранный пресет.
+      await applyVideoSenderQuality(videoSenderRef.current, presetKey);
+      // Renegotiate, чтобы пир получил свежий SDP с правильными
+      // codec/resolution параметрами и сразу — keyframe.
+      await renegotiate();
       setSharingScreen(true);
       setTimeout(emitMyMedia, 0);
     } catch (e) {
@@ -594,7 +614,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         toast?.error?.(prettyMediaError('Не удалось начать демонстрацию', e));
       }
     }
-  }, [cameraOn, emitMyMedia, setLocal, sharingScreen, toast, turnOffVideoSender]);
+  }, [cameraOn, emitMyMedia, renegotiate, setLocal, sharingScreen, toast, turnOffVideoSender]);
 
   // --- Обработка сигналинга ---------------------------------------------
   useEffect(() => {

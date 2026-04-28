@@ -2,9 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Mic, MicOff, Video, VideoOff, PhoneOff, Users as UsersIcon,
   ScreenShare, ScreenShareOff, Volume2, VolumeX, Settings,
+  Pin, PinOff,
 } from 'lucide-react';
 import Avatar from './Avatar.jsx';
 import SettingsPanel from './SettingsPanel.jsx';
+import ScreenQualityModal from './ScreenQualityModal.jsx';
 import { useSettings } from '../context/SettingsContext.jsx';
 import { getAvatarUrl, getDisplayName } from '../utils/user.js';
 
@@ -57,17 +59,39 @@ function RemoteAudio({ stream, sinkId, volume, muted = false }) {
  * Плитка одного участника. Показывает видео если есть активный video-трек,
  * иначе аватар + имя. В правом нижнем углу — индикатор микрофона.
  */
-function Tile({ stream, user, self, muted, mirror, className = '' }) {
-  const hasVideo = !!(stream && stream.getVideoTracks().some((t) => t.enabled && !t.muted && t.readyState === 'live'));
+// Проверяем, есть ли в стриме живое видео. placeholder-канва 320×180
+// идёт как track.muted=false и readyState='live', но разрешение
+// выдаёт себя — фильтруем по размеру кадра.
+function hasRealVideo(stream) {
+  if (!stream) return false;
+  return stream.getVideoTracks().some((t) => {
+    if (t.readyState !== 'live' || t.muted || !t.enabled) return false;
+    const s = t.getSettings?.() || {};
+    // placeholder ровно 320×180 — считаем его «не видео».
+  if (s.width && s.height && s.width === 320 && s.height === 180) return false;
+    return true;
+  });
+}
+
+function Tile({
+  stream, user, self, muted, mirror, className = '',
+  onClick, pinned, pinnable,
+}) {
+  const hasVideo = hasRealVideo(stream);
   const name = getDisplayName(user) || '?';
   return (
-    <div className={`relative bg-bg-2 rounded-xl overflow-hidden border border-border ${className}`}>
+    <div
+      onClick={onClick}
+      className={`relative bg-bg-2 rounded-xl overflow-hidden border border-border ${
+        pinnable ? 'cursor-pointer hover:border-accent transition-colors' : ''
+      } ${className}`}
+    >
       {hasVideo ? (
         <StreamVideo
           stream={stream}
           muted
           mirror={mirror}
-          className="w-full h-full object-cover"
+          className="w-full h-full object-contain bg-black"
         />
       ) : (
         <div className="absolute inset-0 grid place-items-center">
@@ -79,6 +103,7 @@ function Tile({ stream, user, self, muted, mirror, className = '' }) {
           {name}{self && <span className="text-slate-400"> (вы)</span>}
         </span>
         {muted && <MicOff size={12} className="text-amber-400 shrink-0" />}
+        {pinned && <Pin size={12} className="text-accent shrink-0" />}
       </div>
     </div>
   );
@@ -87,6 +112,11 @@ function Tile({ stream, user, self, muted, mirror, className = '' }) {
 export default function GroupCallView({ call, usersById, selfId }) {
   const { settings } = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [qualityOpen, setQualityOpen] = useState(false);
+  // pinnedKey: 'self' | userId | null. Когда запинен участник —
+  // его плитка растягивается на всё основное поле, остальные
+  // уходят в верхний стрип.
+  const [pinnedKey, setPinnedKey] = useState(null);
   const {
     state, group, localStream, remotes, participants,
     muted, deafened, cameraOn, sharingScreen, withVideo,
@@ -97,60 +127,100 @@ export default function GroupCallView({ call, usersById, selfId }) {
   // ругается «Rendered more/fewer hooks than during the previous render»
   // и весь оверлей уходит в чёрный экран при первом переходе из idle.
   const tiles = useMemo(() => {
-    const list = [{ kind: 'self' }];
+    const list = [{ kind: 'self', key: 'self' }];
     for (const uid of (participants || [])) {
       if (uid === selfId) continue;
-      list.push({ kind: 'remote', userId: uid });
+      list.push({ kind: 'remote', userId: uid, key: uid });
     }
     return list;
   }, [participants, selfId]);
+
+  // Если пиннутый участник ушёл — сбрасываем пин.
+  useEffect(() => {
+    if (pinnedKey === null || pinnedKey === 'self') return;
+    if (!participants.includes(pinnedKey)) setPinnedKey(null);
+  }, [participants, pinnedKey]);
 
   if (state === 'idle') return null;
 
   const selfUser = usersById?.[selfId] || null;
 
-  // Grid cols: адаптивно по количеству
-  const cols = tiles.length <= 1 ? 1
-    : tiles.length <= 4 ? 2
-    : tiles.length <= 9 ? 3
-    : 4;
-
   const peopleLabel = `${participants.length} участник${
     participants.length === 1 ? '' : participants.length < 5 ? 'а' : 'ов'
   }`;
 
+  const renderTile = (t, opts = {}) => {
+    const isPinned = pinnedKey === t.key;
+    const onTileClick = () => {
+      setPinnedKey((cur) => (cur === t.key ? null : t.key));
+    };
+    if (t.kind === 'self') {
+      return (
+        <Tile
+          key={`tile-self${opts.suffix || ''}`}
+          stream={localStream}
+          user={selfUser || { displayName: 'Вы' }}
+          self
+          muted={muted}
+          mirror={cameraOn}
+          onClick={onTileClick}
+          pinned={isPinned}
+          pinnable
+          className={opts.className}
+        />
+      );
+    }
+    const u = usersById?.[t.userId]
+      || group?.members?.find((m) => m.id === t.userId)
+      || { id: t.userId, displayName: `#${t.userId}` };
+    return (
+      <Tile
+        key={`tile-${t.userId}${opts.suffix || ''}`}
+        stream={remotes[t.userId]}
+        user={u}
+        onClick={onTileClick}
+        pinned={isPinned}
+        pinnable
+        className={opts.className}
+      />
+    );
+  };
+
+  const pinnedTile = pinnedKey ? tiles.find((t) => t.key === pinnedKey) : null;
+  const otherTiles = pinnedTile ? tiles.filter((t) => t.key !== pinnedKey) : tiles;
+
+  // Grid cols для «не пин-режима» — адаптивно по количеству.
+  const gridCols = tiles.length <= 1 ? 1
+    : tiles.length <= 4 ? 2
+    : tiles.length <= 9 ? 3
+    : 4;
+
   return (
     <div className="fixed inset-0 z-40 bg-bg-0 flex flex-col">
       <div className="flex-1 relative overflow-hidden p-3">
-        <div
-          className="grid gap-2 w-full h-full"
-          style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
-        >
-          {tiles.map((t) => {
-            if (t.kind === 'self') {
-              return (
-                <Tile
-                  key="self"
-                  stream={localStream}
-                  user={selfUser || { displayName: 'Вы' }}
-                  self
-                  muted={muted}
-                  mirror={cameraOn}
-                />
-              );
-            }
-            const u = usersById?.[t.userId]
-              || group?.members?.find((m) => m.id === t.userId)
-              || { id: t.userId, displayName: `#${t.userId}` };
-            return (
-              <Tile
-                key={t.userId}
-                stream={remotes[t.userId]}
-                user={u}
-              />
-            );
-          })}
-        </div>
+        {pinnedTile ? (
+          <div className="w-full h-full flex flex-col gap-2">
+            <div className="flex-1 min-h-0">
+              {renderTile(pinnedTile, { suffix: '-pin', className: 'w-full h-full' })}
+            </div>
+            {otherTiles.length > 0 && (
+              <div className="flex gap-2 overflow-x-auto py-1" style={{ height: 120 }}>
+                {otherTiles.map((t) => (
+                  <div key={`strip-${t.key}`} className="shrink-0" style={{ width: 180, height: '100%' }}>
+                    {renderTile(t, { suffix: '-strip', className: 'w-full h-full' })}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div
+            className="grid gap-2 w-full h-full"
+            style={{ gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))` }}
+          >
+            {tiles.map((t) => renderTile(t))}
+          </div>
+        )}
 
         {/* Невидимые аудио-элементы для каждого пира (кроме self) */}
         {participants
@@ -170,6 +240,16 @@ export default function GroupCallView({ call, usersById, selfId }) {
             <UsersIcon size={14} />
             <span>{group?.name || 'Группа'} · {peopleLabel}</span>
           </div>
+          {pinnedKey && (
+            <button
+              onClick={() => setPinnedKey(null)}
+              className="px-3 py-1.5 text-xs rounded-full bg-black/60 backdrop-blur border border-white/10 flex items-center gap-1.5 hover:bg-black/80"
+              title="Открепить и вернуть сетку"
+            >
+              <PinOff size={14} />
+              <span>Открепить</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -200,7 +280,10 @@ export default function GroupCallView({ call, usersById, selfId }) {
           </ToolButton>
         )}
         <ToolButton
-          onClick={toggleScreenShare}
+          onClick={() => {
+            if (sharingScreen) toggleScreenShare();
+            else setQualityOpen(true);
+          }}
           active={sharingScreen}
           title={sharingScreen ? 'Остановить демонстрацию экрана' : 'Начать демонстрацию экрана'}
         >
@@ -223,6 +306,15 @@ export default function GroupCallView({ call, usersById, selfId }) {
       </div>
 
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <ScreenQualityModal
+        open={qualityOpen}
+        defaultPreset={settings.screenQuality || '720p'}
+        onClose={() => setQualityOpen(false)}
+        onConfirm={(preset) => {
+          setQualityOpen(false);
+          toggleScreenShare(preset);
+        }}
+      />
     </div>
   );
 }

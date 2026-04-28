@@ -12,6 +12,16 @@ export default defineConfig({
       '/socket.io': {
         target: 'http://localhost:3001',
         ws: true,
+        // Глушим шумные [vite] ws proxy socket error: ECONNABORTED — это
+        // нормальное поведение при HMR-reconnect Socket.IO upgrade,
+        // которое vite-proxy выводит на каждый штатный disconnect.
+        configure: (proxy) => {
+          proxy.on('error', (err) => {
+            if (err && (err.code === 'ECONNABORTED' || err.code === 'ECONNRESET')) return;
+            // оставляем все остальные ошибки видимыми
+            console.warn('[socket.io proxy]', err.message);
+          });
+        },
       },
     },
   },

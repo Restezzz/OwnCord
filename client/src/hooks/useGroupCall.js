@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import {
+  captureDisplay,
+  applyVideoSenderQuality,
   createPlaceholderAudioTrack,
   createPlaceholderVideoTrack,
 } from '../utils/media.js';
@@ -363,36 +365,56 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     setCameraOn(t.enabled);
   }, []);
 
-  // Демонстрация экрана для группового звонка. Без renegotiation: video-сендер
-  // у каждого pc уже есть (создан addTransceiver на стороне инициатора),
-  // делаем replaceTrack на screenTrack/cameraTrack.
-  const toggleScreenShare = useCallback(async () => {
+  // Renegotiate ОДНОГО pc (для одного пира). Используется после
+  // replaceTrack(real screen) — без renegotiation у пира остаются
+  // codec-параметры от placeholder-канвы (низкое разрешение, низкий
+  // битрейт), и картинка идёт мутной/с задержкой keyframe.
+  const renegotiatePeer = useCallback(async (peerId) => {
+    const pc = pcsRef.current.get(peerId);
+    if (!pc) return;
+    if (pc.signalingState !== 'stable') return; // glare avoidance
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      if (!groupRef.current || !callIdRef.current) return;
+      socket.emit('rtc:offer', {
+        to: peerId,
+        callId: callIdRef.current,
+        groupId: groupRef.current.id,
+        sdp: pc.localDescription,
+      });
+    } catch { /* */ }
+  }, [socket]);
+
+  // Демонстрация экрана для группового звонка.
+  //   1) replaceTrack на video-sender'ах всех pc (placeholder → real screen);
+  //   2) applyVideoSenderQuality(maxBitrate) под выбранный пресет;
+  //   3) renegotiate каждого pc, чтобы пир получил свежий SDP/keyframe и
+  //      сразу увидел реальную картинку (а не остался с placeholder).
+  const toggleScreenShare = useCallback(async (presetKey = '720p') => {
     if (stateRef.current !== 'in-call') return;
 
     if (sharingScreen && screenTrackRef.current) {
-      // Выключаем демку — возвращаем камеру (если была) или null.
+      // Выключаем демку — возвращаем камеру (если была) или placeholder.
       try { screenTrackRef.current.stop(); } catch { /* */ }
       screenTrackRef.current = null;
       setSharingScreen(false);
-      // Локальное превью: убрать screen, вернуть camera (если есть).
       const ls = localStreamRef.current || new MediaStream();
       const tracks = ls.getTracks().filter((t) => t.kind !== 'video');
       if (videoTrackRef.current) tracks.push(videoTrackRef.current);
       const next = new MediaStream(tracks);
       localStreamRef.current = next;
       setLocalStream(next);
-      // Прокинуть на все pcs.
-      for (const [, pc] of pcsRef.current) applyLocalTracksToPc(pc);
+      for (const [peerId, pc] of pcsRef.current) {
+        applyLocalTracksToPc(pc);
+        renegotiatePeer(peerId);
+      }
       return;
     }
 
-    // Включаем демку — берём поток рабочего стола.
     let display;
     try {
-      display = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: { ideal: 30, max: 60 } },
-        audio: false,
-      });
+      display = await captureDisplay(presetKey);
     } catch (e) {
       if (e?.name !== 'NotAllowedError' && e?.name !== 'AbortError') {
         toast?.error?.(`Не удалось начать демонстрацию: ${e.message || e}`);
@@ -405,7 +427,6 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     setSharingScreen(true);
 
     track.addEventListener('ended', () => {
-      // Пользователь остановил шаринг кнопкой браузера.
       if (screenTrackRef.current !== track) return;
       screenTrackRef.current = null;
       setSharingScreen(false);
@@ -415,7 +436,10 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
       const next = new MediaStream(tracks);
       localStreamRef.current = next;
       setLocalStream(next);
-      for (const [, pc] of pcsRef.current) applyLocalTracksToPc(pc);
+      for (const [peerId, pc] of pcsRef.current) {
+        applyLocalTracksToPc(pc);
+        renegotiatePeer(peerId);
+      }
     });
 
     // Локальное превью: заменить камеру на screen.
@@ -425,8 +449,14 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     localStreamRef.current = next;
     setLocalStream(next);
 
-    for (const [, pc] of pcsRef.current) applyLocalTracksToPc(pc);
-  }, [applyLocalTracksToPc, sharingScreen, toast]);
+    for (const [peerId, pc] of pcsRef.current) {
+      applyLocalTracksToPc(pc);
+      if (pc.__videoSender) {
+        await applyVideoSenderQuality(pc.__videoSender, presetKey);
+      }
+      renegotiatePeer(peerId);
+    }
+  }, [applyLocalTracksToPc, renegotiatePeer, sharingScreen, toast]);
 
   // --- signaling handlers -----------------------------------------------
   useEffect(() => {
