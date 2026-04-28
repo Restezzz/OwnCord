@@ -1,7 +1,25 @@
-import { defineConfig } from 'vite';
+import { defineConfig, createLogger } from 'vite';
 import react from '@vitejs/plugin-react';
 
+// Vite сам логирует «[vite] ws proxy socket error: Error: write ECONNABORTED»
+// через `config.logger.error` ВНЕ зависимости от наших обработчиков на
+// proxy. Это нормальный шум — Socket.IO у нас запускает свои WS-апгрейды,
+// которые периодически штатно abort-ятся при reconnect-е клиента, а vite
+// рендерит длинный stacktrace на каждый такой случай. Чистим через
+// customLogger: фильтруем именно эту строку, остальные сообщения проксим.
+const baseLogger = createLogger();
+const origError = baseLogger.error.bind(baseLogger);
+baseLogger.error = (msg, opts) => {
+  if (typeof msg === 'string'
+      && /ws proxy socket error/i.test(msg)
+      && /(ECONNABORTED|ECONNRESET|EPIPE)/.test(msg)) {
+    return;
+  }
+  origError(msg, opts);
+};
+
 export default defineConfig({
+  customLogger: baseLogger,
   plugins: [react()],
   server: {
     port: 5173,
@@ -12,16 +30,6 @@ export default defineConfig({
       '/socket.io': {
         target: 'http://localhost:3001',
         ws: true,
-        // Глушим шумные [vite] ws proxy socket error: ECONNABORTED — это
-        // нормальное поведение при HMR-reconnect Socket.IO upgrade,
-        // которое vite-proxy выводит на каждый штатный disconnect.
-        configure: (proxy) => {
-          proxy.on('error', (err) => {
-            if (err && (err.code === 'ECONNABORTED' || err.code === 'ECONNRESET')) return;
-            // оставляем все остальные ошибки видимыми
-            console.warn('[socket.io proxy]', err.message);
-          });
-        },
       },
     },
   },

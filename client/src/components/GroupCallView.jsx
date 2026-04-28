@@ -10,13 +10,27 @@ import ScreenQualityModal from './ScreenQualityModal.jsx';
 import { useSettings } from '../context/SettingsContext.jsx';
 import { getAvatarUrl, getDisplayName } from '../utils/user.js';
 
-function StreamVideo({ stream, muted = false, className = '', mirror = false }) {
+function StreamVideo({ stream, muted = false, className = '', mirror = false, onSize }) {
   const ref = useRef(null);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     if (el.srcObject !== stream) el.srcObject = stream || null;
   }, [stream]);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof onSize !== 'function') return;
+    const report = () => onSize(el.videoWidth || 0, el.videoHeight || 0);
+    el.addEventListener('resize', report);
+    el.addEventListener('loadedmetadata', report);
+    el.addEventListener('playing', report);
+    report();
+    return () => {
+      el.removeEventListener('resize', report);
+      el.removeEventListener('loadedmetadata', report);
+      el.removeEventListener('playing', report);
+    };
+  }, [stream, onSize]);
   return (
     <video
       ref={ref}
@@ -56,29 +70,33 @@ function RemoteAudio({ stream, sinkId, volume, muted = false }) {
 }
 
 /**
- * Плитка одного участника. Показывает видео если есть активный video-трек,
- * иначе аватар + имя. В правом нижнем углу — индикатор микрофона.
+ * Плитка одного участника. Всегда рендерит <video> с remote-стримом
+ * (даже если внутри placeholder), а аватар оверлеит сверху, пока RTP
+ * не начнёт приносить реальные кадры. Триггер — событие `resize` на
+ * <video>, оно надёжно срабатывает когда у удалённого трека меняется
+ * разрешение (после replaceTrack у пира на screen/camera).
+ *
+ * Placeholder с нашей стороны — ровно 320×180, фильтруем его по
+ * фактическим videoWidth/videoHeight тега <video>.
  */
-// Проверяем, есть ли в стриме живое видео. placeholder-канва 320×180
-// идёт как track.muted=false и readyState='live', но разрешение
-// выдаёт себя — фильтруем по размеру кадра.
-function hasRealVideo(stream) {
-  if (!stream) return false;
-  return stream.getVideoTracks().some((t) => {
-    if (t.readyState !== 'live' || t.muted || !t.enabled) return false;
-    const s = t.getSettings?.() || {};
-    // placeholder ровно 320×180 — считаем его «не видео».
-  if (s.width && s.height && s.width === 320 && s.height === 180) return false;
-    return true;
-  });
-}
-
 function Tile({
   stream, user, self, muted, mirror, className = '',
   onClick, pinned, pinnable,
 }) {
-  const hasVideo = hasRealVideo(stream);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  const hasStream = !!stream && stream.getVideoTracks().length > 0;
+  // 0×0 — поток ещё не догнал; 320×180 — наш живой placeholder.
+  // В обоих случаях аватар поверх. Любое другое разрешение = реальная
+  // картинка (камера/демонстрация).
+  const isPlaceholderSize = size.w === 0 || size.h === 0
+    || (size.w === 320 && size.h === 180);
+  const showAvatar = !hasStream || isPlaceholderSize;
   const name = getDisplayName(user) || '?';
+  // Стабильная ссылка на колбэк, чтобы StreamVideo не пере-подписывался
+  // на каждый рендер.
+  const onSize = useMemo(() => (w, h) => {
+    setSize((s) => (s.w === w && s.h === h ? s : { w, h }));
+  }, []);
   return (
     <div
       onClick={onClick}
@@ -86,15 +104,17 @@ function Tile({
         pinnable ? 'cursor-pointer hover:border-accent transition-colors' : ''
       } ${className}`}
     >
-      {hasVideo ? (
+      {hasStream && (
         <StreamVideo
           stream={stream}
           muted
           mirror={mirror}
+          onSize={onSize}
           className="w-full h-full object-contain bg-black"
         />
-      ) : (
-        <div className="absolute inset-0 grid place-items-center">
+      )}
+      {showAvatar && (
+        <div className="absolute inset-0 grid place-items-center bg-bg-2">
           <Avatar name={name} src={getAvatarUrl(user)} size={72} />
         </div>
       )}
