@@ -1,0 +1,11 @@
+stages:
+  - deploy
+
+deploy:
+  stage: deploy
+  tags:
+    - deploy
+  only:
+    - main
+  script:
+    - sudo /usr/local/bin/owncord-deploy.sh "$CI_PROJECT_DIR"
