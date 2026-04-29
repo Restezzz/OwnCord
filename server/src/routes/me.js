@@ -136,6 +136,86 @@ router.delete('/', authRequired, async (req, res) => {
   res.json({ ok: true });
 });
 
+// Право субъекта ПДн на доступ к своим данным (152-ФЗ, ст. 14).
+// Возвращает JSON со всем, что хранится в БД для этого пользователя:
+// профиль, согласие на обработку, отправленные сообщения (1:1 + группы),
+// статусы прочтения, инвайт-коды, которые он выпустил, мьюты.
+//
+// Намеренно НЕ включаем сюда хеш пароля и сообщения других пользователей
+// (даже те, что адресованы запросившему): хеш — security-sensitive, а
+// чужие сообщения принадлежат их авторам и должны выгружаться по их
+// собственному запросу. Файлы (вложения/голосовые) не дублируем в JSON
+// из-за размера — их можно скачать по обычному URL `/uploads/...`,
+// который указан в поле `attachmentPath` каждого сообщения.
+router.get('/data-export', authRequired, (req, res) => {
+  const uid = req.user.id;
+  const user = db
+    .prepare(
+      `SELECT id, username, display_name, avatar_path, hide_on_delete,
+              created_at, deleted_at, privacy_consent_at
+       FROM users WHERE id = ?`,
+    )
+    .get(uid);
+  if (!user) return res.status(404).json({ error: 'not found' });
+
+  const sent = db
+    .prepare(
+      `SELECT id, receiver_id, group_id, content, created_at, edited_at,
+              deleted, kind, attachment_path, attachment_name,
+              attachment_size, attachment_mime, duration_ms, payload
+       FROM messages
+       WHERE sender_id = ?
+       ORDER BY created_at ASC`,
+    )
+    .all(uid);
+
+  const groups = db
+    .prepare(
+      `SELECT g.id, g.name, g.created_at, gm.role, gm.joined_at
+       FROM groups g
+       JOIN group_members gm ON gm.group_id = g.id
+       WHERE gm.user_id = ?`,
+    )
+    .all(uid);
+
+  const invites = db
+    .prepare(
+      `SELECT code, max_uses, uses_count, expires_at, revoked_at, created_at
+       FROM invite_codes WHERE created_by = ?`,
+    )
+    .all(uid);
+
+  const mutes = db
+    .prepare(
+      `SELECT target_id, created_at FROM mutes WHERE user_id = ?`,
+    )
+    .all(uid);
+
+  const exportedAt = Date.now();
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="owncord-data-${user.username}-${exportedAt}.json"`,
+  );
+  res.json({
+    exportedAt,
+    schemaVersion: 1,
+    user: {
+      id: user.id,
+      username: user.username,
+      displayName: user.display_name,
+      avatarPath: user.avatar_path,
+      hideOnDelete: !!user.hide_on_delete,
+      createdAt: user.created_at,
+      deletedAt: user.deleted_at,
+      privacyConsentAt: user.privacy_consent_at,
+    },
+    messages: sent,
+    groups,
+    invitesIssued: invites,
+    mutes,
+  });
+});
+
 router.delete('/avatar', authRequired, (req, res) => {
   const old = db.prepare('SELECT avatar_path FROM users WHERE id = ?').get(req.user.id);
   if (old?.avatar_path) {

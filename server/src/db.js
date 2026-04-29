@@ -57,6 +57,13 @@ addColumn('users', 'hide_on_delete', 'INTEGER NOT NULL DEFAULT 0');
 // блокируется, аватар стирается, имя подменяется на «Удалённый
 // пользователь», и юзер пропадает из всех групп.
 addColumn('users', 'deleted_at', 'INTEGER');
+// Время, когда пользователь принял политику конфиденциальности
+// (152-ФЗ). Заполняется только если на момент регистрации сервер
+// требовал чекбокс согласия (`REQUIRE_PRIVACY_CONSENT=1`). NULL означает
+// либо «модуль был выключен», либо аккаунт создан до его включения —
+// для compliance-аудита достаточно различать «есть запись о согласии»
+// vs «нет» по конкретному пользователю.
+addColumn('users', 'privacy_consent_at', 'INTEGER');
 
 addColumn('messages', 'kind', "TEXT NOT NULL DEFAULT 'text'");
 addColumn('messages', 'attachment_path', 'TEXT');

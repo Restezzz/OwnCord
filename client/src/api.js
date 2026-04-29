@@ -60,10 +60,18 @@ async function requestMultipart(path, { token, formData, method = 'POST' } = {})
 }
 
 export const api = {
-  register: (username, password, invite) =>
+  register: (username, password, invite, opts = {}) =>
     request('/api/auth/register', {
       method: 'POST',
-      body: { username, password, invite: invite || undefined },
+      body: {
+        username,
+        password,
+        invite: invite || undefined,
+        // Передаём только если действительно поставили чекбокс — чтобы
+        // случайно не зашить `false` в payload и не сломать сценарий
+        // «модуль выключен». Сервер всё равно делает строгую проверку.
+        privacyConsent: opts.privacyConsent === true ? true : undefined,
+      },
     }),
   login: (username, password) =>
     request('/api/auth/login', { method: 'POST', body: { username, password } }),
@@ -138,6 +146,20 @@ export const api = {
       body: { currentPassword, newPassword },
       token,
     }),
+
+  // 152-ФЗ право на доступ к своим данным. Возвращает Promise<Blob>,
+  // который вызывающий код сохраняет как файл (через FileSaver/anchor).
+  dataExport: async (token) => {
+    const res = await fetch(`${BASE}/api/me/data-export`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try { msg = (await res.json())?.error || msg; } catch { /* */ }
+      throw new ApiError(msg, res.status);
+    }
+    return res.blob();
+  },
 
   // --- Web Push -----------------------------------------------------------
   pushConfig: () => request('/api/push/config'),

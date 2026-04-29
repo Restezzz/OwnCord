@@ -4,6 +4,7 @@ import db from '../db.js';
 import { signToken } from '../auth.js';
 import { isAdminUser } from '../admin.js';
 import { consumeCode } from '../invites.js';
+import { privacyConfig } from '../privacy.js';
 
 const router = Router();
 
@@ -49,9 +50,15 @@ function hasActiveDbCodes() {
 router.get('/registration-info', (_req, res) => {
   // inviteRequired = true, если задан общий ENV-код ИЛИ есть активные
   // одноразовые коды в БД. В обоих случаях форме нужно показать поле.
+  const pc = privacyConfig();
   res.json({
     disabled: registrationDisabled(),
     inviteRequired: !!registrationCode() || hasActiveDbCodes(),
+    // Дублируем флаги политики из /api/config — на странице регистрации
+    // нужны и они, чтобы не делать второй запрос. Если оператор не задан
+    // в .env, requireConsent=false и фронт не показывает чекбокс.
+    privacyEnabled: pc.enabled,
+    requirePrivacyConsent: pc.requireConsent,
   });
 });
 
@@ -60,7 +67,7 @@ router.post('/register', async (req, res) => {
     return res.status(403).json({ error: 'registration is disabled on this server' });
   }
 
-  const { username, password, invite } = req.body || {};
+  const { username, password, invite, privacyConsent } = req.body || {};
   if (typeof username !== 'string' || typeof password !== 'string') {
     return res.status(400).json({ error: 'username and password required' });
   }
@@ -69,6 +76,15 @@ router.post('/register', async (req, res) => {
   }
   if (password.length < 6) {
     return res.status(400).json({ error: 'password must be at least 6 chars' });
+  }
+
+  // 152-ФЗ: если сервер настроен требовать согласие — клиент обязан
+  // прислать `privacyConsent: true`. Без этого регистрация не пройдёт,
+  // и факт согласия дальше пишется в users.privacy_consent_at для
+  // последующего compliance-аудита.
+  const pc = privacyConfig();
+  if (pc.requireConsent && privacyConsent !== true) {
+    return res.status(400).json({ error: 'privacy policy consent is required' });
   }
 
   // Проверка инвайт-кода. Алгоритм:
@@ -101,7 +117,12 @@ router.post('/register', async (req, res) => {
   if (existing) return res.status(409).json({ error: 'username already taken' });
 
   const hash = await bcrypt.hash(password, 10);
-  const info = db.prepare('INSERT INTO users (username, password) VALUES (?, ?)').run(username, hash);
+  // Если согласие требовалось и было получено — фиксируем timestamp.
+  // Если модуль выключен или клиент не отправил флаг — оставляем NULL.
+  const consentAt = (pc.requireConsent && privacyConsent === true) ? Date.now() : null;
+  const info = db
+    .prepare('INSERT INTO users (username, password, privacy_consent_at) VALUES (?, ?, ?)')
+    .run(username, hash, consentAt);
   const full = db
     .prepare(
       `SELECT id, username, display_name, avatar_path, hide_on_delete, created_at

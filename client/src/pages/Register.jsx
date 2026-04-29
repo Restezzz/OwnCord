@@ -11,7 +11,13 @@ export default function Register() {
   const [password, setPassword] = useState('');
   const [password2, setPassword2] = useState('');
   const [invite, setInvite] = useState('');
-  const [info, setInfo] = useState({ disabled: false, inviteRequired: false });
+  const [consent, setConsent] = useState(false);
+  const [info, setInfo] = useState({
+    disabled: false,
+    inviteRequired: false,
+    privacyEnabled: false,
+    requirePrivacyConsent: false,
+  });
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -31,9 +37,18 @@ export default function Register() {
       setError('Пароли не совпадают');
       return;
     }
+    if (info.requirePrivacyConsent && !consent) {
+      setError('Нужно подтвердить согласие на обработку персональных данных');
+      return;
+    }
     setLoading(true);
     try {
-      await register(username.trim(), password, invite.trim() || undefined);
+      await register(
+        username.trim(),
+        password,
+        invite.trim() || undefined,
+        { privacyConsent: consent },
+      );
     } catch (err) {
       setError(err.message || 'Ошибка регистрации');
     } finally {
@@ -126,17 +141,55 @@ export default function Register() {
           </div>
         )}
 
+        {info.requirePrivacyConsent && (
+          <label className="flex items-start gap-2 text-xs text-slate-400 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={consent}
+              onChange={(e) => setConsent(e.target.checked)}
+              required
+            />
+            <span>
+              Я ознакомлен(а) и согласен(на) с{' '}
+              <a
+                href="/privacy"
+                target="_blank"
+                rel="noreferrer noopener"
+                className="text-accent hover:underline"
+              >
+                политикой обработки персональных данных
+              </a>
+              {' '}(152-ФЗ).
+            </span>
+          </label>
+        )}
+
         {error && <div className="text-sm text-danger">{error}</div>}
 
         <button type="submit" className="btn-primary w-full" disabled={loading}>
           {loading ? 'Создаём…' : 'Создать аккаунт'}
         </button>
 
-        <div className="text-sm text-slate-400 text-center">
-          Уже есть аккаунт?{' '}
-          <Link to="/login" className="text-accent hover:underline">
-            Войти
-          </Link>
+        <div className="text-sm text-slate-400 text-center space-y-1">
+          <div>
+            Уже есть аккаунт?{' '}
+            <Link to="/login" className="text-accent hover:underline">
+              Войти
+            </Link>
+          </div>
+          {info.privacyEnabled && !info.requirePrivacyConsent && (
+            <div className="text-xs text-slate-500">
+              <a
+                href="/privacy"
+                target="_blank"
+                rel="noreferrer noopener"
+                className="hover:underline"
+              >
+                Политика конфиденциальности
+              </a>
+            </div>
+          )}
         </div>
       </form>
     </div>

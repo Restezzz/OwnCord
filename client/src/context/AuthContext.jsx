@@ -90,8 +90,8 @@ export function AuthProvider({ children }) {
     return next;
   }, []);
 
-  const register = useCallback(async (username, password, invite) => {
-    const res = await api.register(username, password, invite);
+  const register = useCallback(async (username, password, invite, opts = {}) => {
+    const res = await api.register(username, password, invite, opts);
     const next = { token: res.token, user: res.user };
     setAuth(next);
     writeStored(next);

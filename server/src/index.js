@@ -19,6 +19,7 @@ import { startRetention } from './retention.js';
 import {
   buildCorsOptions, buildHelmet, apiLimiter, authLimiter, isProd,
 } from './security.js';
+import { privacyConfig, privacyHtml } from './privacy.js';
 import cors from 'cors';
 import db from './db.js';
 
@@ -68,9 +69,30 @@ app.use('/api/push', pushRoutes);
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
 // Публичный конфиг клиента (лимиты, фичи).
-app.get('/api/config', (_req, res) => res.json({
-  maxUploadBytes: MAX_UPLOAD_BYTES,
-}));
+app.get('/api/config', (_req, res) => {
+  const pc = privacyConfig();
+  res.json({
+    maxUploadBytes: MAX_UPLOAD_BYTES,
+    // Включён ли блок 152-ФЗ. Клиент использует это, чтобы:
+    //   * показать ссылку «Политика конфиденциальности» на страницах входа/регистрации;
+    //   * показать чекбокс согласия на регистрации (если requireConsent=true);
+    //   * включить кнопку «Скачать мои данные» в настройках.
+    privacy: {
+      enabled: pc.enabled,
+      requireConsent: pc.requireConsent,
+    },
+  });
+});
+
+// Страница политики обработки ПДн. Если оператор не задан в .env —
+// 404 (фронт в этом случае ссылку и не покажет). Контент собирается из
+// шаблона по ENV-переменным; для кастомного текста положи свой
+// `/privacy` в nginx — он перехватит запрос до проксирования на node.
+app.get('/privacy', (_req, res) => {
+  const html = privacyHtml();
+  if (!html) return res.status(404).type('text/plain').send('privacy policy is not configured on this server');
+  res.type('text/html; charset=utf-8').send(html);
+});
 
 // Глобальный обработчик ошибок (multer/прочее) — возвращает JSON вместо HTML.
 app.use((err, _req, res, _next) => {
