@@ -2,7 +2,9 @@ import { Router } from 'express';
 import fs from 'node:fs';
 import db from '../db.js';
 import { authRequired } from '../auth.js';
-import { uploadVoice, uploadAttachment, publicPathFor, absolutePathFor } from '../uploads.js';
+import {
+  uploadVoice, uploadAttachment, publicPathFor, absolutePathFor, sniff,
+} from '../uploads.js';
 import { emitToPair, emitToGroup } from '../ioHub.js';
 
 const router = Router();
@@ -83,7 +85,7 @@ router.get('/:peerId', authRequired, (req, res) => {
 });
 
 // Отправка голосового сообщения (multipart/form-data: file=voice, to=peerId, durationMs?).
-router.post('/voice', authRequired, uploadVoice.single('voice'), (req, res) => {
+router.post('/voice', authRequired, uploadVoice.single('voice'), sniff('audio'), (req, res) => {
   const to = Number(req.body.to);
   const durationMs = Number(req.body.durationMs) || null;
   if (!Number.isInteger(to)) return res.status(400).json({ error: 'bad to' });
@@ -106,7 +108,7 @@ router.post('/voice', authRequired, uploadVoice.single('voice'), (req, res) => {
 });
 
 // Отправка вложения произвольного типа (multipart/form-data: file, to, content?).
-router.post('/file', authRequired, uploadAttachment.single('file'), (req, res) => {
+router.post('/file', authRequired, uploadAttachment.single('file'), sniff(), (req, res) => {
   const to = Number(req.body.to);
   if (!Number.isInteger(to)) return res.status(400).json({ error: 'bad to' });
   if (!req.file) return res.status(400).json({ error: 'no file' });

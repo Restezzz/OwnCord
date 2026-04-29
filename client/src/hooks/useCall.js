@@ -1,5 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback, useEffect, useMemo, useRef, useState,
+} from 'react';
 import { api } from '../api.js';
+import { useSpeakingDetector } from './useSpeakingDetector.js';
 import {
   captureLocalMedia,
   captureDisplay,
@@ -803,6 +806,23 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     return () => clearTimeout(t);
   }, [state, waitingUntil, cleanup]);
 
+  // --- Voice-activity detection -----------------------------------------
+  //
+  // Передаём оба стрима (свой + пира) в общий хук-детектор и получаем
+  // Set userId-ов, которые сейчас говорят. Используется в `<CallView/>`
+  // чтобы подсвечивать активного говорящего (зелёная рамка).
+  const speakingStreams = useMemo(() => {
+    if (state !== 'in-call') return {};
+    const map = {};
+    if (localStream) map[selfUser.id] = localStream;
+    if (remoteStream && peer?.id) map[peer.id] = remoteStream;
+    return map;
+  }, [state, localStream, remoteStream, selfUser.id, peer?.id]);
+
+  const speakingUserIds = useSpeakingDetector(speakingStreams, {
+    enabled: state === 'in-call',
+  });
+
   // --- beforeunload: корректно уведомляем пира --------------------------
   useEffect(() => {
     const onBeforeUnload = () => {
@@ -831,6 +851,8 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     sharingScreen,
     peerMedia,
     waitingUntil,
+    speakingUserIds,
+    selfId: selfUser.id,
     start,
     accept,
     reject,

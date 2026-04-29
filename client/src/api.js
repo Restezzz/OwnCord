@@ -7,6 +7,24 @@ export class ApiError extends Error {
   }
 }
 
+// AuthContext регистрирует здесь обработчик 401, чтобы при истечении/отзыве
+// JWT клиент сам выкинул пользователя на экран логина и не зацикливался на
+// «HTTP 401» в тостах. Регистрируется один раз — повторные вызовы заменяют.
+let onAuthExpired = null;
+export function setAuthExpiredHandler(fn) {
+  onAuthExpired = typeof fn === 'function' ? fn : null;
+}
+
+function handle401(path, status, body) {
+  if (status !== 401) return;
+  // /auth/login и /auth/register отдают 401 как нормальный сценарий
+  // «неверные креды», а не как «токен истёк». Их игнорируем.
+  if (path.startsWith('/api/auth/')) return;
+  if (onAuthExpired) {
+    try { onAuthExpired(body); } catch { /* */ }
+  }
+}
+
 async function request(path, { method = 'GET', body, token } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -22,6 +40,7 @@ async function request(path, { method = 'GET', body, token } = {}) {
     /* no body */
   }
   if (!res.ok) {
+    handle401(path, res.status, data);
     throw new ApiError((data && data.error) || `HTTP ${res.status}`, res.status);
   }
   return data;
@@ -34,6 +53,7 @@ async function requestMultipart(path, { token, formData, method = 'POST' } = {})
   let data = null;
   try { data = await res.json(); } catch { /* no body */ }
   if (!res.ok) {
+    handle401(path, res.status, data);
     throw new ApiError((data && data.error) || `HTTP ${res.status}`, res.status);
   }
   return data;
@@ -110,6 +130,14 @@ export const api = {
   // Удалить собственный аккаунт (требует пароль).
   deleteMe: (token, password) =>
     request('/api/me', { method: 'DELETE', body: { password }, token }),
+
+  // Сменить собственный пароль (требует текущий + новый).
+  changePassword: (token, currentPassword, newPassword) =>
+    request('/api/me/password', {
+      method: 'POST',
+      body: { currentPassword, newPassword },
+      token,
+    }),
 
   // --- Web Push -----------------------------------------------------------
   pushConfig: () => request('/api/push/config'),

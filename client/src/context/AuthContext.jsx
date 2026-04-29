@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { api } from '../api.js';
+import { api, setAuthExpiredHandler } from '../api.js';
 import { connectSocket, disconnectSocket } from '../socket.js';
 import { useToast } from './ToastContext.jsx';
 
@@ -103,6 +103,23 @@ export function AuthProvider({ children }) {
     setAuth(null);
     writeStored(null);
   }, []);
+
+  // Когда любой /api/* возвращает 401 (кроме /auth/*) — это означает, что
+  // JWT истёк или аккаунт был удалён. Глобально выкидываем пользователя
+  // на форму логина и показываем тост.
+  useEffect(() => {
+    setAuthExpiredHandler((body) => {
+      const reason = body?.error || 'session-expired';
+      try {
+        toast?.info?.(
+          reason === 'account-deleted' ? 'Аккаунт удалён' : 'Сессия истекла, войдите снова',
+          { ttl: 6000 },
+        );
+      } catch { /* */ }
+      logout();
+    });
+    return () => setAuthExpiredHandler(null);
+  }, [logout, toast]);
 
   const updateUser = useCallback((user) => {
     setAuth((prev) => {

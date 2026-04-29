@@ -81,7 +81,7 @@ function RemoteAudio({ stream, sinkId, volume, muted = false }) {
  */
 function Tile({
   stream, user, self, muted, mirror, className = '',
-  onClick, pinned, pinnable,
+  onClick, pinned, pinnable, speaking = false,
 }) {
   const [size, setSize] = useState({ w: 0, h: 0 });
   const hasStream = !!stream && stream.getVideoTracks().length > 0;
@@ -100,8 +100,14 @@ function Tile({
   return (
     <div
       onClick={onClick}
-      className={`relative bg-bg-2 rounded-xl overflow-hidden border border-border ${
-        pinnable ? 'cursor-pointer hover:border-accent transition-colors' : ''
+      className={`relative bg-bg-2 rounded-xl overflow-hidden border-2 ${
+        speaking
+          // Зелёная рамка + мягкое свечение, когда участник говорит.
+          // Полупрозрачное свечение видно даже поверх реальной видеокартинки.
+          ? 'border-emerald-400 shadow-[0_0_0_2px_rgba(16,185,129,0.45),0_0_18px_2px_rgba(16,185,129,0.35)]'
+          : 'border-border'
+      } transition-colors duration-100 ${
+        pinnable ? 'cursor-pointer hover:border-accent' : ''
       } ${className}`}
     >
       {hasStream && (
@@ -140,6 +146,7 @@ export default function GroupCallView({ call, usersById, selfId }) {
   const {
     state, group, localStream, remotes, participants,
     muted, deafened, cameraOn, sharingScreen, withVideo,
+    speakingUserIds,
     toggleMute, toggleDeafen, toggleCamera, toggleScreenShare, leave,
   } = call;
 
@@ -174,6 +181,9 @@ export default function GroupCallView({ call, usersById, selfId }) {
     const onTileClick = () => {
       setPinnedKey((cur) => (cur === t.key ? null : t.key));
     };
+    // Самозамьюченный участник не должен подсвечиваться, даже если
+    // в треке вдруг проскочил шум — это запутывает остальных.
+    const speaks = (uid) => speakingUserIds?.has?.(uid) === true;
     if (t.kind === 'self') {
       return (
         <Tile
@@ -186,6 +196,7 @@ export default function GroupCallView({ call, usersById, selfId }) {
           onClick={onTileClick}
           pinned={isPinned}
           pinnable
+          speaking={!muted && speaks(selfId)}
           className={opts.className}
         />
       );
@@ -201,6 +212,7 @@ export default function GroupCallView({ call, usersById, selfId }) {
         onClick={onTileClick}
         pinned={isPinned}
         pinnable
+        speaking={speaks(t.userId)}
         className={opts.className}
       />
     );

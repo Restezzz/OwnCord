@@ -12,10 +12,11 @@ import {
   forceLeaveAll as forceLeaveAllGroupCalls, attachMessageId as attachGroupCallMessageId,
 } from './groupCallRegistry.js';
 import { pushToUser, pushToUsers } from './push.js';
+import { buildSocketCorsOptions } from './security.js';
 
 export function attachSocket(httpServer) {
   const io = new IOServer(httpServer, {
-    cors: { origin: true, credentials: true },
+    cors: buildSocketCorsOptions(),
     maxHttpBufferSize: 1e6,
   });
   setIO(io);
@@ -266,9 +267,29 @@ export function attachSocket(httpServer) {
     });
 
     // --- WebRTC сигналинг ---------------------------------------------------
+    //
+    // Проверяем, что отправитель и получатель действительно участвуют в
+    // указанном `callId` (1:1 или группа). Без этого любой авторизованный
+    // юзер мог бы подбросить SDP/ICE любому другому, имитируя звонок —
+    // это позволяло слать «фейковые» offer'ы и DoS-ить клиента.
     const forward = (event) => (payload) => {
       const to = payload?.to;
+      const callId = payload?.callId;
+      const groupId = payload?.groupId;
       if (typeof to !== 'number') return;
+      if (typeof callId !== 'string' || !callId) return;
+      // Группа: callId зарегистрирован в groupCallRegistry, оба должны быть в нём.
+      if (groupId != null) {
+        const gc = getGroupCall(groupId);
+        if (!gc || gc.callId !== callId) return;
+        if (!gc.participants.has(me.id) || !gc.participants.has(to)) return;
+      } else {
+        // 1:1: callId — в callRegistry, и {caller,callee} == {me, to}.
+        const c = getCall(callId);
+        if (!c || c.status === 'ended') return;
+        const pair = new Set([c.callerId, c.calleeId]);
+        if (!pair.has(me.id) || !pair.has(to)) return;
+      }
       io.to(roomOf(to)).emit(event, { ...payload, from: me.id, fromUsername: me.username });
     };
 

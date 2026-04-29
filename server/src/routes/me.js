@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 import db from '../db.js';
 import { authRequired } from '../auth.js';
 import { isAdminUser } from '../admin.js';
-import { uploadAvatar, publicPathFor, absolutePathFor } from '../uploads.js';
+import { uploadAvatar, publicPathFor, absolutePathFor, sniff } from '../uploads.js';
 import { emitToUser } from '../ioHub.js';
 import { softDeleteUser } from '../accountDeletion.js';
 
@@ -68,7 +68,7 @@ router.patch('/', authRequired, (req, res) => {
   res.json({ user });
 });
 
-router.post('/avatar', authRequired, uploadAvatar.single('avatar'), (req, res) => {
+router.post('/avatar', authRequired, uploadAvatar.single('avatar'), sniff('image'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'no file' });
 
   // Удалить старый аватар с диска, если был
@@ -84,6 +84,32 @@ router.post('/avatar', authRequired, uploadAvatar.single('avatar'), (req, res) =
   const user = readUser(req.user.id);
   emitToUser(req.user.id, 'profile:self', user);
   res.json({ user });
+});
+
+// Смена собственного пароля. Требует подтверждения текущим паролем —
+// чтобы захвативший открытую сессию злоумышленник не сменил пароль и
+// не выкинул владельца из аккаунта (старые JWT при этом не отзываются,
+// но окно компрометации хотя бы не увеличивается).
+router.post('/password', authRequired, async (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (typeof currentPassword !== 'string' || typeof newPassword !== 'string') {
+    return res.status(400).json({ error: 'currentPassword and newPassword required' });
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({ error: 'password must be at least 6 chars' });
+  }
+  if (newPassword === currentPassword) {
+    return res.status(400).json({ error: 'new password must differ from the current one' });
+  }
+  const row = db
+    .prepare('SELECT password FROM users WHERE id = ?')
+    .get(req.user.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const ok = await bcrypt.compare(currentPassword, row.password || '');
+  if (!ok) return res.status(403).json({ error: 'wrong password' });
+  const hash = await bcrypt.hash(newPassword, 10);
+  db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hash, req.user.id);
+  res.json({ ok: true });
 });
 
 // Удаление собственного аккаунта. Требует подтверждения паролем — это

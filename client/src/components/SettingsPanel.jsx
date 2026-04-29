@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Mic, Volume2, X, Bell, BellOff, Upload, Trash2, User, ShieldCheck, Headphones, Play,
-  KeyRound, Copy, Check, RefreshCw, Smartphone, UserX, AlertTriangle,
+  KeyRound, Copy, Check, RefreshCw, Smartphone, UserX, AlertTriangle, Lock,
 } from 'lucide-react';
 import {
   pushSupported, getPushStatus, enablePush, disablePush,
@@ -11,11 +11,13 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
 import { useSounds } from '../hooks/useSounds.js';
 import Avatar from './Avatar.jsx';
+import PasswordInput from './PasswordInput.jsx';
 import { api } from '../api.js';
 import { getAvatarUrl, getDisplayName } from '../utils/user.js';
 
 const ALL_TABS = [
   { id: 'profile', label: 'Профиль', icon: User },
+  { id: 'password', label: 'Пароль', icon: Lock },
   { id: 'audio', label: 'Звук', icon: Headphones },
   { id: 'notifications', label: 'Уведомления', icon: Bell },
   { id: 'privacy', label: 'Приватность', icon: ShieldCheck },
@@ -72,6 +74,7 @@ export default function SettingsPanel({ open, onClose }) {
           </div>
           <div className="flex-1 overflow-y-auto p-5">
             {tab === 'profile' && <ProfileTab />}
+            {tab === 'password' && <PasswordTab />}
             {tab === 'audio' && <AudioTab />}
             {tab === 'notifications' && <NotificationsTab />}
             {tab === 'privacy' && <PrivacyTab />}
@@ -381,6 +384,128 @@ function DeleteAccountModal({ open, onClose, token, onDeleted }) {
         </div>
       </form>
     </div>
+  );
+}
+
+// ---------------- Password --------------------------------------------------
+
+function PasswordTab() {
+  const { auth } = useAuth();
+  const toast = useToast();
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  // Простая валидация формы — всё на клиенте, чтобы кнопка disabled'илась
+  // и пользователь видел очевидные ошибки до запроса. На сервере те же
+  // проверки повторяются (POST /api/me/password).
+  const tooShort = next.length > 0 && next.length < 6;
+  const mismatch = confirm.length > 0 && confirm !== next;
+  const sameAsCurrent = next.length > 0 && next === current;
+
+  const canSubmit = current.length > 0
+    && next.length >= 6
+    && confirm === next
+    && next !== current
+    && !busy;
+
+  const reset = () => {
+    setCurrent('');
+    setNext('');
+    setConfirm('');
+  };
+
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setBusy(true);
+    try {
+      await api.changePassword(auth.token, current, next);
+      toast.success('Пароль обновлён');
+      reset();
+    } catch (err) {
+      const msg = err?.message;
+      if (err?.status === 403) {
+        toast.error('Текущий пароль введён неверно');
+      } else {
+        toast.error(msg || 'Не удалось сменить пароль');
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form onSubmit={onSubmit} className="space-y-5 max-w-md">
+      <p className="text-xs text-slate-400">
+        После смены пароля уже выпущенные токены остаются действительными
+        до своего срока (14 дней) — но злоумышленник без нового пароля
+        не сможет войти заново.
+      </p>
+
+      <div className="space-y-1.5">
+        <label className="text-xs text-slate-400 uppercase tracking-wider">
+          Старый пароль
+        </label>
+        <PasswordInput
+          value={current}
+          onChange={(e) => setCurrent(e.target.value)}
+          autoComplete="current-password"
+          required
+          name="current-password"
+          ariaLabel="Текущий пароль"
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-xs text-slate-400 uppercase tracking-wider">
+          Новый пароль
+        </label>
+        <PasswordInput
+          value={next}
+          onChange={(e) => setNext(e.target.value)}
+          autoComplete="new-password"
+          minLength={6}
+          required
+          name="new-password"
+          ariaLabel="Новый пароль"
+        />
+        {tooShort && (
+          <div className="text-[11px] text-amber-400">Минимум 6 символов</div>
+        )}
+        {sameAsCurrent && !tooShort && (
+          <div className="text-[11px] text-amber-400">Должен отличаться от старого</div>
+        )}
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-xs text-slate-400 uppercase tracking-wider">
+          Повторить пароль
+        </label>
+        <PasswordInput
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          autoComplete="new-password"
+          required
+          name="new-password-confirm"
+          ariaLabel="Подтверждение нового пароля"
+        />
+        {mismatch && (
+          <div className="text-[11px] text-amber-400">Пароли не совпадают</div>
+        )}
+      </div>
+
+      <div className="flex justify-end pt-1">
+        <button
+          type="submit"
+          disabled={!canSubmit}
+          className="btn-primary h-10 px-4 disabled:opacity-50"
+        >
+          {busy ? 'Сохранение…' : 'Сменить пароль'}
+        </button>
+      </div>
+    </form>
   );
 }
 

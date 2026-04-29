@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import db from '../db.js';
 import { authRequired } from '../auth.js';
 import {
-  uploadAvatar, uploadVoice, uploadAttachment, publicPathFor, absolutePathFor,
+  uploadAvatar, uploadVoice, uploadAttachment, publicPathFor, absolutePathFor, sniff,
 } from '../uploads.js';
 import {
   emitToGroup, emitToUsers, joinUserToGroup, leaveUserFromGroup,
@@ -370,7 +370,7 @@ router.delete('/:id/members/:userId', authRequired, (req, res) => {
 
 // ---------- аватар группы ---------------------------------------------------
 
-router.post('/:id/avatar', authRequired, uploadAvatar.single('avatar'), (req, res) => {
+router.post('/:id/avatar', authRequired, uploadAvatar.single('avatar'), sniff('image'), (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
   if (!isOwner(id, req.user.id)) return res.status(403).json({ error: 'owner only' });
@@ -449,7 +449,7 @@ router.post('/:id/messages/text', authRequired, (req, res) => {
   res.json({ ok: true, message: msg });
 });
 
-router.post('/:id/messages/voice', authRequired, uploadVoice.single('voice'), (req, res) => {
+router.post('/:id/messages/voice', authRequired, uploadVoice.single('voice'), sniff('audio'), (req, res) => {
   const id = Number(req.params.id);
   const durationMs = Number(req.body.durationMs) || null;
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
@@ -471,7 +471,7 @@ router.post('/:id/messages/voice', authRequired, uploadVoice.single('voice'), (r
   res.json({ ok: true, message: msg });
 });
 
-router.post('/:id/messages/file', authRequired, uploadAttachment.single('file'), (req, res) => {
+router.post('/:id/messages/file', authRequired, uploadAttachment.single('file'), sniff(), (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
   if (!isMember(id, req.user.id)) return res.status(403).json({ error: 'not a member' });

@@ -1,8 +1,31 @@
 import jwt from 'jsonwebtoken';
 import db from './db.js';
 
-const SECRET = process.env.JWT_SECRET || 'dev-insecure-secret-change-me';
-const TOKEN_TTL = '30d';
+const isProd = (process.env.NODE_ENV || '').toLowerCase() === 'production';
+
+// В production требуем явный сильный секрет в .env. Падать на старте
+// безопаснее, чем тихо использовать публично известный fallback.
+// В dev разрешаем удобный шаблон, но шумно предупреждаем разработчика.
+function resolveSecret() {
+  const v = process.env.JWT_SECRET;
+  if (v && v.length >= 16) return v;
+  if (isProd) {
+    throw new Error(
+      'JWT_SECRET is required in production (min 16 chars). '
+      + 'Generate one e.g. with `node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"` '
+      + 'and put it into server/.env',
+    );
+  }
+  // eslint-disable-next-line no-console
+  console.warn('[auth] JWT_SECRET not set — using insecure dev fallback. DO NOT USE IN PRODUCTION.');
+  return 'dev-insecure-secret-change-me';
+}
+
+const SECRET = resolveSecret();
+// 14 дней — компромисс: пользователю не нужно перелогиниваться каждую
+// неделю, но при компрометации токена окно атаки сокращено вдвое
+// относительно прежних 30 дней.
+const TOKEN_TTL = process.env.JWT_TTL || '14d';
 
 export function signToken(user) {
   return jwt.sign({ id: user.id, username: user.username }, SECRET, { expiresIn: TOKEN_TTL });

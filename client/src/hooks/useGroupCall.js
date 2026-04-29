@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback, useEffect, useMemo, useRef, useState,
+} from 'react';
 import { api } from '../api.js';
 import {
   captureDisplay,
@@ -6,6 +8,7 @@ import {
   createPlaceholderAudioTrack,
   createPlaceholderVideoTrack,
 } from '../utils/media.js';
+import { useSpeakingDetector } from './useSpeakingDetector.js';
 
 /**
  * useGroupCall — активный групповой звонок (mesh WebRTC).
@@ -575,11 +578,48 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     };
   }, [addParticipant, applyLocalTracksToPc, cleanup, closePeer, createPeerConnection, removeParticipant, selfUser.id, socket, sounds]);
 
-  // Корректно уведомляем сервер при закрытии вкладки.
+  // --- Voice-activity detection -----------------------------------------
+  //
+  // Собираем карту userId → MediaStream для всех участников, у которых
+  // есть аудио-трек: свой стрим + удалённые. Хук возвращает Set userId-ов,
+  // которые сейчас «говорят». UI рисует зелёную рамку вокруг плитки.
+  // Когда state=idle — детектор отключён, чтобы не держать AudioContext.
+  const speakingStreams = useMemo(() => {
+    if (state === 'idle') return {};
+    const map = {};
+    if (localStream) map[selfUser.id] = localStream;
+    for (const [uid, s] of Object.entries(remotes)) {
+      if (s) map[uid] = s;
+    }
+    return map;
+  }, [state, localStream, remotes, selfUser.id]);
+
+  const speakingUserIds = useSpeakingDetector(speakingStreams, {
+    enabled: state === 'in-call',
+  });
+
+  // Корректно уведомляем сервер при закрытии вкладки и закрываем все PC,
+  // чтобы пиры не висели «связанными» 30-60 сек до ICE timeout. Сервер,
+  // конечно, тоже отрубит висящего участника по disconnect, но это даёт
+  // визуально мгновенный peer-left у остальных.
   useEffect(() => {
     const onBeforeUnload = () => {
       const gid = groupRef.current?.id;
       if (gid && socket) socket.emit('groupcall:leave', { groupId: gid });
+      // Локально закрываем все PeerConnection и стопаем медиа — иначе
+      // освобождение микрофона/камеры может задержаться, пока браузер
+      // не уничтожит вкладку, и индикатор записи в трее остаётся гореть.
+      try {
+        for (const pc of pcsRef.current.values()) {
+          try { pc.close(); } catch { /* */ }
+        }
+        pcsRef.current.clear();
+      } catch { /* */ }
+      try {
+        const s = localStreamRef.current;
+        if (s) for (const t of s.getTracks()) { try { t.stop(); } catch { /* */ } }
+      } catch { /* */ }
+      try { screenTrackRef.current?.stop?.(); } catch { /* */ }
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
@@ -597,6 +637,7 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     cameraOn,
     sharingScreen,
     withVideo,
+    speakingUserIds,
     join,
     leave,
     toggleMute,

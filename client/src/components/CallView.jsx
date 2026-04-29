@@ -78,8 +78,15 @@ export default function CallView({ call }) {
     state, peer, localStream, remoteStream,
     muted, deafened, cameraOn, sharingScreen, peerMedia,
     waitingUntil,
+    speakingUserIds, selfId,
     toggleMute, toggleDeafen, toggleCamera, toggleScreenShare, hangup,
   } = call;
+
+  // Зелёная подсветка вокруг плитки/превью, когда участник реально говорит.
+  // Self подсвечиваем только если микрофон включён — иначе сбивает с толку
+  // (трек выключен, но AnalyserNode иногда ловит остаточный шум).
+  const peerSpeaking = speakingUserIds?.has?.(peer?.id) === true;
+  const selfSpeaking = !muted && speakingUserIds?.has?.(selfId) === true;
 
   // Тикалка для обновления countdown в waiting.
   useEffect(() => {
@@ -111,15 +118,35 @@ export default function CallView({ call }) {
       {/* Поток */}
       <div className="flex-1 relative overflow-hidden">
         {showRemoteVideo ? (
-          <StreamVideo
-            key={`${peerMedia?.camera ? 'c' : ''}${peerMedia?.screen ? 's' : ''}`}
-            stream={remoteStream}
-            className="absolute inset-0 w-full h-full object-contain bg-black"
-          />
+          <div className="absolute inset-0">
+            <StreamVideo
+              key={`${peerMedia?.camera ? 'c' : ''}${peerMedia?.screen ? 's' : ''}`}
+              stream={remoteStream}
+              className="absolute inset-0 w-full h-full object-contain bg-black"
+            />
+            {/* Внутренняя рамка-overlay поверх видео — рисуем через ring
+                на абсолютном слое, чтобы не сдвигать саму картинку. */}
+            <div
+              aria-hidden
+              className={`absolute inset-0 pointer-events-none transition-shadow duration-150 ${
+                peerSpeaking
+                  ? 'shadow-[inset_0_0_0_3px_rgba(16,185,129,0.85),inset_0_0_22px_2px_rgba(16,185,129,0.45)]'
+                  : 'shadow-none'
+              }`}
+            />
+          </div>
         ) : (
           <div className="absolute inset-0 grid place-items-center">
             <div className="flex flex-col items-center gap-4 text-center">
-              <div className={waiting ? 'opacity-60' : ''}>
+              <div
+                className={`rounded-full p-1 transition-shadow duration-150 ${
+                  waiting ? 'opacity-60' : ''
+                } ${
+                  peerSpeaking
+                    ? 'shadow-[0_0_0_3px_rgba(16,185,129,0.9),0_0_22px_4px_rgba(16,185,129,0.45)]'
+                    : ''
+                }`}
+              >
                 <Avatar name={getDisplayName(peer) || '?'} src={getAvatarUrl(peer)} size={128} />
               </div>
               <div>
@@ -156,7 +183,13 @@ export default function CallView({ call }) {
 
         {/* Локальное превью */}
         {hasLocalVideo && (
-          <div className="absolute bottom-4 right-4 w-40 sm:w-56 aspect-video rounded-xl overflow-hidden border border-border bg-bg-2 shadow-soft">
+          <div
+            className={`absolute bottom-4 right-4 w-40 sm:w-56 aspect-video rounded-xl overflow-hidden border-2 bg-bg-2 shadow-soft transition-colors duration-100 ${
+              selfSpeaking
+                ? 'border-emerald-400 shadow-[0_0_0_2px_rgba(16,185,129,0.45),0_0_18px_2px_rgba(16,185,129,0.35)]'
+                : 'border-border'
+            }`}
+          >
             <StreamVideo
               stream={localStream}
               muted
