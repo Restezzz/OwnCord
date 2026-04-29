@@ -12,7 +12,9 @@ export function isDeletedUser(user) {
 export function getDisplayName(user) {
   if (!user) return '';
   if (isDeletedUser(user)) return DELETED_USER_LABEL;
-  return user.displayName || user.username || '';
+  const name = user.displayName || user.username || '';
+  if ((user.username || '').toLowerCase() === 'chieftiv') return `👑 ${name}`;
+  return name;
 }
 
 export function getAvatarUrl(user) {
