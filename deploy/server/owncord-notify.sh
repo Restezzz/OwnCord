@@ -27,8 +27,13 @@ env_file="${OWNCORD_NOTIFY_ENV:-/etc/owncord-notify.env}"
 . "$env_file"
 [[ -n "${TG_BOT_TOKEN:-}" && -n "${TG_CHAT_ID:-}" ]] || exit 0
 
-curl -fsS --max-time 10 ${TG_PROXY:+--proxy "$TG_PROXY"} \
-  -d "chat_id=$TG_CHAT_ID" \
-  -d "parse_mode=Markdown" \
-  --data-urlencode "text=$msg" \
-  "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" >/dev/null || true
+IFS=',' read -ra chats <<< "$TG_CHAT_ID"
+for chat in "${chats[@]}"; do
+  chat="${chat// /}"
+  [[ -z "$chat" ]] && continue
+  curl -fsS --max-time 10 ${TG_PROXY:+--proxy "$TG_PROXY"} \
+    -d "chat_id=$chat" \
+    -d "parse_mode=Markdown" \
+    --data-urlencode "text=$msg" \
+    "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" >/dev/null || true
+done
