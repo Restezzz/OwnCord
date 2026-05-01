@@ -1,3 +1,8 @@
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE != "merge_request_event"'
+    - when: never
+
 stages:
   - deploy
 
@@ -5,7 +10,5 @@ deploy:
   stage: deploy
   tags:
     - deploy
-  only:
-    - main
   script:
     - sudo /usr/local/bin/owncord-deploy.sh "$CI_PROJECT_DIR"
