@@ -4,7 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
   Mic, Volume2, X, Bell, BellOff, Upload, Trash2, User, ShieldCheck, Headphones, Play,
   KeyRound, Copy, Check, RefreshCw, Smartphone, UserX, AlertTriangle, Lock,
-  Download, ExternalLink,
+  Download, ExternalLink, Sliders,
 } from 'lucide-react';
 import { modalVariants, overlayVariants, reducedVariants } from '../utils/motion';
 import {
@@ -542,9 +542,211 @@ function AudioTab() {
   const { settings, update } = useSettings();
   const [devices, setDevices] = useState({ input: [], output: [] });
   const [permissionChecked, setPermissionChecked] = useState(false);
+  const [micLevel, setMicLevel] = useState({ percent: 0, db: -100 });
+  const [isTestingMic, setIsTestingMic] = useState(false);
+  const [isTestingSpeaker, setIsTestingSpeaker] = useState(false);
+  const micStreamRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const analyserRef = useRef(null);
+  const inputGainNodeRef = useRef(null);
+  const noiseGateRef = useRef(null);
+  const testAudioRef = useRef(null);
 
   const canPickOutput = typeof HTMLAudioElement !== 'undefined'
     && 'setSinkId' in HTMLAudioElement.prototype;
+
+  // Визуализация уровня микрофона
+  useEffect(() => {
+    let animationFrame;
+    if (!isTestingMic || !analyserRef.current) return;
+
+    const updateLevel = () => {
+      if (!analyserRef.current) return;
+      const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
+      analyserRef.current.getByteFrequencyData(dataArray);
+      const average = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+      const level = Math.min(100, (average / 128) * 100);
+      
+      // Вычисляем RMS из time domain данных для более точных децибел
+      const timeData = new Uint8Array(analyserRef.current.fftSize);
+      analyserRef.current.getByteTimeDomainData(timeData);
+      let sum = 0;
+      for (let i = 0; i < timeData.length; i++) {
+        const x = (timeData[i] - 128) / 128; // нормализация -1..1
+        sum += x * x;
+      }
+      const rms = Math.sqrt(sum / timeData.length);
+      // Конвертируем RMS в децибелы (полная шкала -100..0 дБ)
+      const db = rms > 0 ? Math.max(-100, 20 * Math.log10(rms)) : -100;
+      setMicLevel({ percent: level, db: Math.round(db) });
+      
+      // Применяем шумодавку на основе порога
+      const threshold = settings.noiseThreshold ?? -50;
+      if (settings.noiseSuppression !== false && (micStreamRef.current?.noiseGate || noiseGateRef.current)) {
+        const gate = micStreamRef.current?.noiseGate || noiseGateRef.current;
+        if (db < threshold) {
+          // Полностью отключаем звук когда ниже порога
+          gate.gain.setValueAtTime(0, audioContextRef.current.currentTime);
+        } else {
+          // Включаем звук когда выше порога
+          gate.gain.setValueAtTime(1, audioContextRef.current.currentTime);
+        }
+      }
+      
+      animationFrame = requestAnimationFrame(updateLevel);
+    };
+
+    updateLevel();
+    return () => cancelAnimationFrame(animationFrame);
+  }, [isTestingMic, settings.noiseThreshold, settings.noiseSuppression]);
+
+  // Очистка ресурсов при размонтировании
+  useEffect(() => {
+    return () => {
+      if (micStreamRef.current) {
+        micStreamRef.current.getTracks().forEach(track => track.stop());
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
+    };
+  }, []);
+
+  // Обновление громкости микрофона во время теста
+  useEffect(() => {
+    if (isTestingMic && inputGainNodeRef.current) {
+      inputGainNodeRef.current.gain.value = settings.inputVolume ?? 1;
+    }
+  }, [isTestingMic, settings.inputVolume]);
+
+  const startMicTest = async () => {
+    try {
+      const constraints = {
+        audio: {
+          deviceId: settings.inputDeviceId ? { exact: settings.inputDeviceId } : undefined,
+          echoCancellation: true,
+          noiseSuppression: settings.noiseSuppression !== false,
+          autoGainControl: true,
+        },
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      micStreamRef.current = stream;
+      
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = audioContext;
+      
+      const source = audioContext.createMediaStreamSource(stream);
+      
+      // Применяем громкость микрофона к источнику перед анализатором
+      const inputGainNode = audioContext.createGain();
+      inputGainNode.gain.value = settings.inputVolume ?? 1;
+      source.connect(inputGainNode);
+      inputGainNodeRef.current = inputGainNode;
+      
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      inputGainNode.connect(analyser);
+      analyserRef.current = analyser;
+      
+      // Шумодавка на основе порога
+      const noiseGate = audioContext.createGain();
+      noiseGate.gain.value = 1;
+      
+      // Дополнительный high-pass фильтр для удаления низкочастотного шума
+      let highPassFilter = null;
+      if (settings.highPassFilter !== false) {
+        highPassFilter = audioContext.createBiquadFilter();
+        highPassFilter.type = 'highpass';
+        highPassFilter.frequency.value = 200; // отсекаем частоты ниже 200 Гц
+        highPassFilter.Q.value = 1;
+        inputGainNode.connect(highPassFilter);
+        highPassFilter.connect(noiseGate);
+      } else {
+        inputGainNode.connect(noiseGate);
+      }
+      
+      // Loopback с delay для предотвращения захлёбывания
+      const delayNode = audioContext.createDelay(1.0);
+      delayNode.delayTime.value = 0.1; // 100ms задержка
+      const outputGainNode = audioContext.createGain();
+      outputGainNode.gain.value = 0.3; // 30% громкости для loopback
+      noiseGate.connect(delayNode);
+      delayNode.connect(outputGainNode);
+      outputGainNode.connect(audioContext.destination);
+      
+      noiseGateRef.current = noiseGate;
+      noiseGateRef.current.filter = highPassFilter;
+      
+      micStreamRef.current.noiseGate = noiseGate;
+      micStreamRef.current.analyser = analyser;
+      
+      setIsTestingMic(true);
+    } catch (err) {
+      console.error('Mic test error:', err);
+    }
+  };
+
+  const stopMicTest = () => {
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach(track => track.stop());
+      micStreamRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    inputGainNodeRef.current = null;
+    noiseGateRef.current = null;
+    analyserRef.current = null;
+    setMicLevel({ percent: 0, db: -100 });
+    setIsTestingMic(false);
+  };
+
+  const testSpeaker = () => {
+    if (isTestingSpeaker) {
+      testAudioRef.current?.stop();
+      testAudioRef.current = null;
+      setIsTestingSpeaker(false);
+      return;
+    }
+
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    
+    // Используем звук соединения как тест (два тона)
+    const osc1 = audioContext.createOscillator();
+    const osc2 = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    
+    osc1.connect(gainNode);
+    osc2.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    
+    osc1.frequency.value = 660; // Первый тон
+    osc2.frequency.value = 880; // Второй тон
+    osc1.type = 'sine';
+    osc2.type = 'sine';
+    gainNode.gain.value = (settings.outputVolume ?? 1) * 0.3; // 30% от настроенной громкости
+    
+    const now = audioContext.currentTime;
+    gainNode.gain.setValueAtTime(0, now);
+    gainNode.gain.linearRampToValueAtTime((settings.outputVolume ?? 1) * 0.3, now + 0.01);
+    gainNode.gain.linearRampToValueAtTime(0, now + 0.25);
+    
+    osc1.start(now);
+    osc2.start(now + 0.1);
+    osc1.stop(now + 0.25);
+    osc2.stop(now + 0.25);
+    
+    // Остановить через 0.3 секунды
+    setTimeout(() => {
+      audioContext.close();
+      setIsTestingSpeaker(false);
+      testAudioRef.current = null;
+    }, 300);
+    
+    testAudioRef.current = { stop: () => { osc1.stop(); osc2.stop(); } };
+    setIsTestingSpeaker(true);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -608,6 +810,53 @@ function AudioTab() {
           unit="%"
           onChange={(v) => update({ inputVolume: v / 100 })}
         />
+        
+        {/* Визуализация уровня микрофона */}
+        {isTestingMic && (
+          <div className="pt-2">
+            <div className="flex items-center gap-2 mb-1">
+              <div className="flex-1 h-2 bg-bg-3 rounded-full overflow-hidden relative">
+                <div
+                  className="h-full bg-accent transition-all duration-100"
+                  style={{ width: `${((micLevel.db + 100) / 100) * 100}%` }}
+                />
+                {/* Маркер порога шумодавки */}
+                {settings.noiseSuppression !== false && (
+                  <div
+                    className="absolute top-0 h-full w-0.5 bg-red-400"
+                    style={{ left: `${((settings.noiseThreshold ?? -50) + 100) / 100 * 100}%` }}
+                    title={`Порог: ${settings.noiseThreshold ?? -50} дБ`}
+                  />
+                )}
+              </div>
+              <span className="text-xs text-slate-400 w-20 text-right tabular-nums">
+                {micLevel.db} дБ
+              </span>
+            </div>
+            <div className="text-[10px] text-slate-500">
+              Порог: {settings.noiseThreshold ?? -50} дБ
+            </div>
+          </div>
+        )}
+        
+        {/* Кнопка проверки микрофона */}
+        <div className="flex items-center gap-2 pt-1">
+          <button
+            type="button"
+            onClick={isTestingMic ? stopMicTest : startMicTest}
+            className={`btn-ghost h-8 px-3 text-xs ${
+              isTestingMic ? 'text-red-400' : ''
+            }`}
+          >
+            {isTestingMic ? 'Остановить тест' : 'Проверить микрофон'}
+          </button>
+          {isTestingMic && (
+            <span className="text-[11px] text-slate-500">
+              Вы должны слышать свой голос через динамики
+            </span>
+          )}
+        </div>
+        
         <div className="text-[11px] text-slate-500">
           Смена микрофона применится к следующему звонку.
         </div>
@@ -643,6 +892,53 @@ function AudioTab() {
           step={1}
           unit="%"
           onChange={(v) => update({ outputVolume: v / 100 })}
+        />
+        
+        {/* Кнопка проверки динамика */}
+        <div className="flex items-center gap-2 pt-1">
+          <button
+            type="button"
+            onClick={testSpeaker}
+            className="btn-ghost h-8 px-3 text-xs"
+          >
+            <Play size={12} className="mr-1" />
+            {isTestingSpeaker ? 'Остановить тест' : 'Тест динамика'}
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-xs text-slate-400 uppercase tracking-wider">
+          Шумодавка
+        </label>
+        <ToggleRow
+          title="Автоматическое подавление шума"
+          description="Уменьшает фоновый шум при звонках"
+          icon={<Mic size={16} />}
+          checked={settings.noiseSuppression !== false}
+          onChange={(v) => update({ noiseSuppression: v })}
+        />
+        <div className="pt-2">
+          <label className="text-[11px] text-slate-500">
+            Порог чувствительности (дБ)
+          </label>
+          <SliderRow
+            icon={null}
+            value={settings.noiseThreshold ?? -50}
+            min={-100}
+            max={0}
+            step={1}
+            unit=" дБ"
+            onChange={(v) => update({ noiseThreshold: v })}
+            disabled={settings.noiseSuppression === false}
+          />
+        </div>
+        <ToggleRow
+          title="Высокочастотный фильтр"
+          description="Удаляет низкочастотный шум (гудение, вентилятор)"
+          icon={<Sliders size={16} />}
+          checked={settings.highPassFilter !== false}
+          onChange={(v) => update({ highPassFilter: v })}
         />
       </div>
     </section>
@@ -1172,7 +1468,7 @@ function SliderRow({ icon, value, min, max, step, unit = '', onChange, disabled 
         className="range flex-1"
         style={{ '--range-progress': `${((value - min) / (max - min)) * 100}%` } as CSSProperties}
       />
-      <span className="text-xs text-slate-400 w-12 text-right tabular-nums">
+      <span className="text-xs text-slate-400 w-16 text-right tabular-nums">
         {value}{unit}
       </span>
     </div>

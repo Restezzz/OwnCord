@@ -68,6 +68,8 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   const micTrackRef = useRef(null);
   const cameraTrackRef = useRef(null);
   const screenTrackRef = useRef(null);
+  const screenAudioDeafenRef = useRef(false); // Отслеживаем автоматически включённый deafen для звука экрана
+  const screenAudioTrackRef = useRef(null); // Аудио трек из стрима экрана
   // Placeholder-треки, прицепляемые к sender'ам, когда нет реального
   // аудио/видео. Существуют, чтобы SDP сразу содержал msid+ssrc и
   // последующий replaceTrack(realTrack) не требовал renegotiation.
@@ -546,16 +548,30 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     } catch { /* */ }
   }, [socket]);
 
-  const toggleScreenShare = useCallback(async (presetKey = '720p') => {
+  const toggleScreenShare = useCallback(async (presetKey = '720p', includeAudio = false) => {
     if (!pcRef.current || !videoSenderRef.current) return;
 
     if (sharingScreen && screenTrackRef.current) {
       // Выключаем шаринг экрана
+      const wasDeafenedForAudio = screenAudioDeafenRef.current;
       try { screenTrackRef.current.stop(); } catch { /* */ }
+      if (screenAudioTrackRef.current) {
+        try { screenAudioTrackRef.current.stop(); } catch { /* */ }
+        // Возвращаем микрофонный трек на audio sender
+        if (audioSenderRef.current && micTrackRef.current) {
+          try { await audioSenderRef.current.replaceTrack(micTrackRef.current); } catch { /* */ }
+        }
+        screenAudioTrackRef.current = null;
+      }
       const s = localStreamRef.current;
       if (s) s.removeTrack(screenTrackRef.current);
       screenTrackRef.current = null;
+      screenAudioDeafenRef.current = false;
       setSharingScreen(false);
+      // Возвращаем deafen если он был автоматически включён для звука экрана
+      if (wasDeafenedForAudio) {
+        setDeafened(false);
+      }
       // Если камера включена — возвращаемся на неё, иначе отключаем video-отправку
       if (cameraOn && cameraTrackRef.current) {
         await videoSenderRef.current.replaceTrack(cameraTrackRef.current);
@@ -568,40 +584,42 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     }
 
     try {
-      const display = await captureDisplay(presetKey);
+      const display = await captureDisplay(presetKey, includeAudio);
       const track = display.getVideoTracks()[0];
       if (!track) return;
+      // Если включён звук экрана, автоматически deafen чтобы избежать эха
+      if (includeAudio && !deafened) {
+        setDeafened(true);
+        screenAudioDeafenRef.current = true;
+      }
       screenTrackRef.current = track;
-
-      track.addEventListener('ended', () => {
-        // Пользователь остановил шаринг через кнопку браузера
-        if (screenTrackRef.current !== track) return;
-        screenTrackRef.current = null;
-        setSharingScreen(false);
-        const s = localStreamRef.current;
-        if (s) {
-          try { s.removeTrack(track); } catch { /* */ }
-          setLocal(new MediaStream(s.getTracks()));
-        }
-        if (videoSenderRef.current) {
-          if (cameraOn && cameraTrackRef.current) {
-            videoSenderRef.current.replaceTrack(cameraTrackRef.current);
-          } else {
-            if (!placeholderVideoRef.current) {
-              placeholderVideoRef.current = createPlaceholderVideoTrack();
-            }
-            videoSenderRef.current.replaceTrack(placeholderVideoRef.current);
-          }
-        }
-        setTimeout(emitMyMedia, 0);
-      });
-
+      
+      // Добавляем аудио трек из стрима экрана в локальный стрим и на audio sender
+      const audioTrack = display.getAudioTracks()[0];
+      console.log('Display stream tracks:', display.getTracks());
+      console.log('Display stream audio tracks:', display.getAudioTracks());
+      console.log('Screen audio track:', audioTrack);
       const s = localStreamRef.current || new MediaStream();
       // Убрать предыдущий видео (камера) из preview, чтобы было видно шаринг
       if (cameraTrackRef.current && s.getTracks().includes(cameraTrackRef.current)) {
         s.removeTrack(cameraTrackRef.current);
       }
       s.addTrack(track);
+      if (audioTrack) {
+        screenAudioTrackRef.current = audioTrack;
+        // Заменяем микрофонный трек на аудио трек экрана (человек не сможет говорить при стриме с аудио)
+        console.log('Replacing microphone with screen audio');
+        if (audioSenderRef.current) {
+          try {
+            await audioSenderRef.current.replaceTrack(audioTrack);
+            console.log('Audio track replaced successfully');
+          } catch (e) {
+            console.error('Failed to replace audio track:', e);
+          }
+        }
+      } else {
+        console.log('No audio track from display');
+      }
       setLocal(new MediaStream(s.getTracks()));
 
       await videoSenderRef.current.replaceTrack(track);
@@ -612,6 +630,19 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       await renegotiate();
       setSharingScreen(true);
       setTimeout(emitMyMedia, 0);
+
+      // Добавляю обработку ended события для трека экрана
+      screenTrackRef.current.onended = () => {
+        setSharingScreen(false);
+        // Если камера включена — возвращаемся на неё, иначе отключаем video-отправку
+        if (cameraOn && cameraTrackRef.current) {
+          videoSenderRef.current.replaceTrack(cameraTrackRef.current);
+        } else {
+          turnOffVideoSender();
+        }
+        setLocal(new MediaStream(localStreamRef.current ? localStreamRef.current.getTracks() : []));
+        setTimeout(emitMyMedia, 0);
+      };
     } catch (e) {
       if (e?.name !== 'NotAllowedError' && e?.name !== 'AbortError') {
         toast?.error?.(prettyMediaError('Не удалось начать демонстрацию', e));

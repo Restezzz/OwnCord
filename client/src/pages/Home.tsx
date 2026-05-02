@@ -185,6 +185,24 @@ export default function Home() {
       });
     };
 
+    const onDmReaction = ({ messageId, reactions }) => {
+      setMessagesByChat((prev) => {
+        const updated = { ...prev };
+        for (const key of Object.keys(updated)) {
+          const messages = updated[key];
+          const msgIndex = messages.findIndex(m => m.id === messageId);
+          if (msgIndex !== -1) {
+            updated[key] = [
+              ...messages.slice(0, msgIndex),
+              { ...messages[msgIndex], reactions },
+              ...messages.slice(msgIndex + 1),
+            ];
+          }
+        }
+        return updated;
+      });
+    };
+
     const onDmRemove = ({ id, senderId, receiverId, groupId }) => {
       const key = groupId
         ? `g:${groupId}`
@@ -226,6 +244,7 @@ export default function Home() {
     socket.on('dm:update', onDmUpdate);
     socket.on('dm:delete', onDmDelete);
     socket.on('dm:remove', onDmRemove);
+    socket.on('dm:reaction', onDmReaction);
     socket.on('profile:self', onProfileSelf);
     socket.on('groupcall:active', onGroupcallActive);
     socket.on('groupcall:ended', onGroupcallEnded);
@@ -238,6 +257,7 @@ export default function Home() {
       socket.off('dm:update', onDmUpdate);
       socket.off('dm:delete', onDmDelete);
       socket.off('dm:remove', onDmRemove);
+      socket.off('dm:reaction', onDmReaction);
       socket.off('profile:self', onProfileSelf);
       socket.off('groupcall:active', onGroupcallActive);
       socket.off('groupcall:ended', onGroupcallEnded);
@@ -441,9 +461,9 @@ export default function Home() {
   );
 
   const handleSendFile = useCallback(
-    async (file, opts: { error?: string; limit?: number; caption?: string } = {}) => {
+    async (files: File | File[] | null, opts: { error?: string; limit?: number; caption?: string } = {}) => {
       if (!selected) return;
-      if (!file) {
+      if (!files) {
         if (opts.error === 'too-large') {
           const mb = Math.round((opts.limit || maxUploadBytes) / 1024 / 1024);
           const pretty = mb < 1024 ? `${mb} МБ` : `${(mb / 1024).toFixed(1)} ГБ`;
@@ -453,9 +473,9 @@ export default function Home() {
       }
       try {
         if (selected.kind === 'group') {
-          await api.sendGroupFile(token, selected.id, file, opts.caption || '');
+          await api.sendGroupFile(token, selected.id, files, opts.caption || '');
         } else {
-          await api.sendFile(token, selected.id, file, opts.caption || '');
+          await api.sendFile(token, selected.id, files, opts.caption || '');
         }
       } catch (e) {
         toast.error(e.message || 'Не удалось отправить файл');

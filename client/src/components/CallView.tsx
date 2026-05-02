@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import {
   Mic, MicOff, Video, VideoOff, Monitor, MonitorOff, PhoneOff, Settings, Loader2,
-  Volume2, VolumeX,
+  Volume2, VolumeX, X,
 } from 'lucide-react';
 import Avatar from './Avatar';
 import ScreenQualityModal from './ScreenQualityModal';
@@ -40,7 +40,10 @@ function RemoteAudio({ stream, sinkId, volume, muted = false }) {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    if (el.srcObject !== stream) el.srcObject = stream || null;
+    if (el.srcObject !== stream) {
+      console.log('RemoteAudio: stream changed, setting srcObject');
+      el.srcObject = stream || null;
+    }
     if (stream) {
       el.play?.().catch(() => { /* autoplay policy — пользователь ещё кликнет */ });
     }
@@ -49,21 +52,42 @@ function RemoteAudio({ stream, sinkId, volume, muted = false }) {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    el.volume = Math.max(0, Math.min(1, volume ?? 1));
+    const vol = Math.min(1, (volume ?? 100) / 100);
+    console.log('RemoteAudio: setting volume to', vol, 'from volume prop', volume, 'audio element volume', el.volume);
+    el.volume = vol;
+    console.log('RemoteAudio: after setting, audio element volume is', el.volume);
+    
+    // Также отключаем аудио трек напрямую если volume 0
+    if (el.srcObject) {
+      const audioTracks = el.srcObject.getAudioTracks();
+      audioTracks.forEach(track => {
+        console.log('RemoteAudio: setting track.enabled to', vol > 0, 'for track', track.id);
+        track.enabled = vol > 0;
+      });
+    }
   }, [volume]);
 
-  // Локальный deafen: глушим <audio> на нашей стороне, не трогая сам
-  // WebRTC-трек — микрофон продолжает идти собеседнику.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    console.log('RemoteAudio: setting muted to', muted, 'audio element muted', el.muted);
     el.muted = !!muted;
+    console.log('RemoteAudio: after setting, audio element muted is', el.muted);
+    
+    // Также отключаем аудио трек напрямую если muted
+    if (el.srcObject) {
+      const audioTracks = el.srcObject.getAudioTracks();
+      audioTracks.forEach(track => {
+        console.log('RemoteAudio: setting track.enabled to', !muted, 'for track', track.id, '(muted check)');
+        track.enabled = !muted;
+      });
+    }
   }, [muted]);
 
   useEffect(() => {
     const el = ref.current;
     if (!el || !sinkId || typeof el.setSinkId !== 'function') return;
-    el.setSinkId(sinkId === 'default' ? '' : sinkId).catch(() => { /* not supported */ });
+    el.setSinkId(sinkId).catch(() => { /* not supported */ });
   }, [sinkId]);
 
   return <audio ref={ref} autoPlay />;
@@ -73,6 +97,8 @@ export default function CallView({ call }) {
   const { settings } = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [qualityOpen, setQualityOpen] = useState(false);
+  const [streamVolumeMenu, setStreamVolumeMenu] = useState(null);
+  const [streamVolume, setStreamVolume] = useState(100);
   const [, tick] = useState(0);
 
   const {
@@ -118,8 +144,18 @@ export default function CallView({ call }) {
     <div className="fixed inset-0 z-40 bg-bg-0 flex flex-col">
       {/* Поток */}
       <div className="flex-1 relative overflow-hidden">
+        {/* Рамка говорящего для себя (когда не стримим экран) */}
+        {!sharingScreen && selfSpeaking && (
+          <div
+            aria-hidden
+            className="absolute inset-0 pointer-events-none z-10 transition-shadow duration-150 shadow-[inset_0_0_0_3px_rgba(16,185,129,0.85),inset_0_0_22px_2px_rgba(16,185,129,0.45)]"
+          />
+        )}
         {showRemoteVideo ? (
-          <div className="absolute inset-0">
+          <div className="absolute inset-0" onContextMenu={(e) => {
+            e.preventDefault();
+            setStreamVolumeMenu({ x: e.clientX, y: e.clientY });
+          }}>
             <StreamVideo
               key={`${peerMedia?.camera ? 'c' : ''}${peerMedia?.screen ? 's' : ''}`}
               stream={remoteStream}
@@ -178,7 +214,7 @@ export default function CallView({ call }) {
         <RemoteAudio
           stream={remoteStream}
           sinkId={settings.outputDeviceId}
-          volume={settings.outputVolume}
+          volume={streamVolume}
           muted={deafened}
         />
 
@@ -273,11 +309,54 @@ export default function CallView({ call }) {
         open={qualityOpen}
         defaultPreset={settings.screenQuality || '720p'}
         onClose={() => setQualityOpen(false)}
-        onConfirm={(preset) => {
+        onConfirm={(preset, includeAudio) => {
           setQualityOpen(false);
-          toggleScreenShare(preset);
+          toggleScreenShare(preset, includeAudio);
         }}
       />
+
+      {/* Меню громкости стрима */}
+      {streamVolumeMenu && (
+        <div
+          className="fixed z-[90] bg-bg-1 border border-border rounded-lg shadow-xl p-4 w-64"
+          style={{ left: streamVolumeMenu.x, top: streamVolumeMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium">Громкость стрима</span>
+            <button
+              onClick={() => setStreamVolumeMenu(null)}
+              className="text-slate-400 hover:text-white"
+            >
+              <X size={16} />
+            </button>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={streamVolume}
+            onChange={(e) => {
+              const newValue = Number(e.target.value);
+              setStreamVolume(newValue);
+              e.currentTarget.style.setProperty('--range-progress', `${newValue}%`);
+            }}
+            className="range w-full"
+            style={{ '--range-progress': `${streamVolume}%` } as React.CSSProperties}
+          />
+          <div className="flex justify-between text-xs text-slate-400 mt-1">
+            <span>0%</span>
+            <span>{streamVolume}%</span>
+            <span>100%</span>
+          </div>
+        </div>
+      )}
+      {streamVolumeMenu && (
+        <div
+          className="fixed inset-0 z-[89]"
+          onClick={() => setStreamVolumeMenu(null)}
+        />
+      )}
     </div>
   );
 }

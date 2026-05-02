@@ -148,6 +148,12 @@ export function GroupsProvider({ children }) {
     return group;
   }, [token]);
 
+  const updateGroupMemberRole = useCallback(async (id, userId, role) => {
+    const { group } = await api.updateGroupMemberRole(token, id, userId, role);
+    setGroups((prev) => prev.map((x) => (x.id === id ? group : x)));
+    return group;
+  }, [token]);
+
   const value = useMemo(
     () => ({
       groups,
@@ -160,10 +166,11 @@ export function GroupsProvider({ children }) {
       removeMember,
       uploadAvatar,
       deleteAvatar,
+      updateGroupMemberRole,
       refresh,
     }),
     [groups, ready, getGroup, createGroup, updateGroup, deleteGroup, addMembers,
-      removeMember, uploadAvatar, deleteAvatar, refresh],
+      removeMember, uploadAvatar, deleteAvatar, updateGroupMemberRole, refresh],
   );
 
   return <GroupsContext.Provider value={value}>{children}</GroupsContext.Provider>;

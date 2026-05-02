@@ -18,6 +18,10 @@ const DEFAULTS = {
   soundDisconnect: true,       // короткий "даун" при завершении
   // Глобальная громкость UI-звуков (помимо outputVolume).
   uiVolume: 0.8,               // 0..1
+  // Настройки шумодавки
+  noiseSuppression: true,      // автоматическое подавление шума
+  noiseThreshold: -50,         // порог чувствительности в дБ (-100..0)
+  highPassFilter: true,        // высокочастотный фильтр для удаления низкочастотного шума
 };
 
 function load() {

@@ -345,9 +345,9 @@ export default function GroupCallView({ call, usersById, selfId }) {
         open={qualityOpen}
         defaultPreset={settings.screenQuality || '720p'}
         onClose={() => setQualityOpen(false)}
-        onConfirm={(preset) => {
+        onConfirm={(preset, includeAudio) => {
           setQualityOpen(false);
-          toggleScreenShare(preset);
+          toggleScreenShare(preset, includeAudio);
         }}
       />
     </div>

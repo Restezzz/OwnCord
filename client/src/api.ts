@@ -128,11 +128,17 @@ export const api = {
     request<{ ok: true; message: Message }>(`/api/messages/${id}`, { method: 'PATCH', body: { content }, token }),
   deleteMessage: (token: string, id: number) =>
     request<{ ok: true; message?: Message; removed?: boolean }>(`/api/messages/${id}`, { method: 'DELETE', token }),
-  sendFile: (token: string, to: number, file: File, content = '') => {
+  sendFile: (token: string, to: number, files: File | File[], content = '') => {
     const fd = new FormData();
     fd.append('to', String(to));
     if (content) fd.append('content', content);
-    fd.append('file', file, file.name);
+    if (Array.isArray(files)) {
+      for (const file of files) {
+        fd.append('files', file, file.name);
+      }
+    } else {
+      fd.append('files', files, files.name);
+    }
     return requestMultipart<{ ok: true; message: Message }>('/api/messages/file', { token, formData: fd });
   },
   listMutes: (token: string) => request<{ ids: number[] }>('/api/mutes', { token }),
@@ -155,6 +161,8 @@ export const api = {
     request<{ group: Group }>(`/api/groups/${id}/members`, { method: 'POST', body: { memberIds }, token }),
   removeGroupMember: (token: string, id: number, userId: number) =>
     request<ApiOk & { group?: Group }>(`/api/groups/${id}/members/${userId}`, { method: 'DELETE', token }),
+  updateGroupMemberRole: (token: string, id: number, userId: number, role: 'owner' | 'admin' | 'member') =>
+    request<{ ok: true; group: Group }>(`/api/groups/${id}/members/${userId}/role`, { method: 'PATCH', body: { role }, token }),
   uploadGroupAvatar: (token: string, id: number, file: File) => {
     const fd = new FormData();
     fd.append('avatar', file);
@@ -212,10 +220,33 @@ export const api = {
     fd.append('voice', blob, `voice-${Date.now()}.webm`);
     return requestMultipart<{ ok: true; message: Message }>(`/api/groups/${id}/messages/voice`, { token, formData: fd });
   },
-  sendGroupFile: (token: string, id: number, file: File, content = '') => {
+  sendGroupFile: (token: string, id: number, files: File | File[], content = '') => {
     const fd = new FormData();
     if (content) fd.append('content', content);
-    fd.append('file', file, file.name);
+    if (Array.isArray(files)) {
+      for (const file of files) {
+        fd.append('files', file, file.name);
+      }
+    } else {
+      fd.append('files', files, files.name);
+    }
     return requestMultipart<{ ok: true; message: Message }>(`/api/groups/${id}/messages/file`, { token, formData: fd });
+  },
+  // Реакции на сообщения
+  addReaction: (token: string, messageId: number, emoji: string, groupId?: number) => {
+    const url = groupId
+      ? `/api/groups/${groupId}/messages/${messageId}/reaction`
+      : `/api/messages/${messageId}/reaction`;
+    return request<{ ok: true; reactions: Array<{ emoji: string; count: number; users: number[] }> }>(url, {
+      token,
+      method: 'POST',
+      body: { emoji },
+    });
+  },
+  getReactions: (token: string, messageId: number, groupId?: number) => {
+    const url = groupId
+      ? `/api/groups/${groupId}/messages/${messageId}/reactions`
+      : `/api/messages/${messageId}/reactions`;
+    return request<{ reactions: Array<{ emoji: string; count: number; users: number[] }> }>(url, { token });
   },
 };

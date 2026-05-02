@@ -14,7 +14,7 @@ export type User = {
 };
 
 export type GroupMember = User & {
-  role?: 'owner' | 'member' | string;
+  role?: 'owner' | 'admin' | 'member' | string;
   joinedAt?: number;
 };
 
@@ -57,6 +57,12 @@ export type SystemPayload = {
 
 export type MessageKind = 'text' | 'voice' | 'image' | 'video' | 'file' | 'call' | 'system' | 'groupcall';
 
+export type MessageReaction = {
+  emoji: string;
+  count: number;
+  users: number[];
+};
+
 export type Message = {
   id: number;
   senderId: number;
@@ -73,6 +79,7 @@ export type Message = {
   attachmentSize: number | null;
   attachmentMime: string | null;
   payload: CallPayload | GroupCallPayload | SystemPayload | null;
+  reactions?: MessageReaction[];
 };
 
 export type AuthSession = {
@@ -158,6 +165,7 @@ export type ServerToClientEvents = {
   'dm:update': (message: Message) => void;
   'dm:delete': (payload: { id: number; senderId: number; receiverId: number | null; groupId: number | null }) => void;
   'dm:remove': (payload: { id: number; senderId: number; receiverId: number | null; groupId: number | null }) => void;
+  'dm:reaction': (payload: { messageId: number; reactions: MessageReaction[] }) => void;
   'profile:self': (user: User) => void;
   'mutes:update': (payload: { ids: number[] }) => void;
   'account:deleted': () => void;

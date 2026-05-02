@@ -112,6 +112,16 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members (user_id);
 `);
 
+// Миграция для обновления роли создателя до 'owner' если она ещё 'member'
+const ownerRoleUpdate = db.prepare(`
+  UPDATE group_members
+  SET role = 'owner'
+  WHERE role = 'member'
+    AND group_id IN (SELECT id FROM groups WHERE owner_id = group_members.user_id)
+`);
+ownerRoleUpdate.run();
+console.log('[db] Updated owner roles in group_members');
+
 // Групповые сообщения: ссылка на групповой чат вместо receiver_id.
 // Колонка добавляется после создания таблицы groups, чтобы FK имела смысл.
 addColumn('messages', 'group_id', 'INTEGER REFERENCES groups(id) ON DELETE CASCADE');
@@ -196,6 +206,20 @@ db.exec(`
     revoked_at  INTEGER
   );
   CREATE INDEX IF NOT EXISTS idx_invite_codes_created_by ON invite_codes (created_by);
+`);
+
+// Реакции на сообщения (heart, thumbs_up, thumbs_down, fire, poop и т.д.)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS message_reactions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    emoji      TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+    UNIQUE(message_id, user_id, emoji)
+  );
+  CREATE INDEX IF NOT EXISTS idx_message_reactions_message ON message_reactions (message_id);
+  CREATE INDEX IF NOT EXISTS idx_message_reactions_user ON message_reactions (user_id);
 `);
 
 // На старте процесса гасим висящие kind='groupcall' с status='active' —

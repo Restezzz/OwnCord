@@ -69,7 +69,7 @@ export function ToastProvider({ children }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <div className="fixed top-3 left-1/2 -translate-x-1/2 z-[60] flex flex-col gap-2 pointer-events-none w-[min(92vw,360px)]">
+      <div className="fixed top-3 left-1/2 -translate-x-1/2 z-[80] flex flex-col gap-2 pointer-events-none w-[min(92vw,360px)]">
         <AnimatePresence initial={false}>
           {toasts.map((t) => (
             <motion.div

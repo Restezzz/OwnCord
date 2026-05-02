@@ -5,13 +5,14 @@ import { SCREEN_PRESETS, SCREEN_PRESET_KEYS } from '../utils/media';
 import { modalVariants, overlayVariants, reducedVariants } from '../utils/motion';
 
 // Модалка выбора качества демонстрации экрана. Открывается по клику на
-// кнопку «Демонстрация», после подтверждения вызывает onConfirm(presetKey)
+// кнопку «Демонстрация», после подтверждения вызывает onConfirm(presetKey, includeAudio)
 // и сразу закрывается — потом уже срабатывает системный диалог браузера
 // для выбора окна/экрана.
 export default function ScreenQualityModal({
   open, defaultPreset = '720p', onConfirm, onClose,
 }) {
   const [preset, setPreset] = useState(defaultPreset);
+  const [includeAudio, setIncludeAudio] = useState(false);
   const reduce = useReducedMotion();
   const overlayV = reduce ? reducedVariants(overlayVariants) : overlayVariants;
   const panelV = reduce ? reducedVariants(modalVariants) : modalVariants;
@@ -73,6 +74,31 @@ export default function ScreenQualityModal({
               );
             })}
           </div>
+          <div className="mt-4 pt-4 border-t border-border">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <div className="relative">
+                <input
+                  type="checkbox"
+                  checked={includeAudio}
+                  onChange={(e) => setIncludeAudio(e.target.checked)}
+                  className="sr-only"
+                />
+                <div className={`w-11 h-6 rounded-full transition-colors ${
+                  includeAudio ? 'bg-accent' : 'bg-bg-3'
+                }`}>
+                  <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${
+                    includeAudio ? 'left-6' : 'left-1'
+                  }`} />
+                </div>
+              </div>
+              <div className="flex-1">
+                <div className="text-sm font-medium">Включить звук экрана</div>
+                <div className="text-xs text-text-2">
+                  Передавать системный звук (музыка, видео, игры)
+                </div>
+              </div>
+            </label>
+          </div>
         </div>
 
         <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-border">
@@ -83,7 +109,7 @@ export default function ScreenQualityModal({
             Отмена
           </button>
           <button
-            onClick={() => { onConfirm(preset); }}
+            onClick={() => { onConfirm(preset, includeAudio); }}
             className="px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover text-white text-sm font-medium"
           >
             Продолжить

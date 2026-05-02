@@ -2,8 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import {
   X, Check, Trash2, Upload, UserPlus, UserMinus, Users as UsersIcon,
+  MoreVertical, Shield, ShieldAlert,
 } from 'lucide-react';
 import Avatar from './Avatar';
+import ContextMenu from './ContextMenu';
+import InviteMembersModal from './InviteMembersModal';
 import { getAvatarUrl, getDisplayName } from '../utils/user';
 import { useGroups } from '../context/GroupsContext';
 import { useAuth } from '../context/AuthContext';
@@ -32,6 +35,8 @@ export default function GroupModal({
 
   const isEdit = mode === 'edit' && group;
   const isOwner = isEdit && group.ownerId === auth.user.id;
+  const isAdmin = isEdit && group.members.find(m => m.id === auth.user.id)?.role === 'admin';
+  const canEditGroup = isOwner || isAdmin;
 
   const [name, setName] = useState(isEdit ? group.name : '');
   const [selectedIds, setSelectedIds] = useState(() => {
@@ -40,14 +45,17 @@ export default function GroupModal({
   });
   const [search, setSearch] = useState('');
   const [busy, setBusy] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [memberMenu, setMemberMenu] = useState(null); // { userId, x, y }
+  const [avatarFile, setAvatarFile] = useState(null);
+  const [avatarPreview, setAvatarPreview] = useState(null);
   const fileRef = useRef(null);
 
   // Реагируем на обновления группы извне (сокет-события).
   useEffect(() => {
-    if (!isEdit) return;
+    if (!isEdit || !group) return;
     setName(group.name);
-    setSelectedIds(new Set(group.members.map((m) => m.id).filter((id) => id !== auth.user.id)));
-  }, [auth.user.id, group, isEdit]);
+  }, [group?.name, isEdit]);
 
   const candidates = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -75,20 +83,34 @@ export default function GroupModal({
   const onAvatarFile = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (!file || !isEdit || !isOwner) return;
-    setBusy(true);
-    try {
-      await g.uploadAvatar(group.id, file);
-      toast.info('Аватар обновлён');
-    } catch (err) {
-      toast.error(err?.message || 'Не удалось загрузить');
-    } finally {
-      setBusy(false);
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast.error('Выберите изображение');
+      return;
+    }
+    if (isEdit && !canEditGroup) return;
+    
+    if (isEdit) {
+      setBusy(true);
+      try {
+        await g.uploadAvatar(group.id, file);
+        toast.info('Аватар обновлён');
+      } catch (err) {
+        toast.error(err?.message || 'Не удалось загрузить');
+      } finally {
+        setBusy(false);
+      }
+    } else {
+      // Режим создания - сохраняем файл для предпросмотра и загрузки после создания
+      setAvatarFile(file);
+      const reader = new FileReader();
+      reader.onload = () => setAvatarPreview(reader.result);
+      reader.readAsDataURL(file);
     }
   };
 
   const onRemoveAvatar = async () => {
-    if (!isEdit || !isOwner || !group.avatarPath) return;
+    if (!isEdit || !canEditGroup || !group.avatarPath) return;
     setBusy(true);
     try {
       await g.deleteAvatar(group.id);
@@ -97,6 +119,12 @@ export default function GroupModal({
     } finally {
       setBusy(false);
     }
+  };
+
+  const onRemoveNewAvatar = () => {
+    setAvatarFile(null);
+    setAvatarPreview(null);
+    if (fileRef.current) fileRef.current.value = '';
   };
 
   const submit = async () => {
@@ -115,23 +143,23 @@ export default function GroupModal({
         }
         const created = await g.createGroup(trimmed, ids);
         toast.info('Группа создана');
+        
+        // Загружаем аватарку если была выбрана
+        if (avatarFile) {
+          try {
+            await g.uploadAvatar(created.id, avatarFile);
+            toast.info('Аватар загружен');
+          } catch (err) {
+            toast.error(err?.message || 'Не удалось загрузить аватар');
+          }
+        }
+        
         onCreated?.(created);
         onClose?.();
-      } else if (isEdit && isOwner) {
-        // diff участников
-        const currentIds = new Set(
-          group.members.map((m) => m.id).filter((id) => id !== group.ownerId),
-        );
-        const wantIds = new Set(selectedIds);
-        const toAdd = [...wantIds].filter((id) => !currentIds.has(id));
-        const toRemove = [...currentIds].filter((id) => !wantIds.has(id));
-
+      } else if (isEdit && canEditGroup) {
+        // В режиме редактирования меняем только имя и аватар
+        // Управление участниками через отдельное модальное окно
         if (trimmed !== group.name) await g.updateGroup(group.id, { name: trimmed });
-        if (toAdd.length > 0) await g.addMembers(group.id, toAdd);
-        for (const uid of toRemove) {
-          // eslint-disable-next-line no-await-in-loop
-          await g.removeMember(group.id, uid);
-        }
         toast.info('Группа обновлена');
         onClose?.();
       } else {
@@ -172,7 +200,63 @@ export default function GroupModal({
     }
   };
 
-  const title = mode === 'create' ? 'Новая группа' : (isOwner ? 'Редактировать группу' : 'Группа');
+  const onMemberContext = (e, member) => {
+    e.preventDefault();
+    // Проверяем права: owner и admin могут кикать, но только owner может управлять ролями
+    const myRole = group.members.find(m => m.id === auth.user.id)?.role;
+    if (myRole !== 'owner' && myRole !== 'admin') return;
+    // Нельзя управлять собой
+    if (member.id === auth.user.id) return;
+    // Админ не может кикнуть owner или другого админа
+    if (myRole === 'admin' && (member.role === 'owner' || member.role === 'admin')) return;
+    setMemberMenu({ userId: member.id, userRole: member.role, myRole, x: e.clientX, y: e.clientY });
+  };
+
+  const onPromoteMember = async (userId) => {
+    setBusy(true);
+    try {
+      await g.updateGroupMemberRole(group.id, userId, 'admin');
+      toast.info('Пользователь повышен до админа');
+    } catch (err) {
+      toast.error(err?.message || 'Не удалось изменить роль');
+    } finally {
+      setBusy(false);
+    }
+    setMemberMenu(null);
+  };
+
+  const onDemoteMember = async (userId) => {
+    setBusy(true);
+    try {
+      await g.updateGroupMemberRole(group.id, userId, 'member');
+      toast.info('Пользователь понижен до участника');
+    } catch (err) {
+      toast.error(err?.message || 'Не удалось изменить роль');
+    } finally {
+      setBusy(false);
+    }
+    setMemberMenu(null);
+  };
+
+  const onKickMember = async (userId) => {
+    if (!confirm('Кикнуть пользователя из группы?')) return;
+    setBusy(true);
+    try {
+      await g.removeMember(group.id, userId);
+      toast.info('Пользователь кикнут');
+    } catch (err) {
+      toast.error(err?.message || 'Не удалось кикнуть пользователя');
+    } finally {
+      setBusy(false);
+    }
+    setMemberMenu(null);
+  };
+
+  const onInviteMembers = async (memberIds) => {
+    await g.addMembers(group.id, memberIds);
+  };
+
+  const title = mode === 'create' ? 'Новая группа' : (canEditGroup ? 'Редактировать группу' : 'Группа');
 
   const reduce = useReducedMotion();
   const overlayV = reduce ? reducedVariants(overlayVariants) : overlayVariants;
@@ -203,8 +287,24 @@ export default function GroupModal({
           {/* Аватар + имя */}
           <div className="flex items-center gap-3">
             <div className="relative">
-              {group?.avatarPath ? (
-                <Avatar name={name || 'Группа'} src={group.avatarPath} size={64} />
+              {isEdit ? (
+                group?.avatarPath ? (
+                  <Avatar name={name || 'Группа'} src={group.avatarPath} size={64} />
+                ) : (
+                  <div
+                    className="avatar grid place-items-center bg-bg-3 text-slate-200"
+                    style={{ width: 64, height: 64 }}
+                  >
+                    <UsersIcon size={28} />
+                  </div>
+                )
+              ) : avatarPreview ? (
+                <div
+                  className="avatar grid place-items-center overflow-hidden"
+                  style={{ width: 64, height: 64 }}
+                >
+                  <img src={avatarPreview} alt="Avatar" className="w-full h-full object-cover" />
+                </div>
               ) : (
                 <div
                   className="avatar grid place-items-center bg-bg-3 text-slate-200"
@@ -213,7 +313,7 @@ export default function GroupModal({
                   <UsersIcon size={28} />
                 </div>
               )}
-              {isEdit && isOwner && (
+              {(isEdit ? canEditGroup : true) ? (
                 <button
                   onClick={onPickAvatar}
                   disabled={busy}
@@ -222,6 +322,17 @@ export default function GroupModal({
                   type="button"
                 >
                   <Upload size={14} />
+                </button>
+              ) : null}
+              {!isEdit && avatarPreview && (
+                <button
+                  onClick={onRemoveNewAvatar}
+                  disabled={busy}
+                  className="absolute -bottom-1 -right-9 w-7 h-7 rounded-full bg-red-500 text-white grid place-items-center border-2 border-bg-1 hover:bg-red-600"
+                  title="Удалить аватар"
+                  type="button"
+                >
+                  <Trash2 size={12} />
                 </button>
               )}
               <input
@@ -238,13 +349,13 @@ export default function GroupModal({
                 placeholder="Название группы"
                 value={name}
                 onChange={(e) => setName(e.target.value.slice(0, NAME_MAX))}
-                disabled={isEdit && !isOwner}
+                disabled={isEdit && !canEditGroup}
               />
               <div className="text-xs text-slate-500">
                 {name.length}/{NAME_MAX}
               </div>
             </div>
-            {isEdit && isOwner && group.avatarPath && (
+            {isEdit && canEditGroup && group.avatarPath && (
               <button
                 onClick={onRemoveAvatar}
                 disabled={busy}
@@ -261,22 +372,58 @@ export default function GroupModal({
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold">
-                Участники {(isEdit && !isOwner) ? '' : `(${selectedIds.size + 1}/${MEMBER_LIMIT})`}
+                Участники {isEdit ? `(${group.members.length}/${MEMBER_LIMIT})` : `(${selectedIds.size + 1}/${MEMBER_LIMIT})`}
               </div>
+              {isEdit && (isOwner || group.members.find(m => m.id === auth.user.id)?.role === 'admin') && (
+                <button
+                  onClick={() => setShowInviteModal(true)}
+                  disabled={busy || group.members.length >= MEMBER_LIMIT}
+                  className="text-xs text-accent hover:text-accent-hover flex items-center gap-1"
+                  type="button"
+                >
+                  <UserPlus size={12} /> Пригласить
+                </button>
+              )}
             </div>
-            {(isEdit && !isOwner) ? (
+            {isEdit ? (
               <div className="space-y-1 max-h-64 overflow-y-auto">
-                {group.members.map((m) => (
-                  <div key={m.id} className="flex items-center gap-2 p-2 rounded bg-bg-2">
-                    <Avatar name={getDisplayName(m)} src={m.avatarPath || null} size={28} />
-                    <div className="flex-1 min-w-0 text-sm">
-                      {getDisplayName(m)}
-                      {m.role === 'owner' && (
-                        <span className="ml-1.5 text-[10px] uppercase text-accent">owner</span>
+                {group.members.map((m) => {
+                  const myRole = group.members.find(mem => mem.id === auth.user.id)?.role;
+                  const canManage = myRole === 'owner' || myRole === 'admin';
+                  const canManageRoles = myRole === 'owner';
+                  const isMe = m.id === auth.user.id;
+                  const isOwner = m.role === 'owner';
+                  return (
+                    <div
+                      key={m.id}
+                      className="flex items-center gap-2 p-2 rounded bg-bg-2"
+                      onContextMenu={(e) => onMemberContext(e, m)}
+                    >
+                      <Avatar name={getDisplayName(m)} src={m.avatarPath || null} size={28} />
+                      <div className="flex-1 min-w-0 text-sm">
+                        {getDisplayName(m)}
+                        {isOwner && (
+                          <span className="ml-1.5 text-[10px] uppercase text-accent font-semibold">owner</span>
+                        )}
+                        {m.role === 'admin' && (
+                          <span className="ml-1.5 text-[10px] uppercase text-yellow-400 font-semibold">admin</span>
+                        )}
+                      </div>
+                      {canManage && !isMe && !(myRole === 'admin' && (isOwner || m.role === 'admin')) && (
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            onMemberContext(e, m);
+                          }}
+                          className="p-1 hover:bg-bg-3 rounded text-slate-400 hover:text-slate-200"
+                          type="button"
+                        >
+                          <MoreVertical size={14} />
+                        </button>
                       )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <>
@@ -337,7 +484,7 @@ export default function GroupModal({
             <button onClick={onClose} disabled={busy} className="btn-ghost" type="button">
               Отмена
             </button>
-            {(mode === 'create' || isOwner) && (
+            {(mode === 'create' || canEditGroup) && (
               <button onClick={submit} disabled={busy || !name.trim()} className="btn-primary" type="button">
                 <Check size={14} />
                 {mode === 'create' ? 'Создать' : 'Сохранить'}
@@ -345,6 +492,46 @@ export default function GroupModal({
             )}
           </div>
         </footer>
+
+        {showInviteModal && (
+          <InviteMembersModal
+            group={group}
+            users={users}
+            onClose={() => setShowInviteModal(false)}
+            onInvite={onInviteMembers}
+          />
+        )}
+
+        {memberMenu && (
+          <ContextMenu
+            anchor={{ x: memberMenu.x, y: memberMenu.y }}
+            onClose={() => setMemberMenu(null)}
+            items={[
+              ...(memberMenu.myRole === 'owner' && memberMenu.userRole === 'member'
+                ? [{
+                    label: 'Повысить до админа',
+                    icon: <Shield size={14} />,
+                    onClick: () => onPromoteMember(memberMenu.userId),
+                  }]
+                : []
+              ),
+              ...(memberMenu.myRole === 'owner' && memberMenu.userRole === 'admin'
+                ? [{
+                    label: 'Понизить до участника',
+                    icon: <ShieldAlert size={14} />,
+                    onClick: () => onDemoteMember(memberMenu.userId),
+                  }]
+                : []
+              ),
+              {
+                label: 'Кикнуть из группы',
+                icon: <UserMinus size={14} />,
+                danger: true,
+                onClick: () => onKickMember(memberMenu.userId),
+              },
+            ]}
+          />
+        )}
       </motion.div>
     </motion.div>
   );

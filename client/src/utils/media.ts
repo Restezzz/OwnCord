@@ -132,7 +132,7 @@ export function getScreenPreset(key) {
 // Захватить экран с выбранным пресетом. Chrome обычно отдаёт
 // разрешение источника «как есть», но ideal-поля подсказывают браузеру
 // верхнюю планку (иначе браузер может скипалировать вниз).
-export async function captureDisplay(presetKey) {
+export async function captureDisplay(presetKey, includeAudio = false) {
   const preset = getScreenPreset(presetKey);
   return navigator.mediaDevices.getDisplayMedia({
     video: {
@@ -140,7 +140,7 @@ export async function captureDisplay(presetKey) {
       height:    { ideal: preset.height },
       frameRate: { ideal: preset.frameRate, max: preset.frameRate },
     },
-    audio: false,
+    audio: includeAudio,
   });
 }
 

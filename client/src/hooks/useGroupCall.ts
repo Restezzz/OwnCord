@@ -58,7 +58,9 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
   const localStreamRef = useRef(null);
   const audioTrackRef = useRef(null);
   const videoTrackRef = useRef(null);   // камера
-  const screenTrackRef = useRef(null);  // демонстрация экрана (приоритет над камерой)
+  const screenTrackRef = useRef(null);
+  const screenAudioDeafenRef = useRef(false); // Отслеживаем автоматически включённый deafen для звука экрана
+  const screenAudioTrackRef = useRef(null); // Аудио трек из стрима экрана  // демонстрация экрана (приоритет над камерой)
   // Placeholder-треки на случай отсутствия камеры — используются при
   // создании каждого PC, чтобы SDP сразу содержал msid+ssrc и пир
   // получал ontrack ещё до того, как мы реально включим камеру/демку.
@@ -394,14 +396,24 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
   //   2) applyVideoSenderQuality(maxBitrate) под выбранный пресет;
   //   3) renegotiate каждого pc, чтобы пир получил свежий SDP/keyframe и
   //      сразу увидел реальную картинку (а не остался с placeholder).
-  const toggleScreenShare = useCallback(async (presetKey = '720p') => {
+  const toggleScreenShare = useCallback(async (presetKey = '720p', includeAudio = false) => {
     if (stateRef.current !== 'in-call') return;
 
     if (sharingScreen && screenTrackRef.current) {
       // Выключаем демку — возвращаем камеру (если была) или placeholder.
+      const wasDeafenedForAudio = screenAudioDeafenRef.current;
       try { screenTrackRef.current.stop(); } catch { /* */ }
+      if (screenAudioTrackRef.current) {
+        try { screenAudioTrackRef.current.stop(); } catch { /* */ }
+        screenAudioTrackRef.current = null;
+      }
       screenTrackRef.current = null;
+      screenAudioDeafenRef.current = false;
       setSharingScreen(false);
+      // Возвращаем deafen если он был автоматически включён для звука экрана
+      if (wasDeafenedForAudio) {
+        setDeafened(false);
+      }
       const ls = localStreamRef.current || new MediaStream();
       const tracks = ls.getTracks().filter((t) => t.kind !== 'video');
       if (videoTrackRef.current) tracks.push(videoTrackRef.current);
@@ -417,7 +429,12 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
 
     let display;
     try {
-      display = await captureDisplay(presetKey);
+      display = await captureDisplay(presetKey, includeAudio);
+      // Если включён звук экрана, автоматически deafen чтобы избежать эха
+      if (includeAudio && !deafened) {
+        setDeafened(true);
+        screenAudioDeafenRef.current = true;
+      }
     } catch (e) {
       if (e?.name !== 'NotAllowedError' && e?.name !== 'AbortError') {
         toast?.error?.(`Не удалось начать демонстрацию: ${e.message || e}`);
@@ -427,6 +444,21 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     const track = display.getVideoTracks()[0];
     if (!track) return;
     screenTrackRef.current = track;
+    
+    // Добавляем аудио трек из стрима экрана
+    const audioTrack = display.getAudioTracks()[0];
+    if (audioTrack) {
+      screenAudioTrackRef.current = audioTrack;
+      const ls = localStreamRef.current || new MediaStream();
+      ls.addTrack(audioTrack);
+      localStreamRef.current = ls;
+      setLocalStream(ls);
+      // Обновляем все pc чтобы отправить аудио трек
+      for (const [peerId, pc] of pcsRef.current) {
+        applyLocalTracksToPc(pc);
+        renegotiatePeer(peerId);
+      }
+    }
     setSharingScreen(true);
 
     track.addEventListener('ended', () => {

@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Phone, Video, ArrowLeft, Send, Mic, Pencil, Trash2, Paperclip,
-  Users as UsersIcon, Settings as SettingsIcon,
+  Users as UsersIcon, Settings as SettingsIcon, X, File as FileIcon, Smile,
 } from 'lucide-react';
 import Avatar from './Avatar';
 import ContextMenu from './ContextMenu';
+import ReactionPicker from './ReactionPicker';
 import VoiceRecorder from './VoiceRecorder';
 import MessageList from './MessageList';
 import { getDisplayName, getAvatarUrl, hasCustomDisplayName, formatDuration, isDeletedUser } from '../utils/user';
+import { useAuth } from '../context/AuthContext';
+import { api } from '../api';
 
 function formatLimit(bytes) {
   const mb = Math.round(bytes / 1024 / 1024);
@@ -45,14 +48,20 @@ export default function ChatPanel({
   const [sending, setSending] = useState(false);
   const [recording, setRecording] = useState(false);
   const [menu, setMenu] = useState(null); // { messageId, x, y }
+  const [reactionPicker, setReactionPicker] = useState(null); // { messageId, x, y }
   const [editingId, setEditingId] = useState(null);
   const [editDraft, setEditDraft] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [pendingAttachments, setPendingAttachments] = useState([]);
+  const [previewZoom, setPreviewZoom] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
   const scrollRef = useRef(null);
   const fileInputRef = useRef(null);
+  const dropZoneRef = useRef(null);
 
   const isGroup = !!group;
   const target = isGroup ? group : peer;
+  const { auth } = useAuth();
 
   // Карта отправителей для отображения аватарки/имени рядом с сообщением
   // в групповом чате. Строится из members + глобального usersById.
@@ -73,12 +82,13 @@ export default function ChatPanel({
     el.scrollTop = el.scrollHeight;
   }, [messages.length, target?.id]);
 
-  // При смене собеседника сбрасываем редактирование/запись
+  // При смене собеседника сбрасываем редактирование/запись и pending attachments
   useEffect(() => {
     setEditingId(null);
     setEditDraft('');
     setRecording(false);
     setMenu(null);
+    setPendingAttachments([]);
   }, [target?.id, isGroup]);
 
   if (!target) {
@@ -94,10 +104,17 @@ export default function ChatPanel({
 
   const send = async () => {
     const trimmed = text.trim();
-    if (!trimmed || sending) return;
+    const hasAttachments = pendingAttachments.length > 0;
+    if ((!trimmed && !hasAttachments) || sending) return;
     setSending(true);
     try {
-      await onSend(trimmed);
+      if (hasAttachments) {
+        // Отправляем все attachment'ы в одном сообщении
+        await onSendFile?.(pendingAttachments, { caption: trimmed });
+        setPendingAttachments([]);
+      } else {
+        await onSend(trimmed);
+      }
       setText('');
     } finally {
       setSending(false);
@@ -136,9 +153,14 @@ export default function ChatPanel({
 
   const onMessageContext = (e, m) => {
     if (m.deleted || m.kind === 'call') return;
-    if (m.senderId !== selfId) return;
     e.preventDefault();
-    setMenu({ messageId: m.id, x: e.clientX, y: e.clientY });
+    if (m.senderId === selfId) {
+      // Свое сообщение - показать редактирование/удаление
+      setMenu({ messageId: m.id, x: e.clientX, y: e.clientY });
+    } else {
+      // Чужое сообщение - показать реакции
+      setReactionPicker({ messageId: m.id, x: e.clientX, y: e.clientY });
+    }
   };
 
   const onPickFile = () => {
@@ -146,25 +168,85 @@ export default function ChatPanel({
     fileInputRef.current?.click();
   };
 
+  const addPendingAttachment = (file) => {
+    if (file.size > maxFileBytes) {
+      onSendFile?.(null, { error: 'too-large', limit: maxFileBytes });
+      return;
+    }
+    setPendingAttachments(prev => [...prev, file]);
+  };
+
+  const removePendingAttachment = (index) => {
+    setPendingAttachments(prev => prev.filter((_, i) => i !== index));
+  };
+
   const onFileChange = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
-    if (file.size > maxFileBytes) {
-      // ChatPanel не имеет toast — отдадим в callback с ошибкой через throw
-      onSendFile?.(null, { error: 'too-large', limit: maxFileBytes });
-      return;
+    addPendingAttachment(file);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    const files = Array.from(e.dataTransfer.files).filter((f: File) => f.type.startsWith('image/') || f.type.startsWith('video/'));
+    for (const file of files) {
+      addPendingAttachment(file);
     }
-    setUploading(true);
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handlePaste = (e) => {
+    const items = Array.from(e.clipboardData.items);
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) {
+          addPendingAttachment(file);
+          e.preventDefault();
+        }
+      }
+    }
+  };
+
+  const onAddReaction = async (emoji) => {
+    if (!reactionPicker) return;
+    const messageId = reactionPicker.messageId;
+    const groupId = isGroup ? group.id : undefined;
+    
     try {
-      await onSendFile?.(file, { caption: text.trim() });
-      setText('');
-    } finally {
-      setUploading(false);
+      await api.addReaction(auth?.token, messageId, emoji, groupId);
+    } catch (err) {
+      console.error('Failed to add reaction:', err);
+    }
+    
+    setReactionPicker(null);
+  };
+
+  const onReactionClick = async (messageId, emoji, hasReacted) => {
+    const groupId = isGroup ? group.id : undefined;
+    try {
+      await api.addReaction(auth?.token, messageId, emoji, groupId);
+    } catch (err) {
+      console.error('Failed to toggle reaction:', err);
     }
   };
 
   const menuMessage = menu ? messages.find((m) => m.id === menu.messageId) : null;
+  const reactionMessage = reactionPicker ? messages.find((m) => m.id === reactionPicker.messageId) : null;
 
   const displayName = isGroup ? (group.name || 'Группа') : getDisplayName(peer);
   const avatarUrl = isGroup ? (group.avatarPath || null) : getAvatarUrl(peer);
@@ -173,7 +255,12 @@ export default function ChatPanel({
   const peerDeleted = !isGroup && isDeletedUser(peer);
 
   return (
-    <div className="flex flex-col h-full">
+    <div 
+      className={`flex flex-col h-full ${isDragging ? 'ring-2 ring-accent ring-inset' : ''}`}
+      onDrop={handleDrop}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+    >
       <header className="flex items-center gap-2 p-3 border-b border-border">
         {onBack && (
           <button className="btn-ghost md:hidden" onClick={onBack} aria-label="Назад">
@@ -316,6 +403,7 @@ export default function ChatPanel({
           commitEdit={commitEdit}
           cancelEdit={cancelEdit}
           onMessageContext={onMessageContext}
+          onReactionClick={onReactionClick}
           onRejoinCall={onRejoinCall}
           onJoinGroupCall={onJoinGroupCall}
           inGroupCall={inGroupCall}
@@ -363,13 +451,16 @@ export default function ChatPanel({
               placeholder={
                 uploading
                   ? 'Загрузка файла…'
-                  : isGroup
-                    ? `Сообщение в «${group.name}»`
-                    : `Сообщение для @${peer.username}`
+                  : pendingAttachments.length > 0
+                    ? 'Добавьте текст или отправьте…'
+                    : isGroup
+                      ? `Сообщение в «${group.name}»`
+                      : `Сообщение для @${peer.username}`
               }
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={onKey}
+              onPaste={handlePaste}
               rows={1}
               disabled={uploading}
             />
@@ -385,13 +476,79 @@ export default function ChatPanel({
             </button>
             <button
               onClick={send}
-              disabled={!text.trim() || sending || uploading}
+              disabled={(!text.trim() && pendingAttachments.length === 0) || sending || uploading}
               className="btn-primary h-10"
               title="Отправить"
               type="button"
             >
               <Send size={16} />
             </button>
+          </div>
+        )}
+        {pendingAttachments.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-2">
+            {pendingAttachments.map((file, index) => {
+              const isImage = file.type.startsWith('image/');
+              const isVideo = file.type.startsWith('video/');
+              const previewUrl = (isImage || isVideo) ? URL.createObjectURL(file) : null;
+              return (
+                <div key={index} className="relative group">
+                  {isImage ? (
+                    <button
+                      type="button"
+                      onClick={() => setPreviewZoom(previewUrl)}
+                      className="w-16 h-16 object-cover rounded-lg border border-border overflow-hidden"
+                    >
+                      <img
+                        src={previewUrl}
+                        alt={file.name}
+                        className="w-16 h-16 object-cover"
+                      />
+                    </button>
+                  ) : isVideo ? (
+                    <div className="w-16 h-16 rounded-lg border border-border bg-bg-3 grid place-items-center overflow-hidden">
+                      <video
+                        src={previewUrl}
+                        className="w-16 h-16 object-cover"
+                        muted
+                      />
+                    </div>
+                  ) : (
+                    <div className="w-16 h-16 rounded-lg border border-border bg-bg-3 grid place-items-center flex-col gap-0.5 p-1">
+                      <FileIcon size={16} className="text-slate-400 shrink-0" />
+                      <div className="text-[9px] text-slate-400 truncate w-full text-center leading-tight">
+                        {file.name.slice(0, 12)}{file.name.length > 12 ? '...' : ''}
+                      </div>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => removePendingAttachment(index)}
+                    className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Удалить"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {previewZoom && (
+          <div
+            className="fixed inset-0 z-[90] bg-black/85 grid place-items-center p-4 cursor-zoom-out"
+            onClick={() => setPreviewZoom(null)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setPreviewZoom(null);
+            }}
+            role="dialog"
+            tabIndex={-1}
+          >
+            <img
+              src={previewZoom}
+              alt="Preview"
+              className="max-h-[90vh] max-w-[95vw] object-contain"
+            />
           </div>
         )}
       </div>
@@ -415,6 +572,13 @@ export default function ChatPanel({
               onClick: () => onDeleteMessage?.(menuMessage.id),
             },
           ]}
+        />
+      )}
+      {reactionPicker && reactionMessage && (
+        <ReactionPicker
+          anchor={{ x: reactionPicker.x, y: reactionPicker.y }}
+          onSelect={onAddReaction}
+          onClose={() => setReactionPicker(null)}
         />
       )}
     </div>

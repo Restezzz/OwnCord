@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { Check, X } from 'lucide-react';
+import { Check, X, Heart, Zap, Trophy, Flame, ThumbsUp, ThumbsDown, Laugh, Smile } from 'lucide-react';
 import Avatar from './Avatar';
 import VoicePlayer from './VoicePlayer';
 import CallMessage from './CallMessage';
@@ -8,6 +8,18 @@ import GroupCallMessage from './GroupCallMessage';
 import AttachmentMessage from './AttachmentMessage';
 import { getDisplayName } from '../utils/user';
 import { renderMarkdown } from '../utils/markdown';
+
+// Маппинг id реакции на иконку lucide-react
+const REACTION_ICONS: Record<string, any> = {
+  heart: Heart,
+  thumbsUp: ThumbsUp,
+  thumbsDown: ThumbsDown,
+  laugh: Laugh,
+  smile: Smile,
+  flame: Flame,
+  trophy: Trophy,
+  zap: Zap,
+};
 
 function formatTime(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -27,6 +39,7 @@ function MessageList({
   commitEdit,
   cancelEdit,
   onMessageContext,
+  onReactionClick,
   onRejoinCall,
   onJoinGroupCall,
   inGroupCall = false,
@@ -116,7 +129,6 @@ function MessageList({
       <div
         key={m.id}
         className={`flex ${mine ? 'justify-end' : 'justify-start'} ${showSenderHeader ? 'mt-2' : ''}`}
-        onContextMenu={(e) => onMessageContext(e, m)}
       >
         {isGroup && !mine && (
           <div className="w-8 mr-2 shrink-0 flex items-end">
@@ -148,6 +160,7 @@ function MessageList({
                 : mine ? 'bg-accent text-white' : 'bg-bg-2 text-slate-100'}
             `}
             title={new Date(m.createdAt).toLocaleString()}
+            onContextMenu={(e) => onMessageContext(e, m)}
           >
             {m.deleted ? (
               <span>сообщение удалено</span>
@@ -173,14 +186,45 @@ function MessageList({
               <div>{renderMarkdown(m.content)}</div>
             )}
             {!m.deleted && !isEditing && (
-              <div
-                className={`text-[10px] mt-0.5 text-right flex items-center justify-end gap-1 ${
-                  mine ? 'text-white/70' : 'text-slate-500'
-                }`}
-              >
-                {m.editedAt && <span className="italic">изменено</span>}
-                <span>{formatTime(m.createdAt)}</span>
-              </div>
+              <>
+                {/* Реакции на сообщение */}
+                {m.reactions && m.reactions.length > 0 && (
+                  <div className={`flex flex-wrap gap-1.5 mt-1.5 ${mine ? 'justify-end' : 'justify-start'}`}>
+                    {m.reactions.map((r) => {
+                      const Icon = REACTION_ICONS[r.emoji];
+                      const hasReacted = r.users.includes(selfId);
+                      return (
+                        <button
+                          key={r.emoji}
+                          type="button"
+                          onClick={() => onReactionClick?.(m.id, r.emoji, hasReacted)}
+                          className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-sm border transition-colors ${
+                            hasReacted
+                              ? mine
+                                ? 'bg-white/20 border-white/30 text-white'
+                                : 'bg-accent/20 border-accent/30 text-accent'
+                              : mine
+                                ? 'bg-white/5 border-white/10 text-white/80 hover:bg-white/10'
+                                : 'bg-bg-3 border-border text-slate-200 hover:bg-bg-2'
+                          }`}
+                          title={`${r.count} реакций`}
+                        >
+                          {Icon && <Icon size={16} />}
+                          <span className="font-medium">{r.count}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                <div
+                  className={`text-[10px] mt-0.5 text-right flex items-center justify-end gap-1 ${
+                    mine ? 'text-white/70' : 'text-slate-500'
+                  }`}
+                >
+                  {m.editedAt && <span className="italic">изменено</span>}
+                  <span>{formatTime(m.createdAt)}</span>
+                </div>
+              </>
             )}
           </div>
         </div>
