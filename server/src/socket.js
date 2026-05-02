@@ -446,6 +446,25 @@ export function attachSocket(httpServer) {
     socket.on('rtc:ice', forward('rtc:ice'));         // { to, callId, candidate }
     socket.on('media:state', forward('media:state')); // { to, callId, state }
 
+    // Групповая mesh-широковещалка media-state: один emit от участника
+    // дозволенно расходится по всем остальным в `groupcall:{groupId}`.
+    // Использовать одиночный forward() с per-peer циклом было бы избыточно
+    // (N эмитов вместо одного) — UI же дёргает media:state часто.
+    socket.on('groupcall:media:state', (payload) => {
+      const { groupId, callId, state } = payload || {};
+      if (typeof groupId !== 'number') return;
+      if (typeof callId !== 'string' || !callId) return;
+      const gc = getGroupCall(groupId);
+      if (!gc || gc.callId !== callId) return;
+      if (!gc.participants.has(me.id)) return;
+      socket.to(`groupcall:${groupId}`).emit('groupcall:media:state', {
+        from: me.id,
+        callId,
+        groupId,
+        state,
+      });
+    });
+
     // --- Групповые звонки (mesh WebRTC) ------------------------------------
     //
     // Клиент инициирует / присоединяется:

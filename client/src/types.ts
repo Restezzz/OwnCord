@@ -119,6 +119,10 @@ export type MediaState = {
   mic: boolean;
   camera: boolean;
   screen: boolean;
+  // true когда аудио-сендер сейчас транслирует звук экрана, а не микрофон.
+  // Получатель смотрит на этот флаг, чтобы решать — применять ли свой
+  // ползунок громкости стрима к входящему треку (для голоса не применяется).
+  screenAudio?: boolean;
 };
 
 export type CallState = 'idle' | 'calling' | 'incoming' | 'connecting' | 'in-call' | 'waiting';
@@ -139,6 +143,7 @@ export type ClientToServerEvents = {
   'rtc:answer': (payload: { to: number; callId: string; groupId?: number; sdp: RTCSessionDescription | null }) => void;
   'rtc:ice': (payload: { to: number; callId: string; groupId?: number; candidate: RTCIceCandidate }) => void;
   'media:state': (payload: { to: number; callId: string; state: MediaState }) => void;
+  'groupcall:media:state': (payload: { groupId: number; callId: string; state: MediaState }) => void;
   'groupcall:join': (
     payload: { groupId: number; withVideo: boolean },
     ack?: (ack: ApiAck<{ callId: string; peers: number[]; withVideo: boolean; startedBy: number }>) => void
@@ -183,6 +188,7 @@ export type ServerToClientEvents = {
   'rtc:answer': (payload: { from: number; callId: string; groupId?: number; sdp: RTCSessionDescriptionInit }) => void;
   'rtc:ice': (payload: { from: number; callId: string; groupId?: number; candidate: RTCIceCandidateInit }) => void;
   'media:state': (payload: { from: number; callId: string; state: MediaState }) => void;
+  'groupcall:media:state': (payload: { from: number; groupId: number; callId: string; state: MediaState }) => void;
   'groupcall:active': (payload: { groupId: number; callId: string; startedBy: number; withVideo: boolean; startedAt: number }) => void;
   'groupcall:ended': (payload: { groupId: number; callId: string }) => void;
   'groupcall:peer-joined': (payload: { groupId: number; callId: string; userId: number }) => void;

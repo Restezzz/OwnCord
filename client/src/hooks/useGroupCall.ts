@@ -45,6 +45,11 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
   const [localStream, setLocalStream] = useState(null);
   const [remotes, setRemotes] = useState({});      // userId -> MediaStream
   const [participants, setParticipants] = useState([]);
+  // userId -> { mic, camera, screen, screenAudio } — что пиры сейчас шлют.
+  // Нужно UI'у, чтобы знать, у кого включён звук стрима (per-peer ползунок
+  // громкости в GroupCallView применяем только к таким пирам — голос
+  // регулируется лишь deafen-ом).
+  const [peersMedia, setPeersMedia] = useState({});
   const [muted, setMuted] = useState(false);
   // Локальный «глухой режим» — только для UI: все <audio> получают
   // muted=true, микрофон при этом продолжает идти в сеть.
@@ -108,7 +113,32 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
       delete next[userId];
       return next;
     });
+    setPeersMedia((prev) => {
+      if (!(userId in prev)) return prev;
+      const next = { ...prev };
+      delete next[userId];
+      return next;
+    });
   }, []);
+
+  // Текущее состояние моих медиа для рассылки пирам. Берём enabled-флаг
+  // прямо с трека — это источник истины (toggleMute/toggleCamera пишут
+  // именно в track.enabled).
+  const emitMyMedia = useCallback(() => {
+    const gid = groupRef.current?.id;
+    const cid = callIdRef.current;
+    if (!socket || !gid || !cid) return;
+    socket.emit('groupcall:media:state', {
+      groupId: gid,
+      callId: cid,
+      state: {
+        mic: !!audioTrackRef.current && !!audioTrackRef.current.enabled,
+        camera: !!videoTrackRef.current && !!videoTrackRef.current.enabled,
+        screen: !!screenTrackRef.current,
+        screenAudio: !!screenAudioTrackRef.current,
+      },
+    });
+  }, [socket]);
 
   const closePeer = useCallback((userId) => {
     const pc = pcsRef.current.get(userId);
@@ -157,6 +187,7 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     setLocalStream(null);
     setRemotes({});
     setParticipants([]);
+    setPeersMedia({});
     setMuted(false);
     setDeafened(false);
     setCameraOn(false);
@@ -173,7 +204,11 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
   const applyLocalTracksToPc = useCallback((pc) => {
     const aS = pc.__audioSender;
     const vS = pc.__videoSender;
-    let aTrack = audioTrackRef.current;
+    // Если идёт screen-share со звуком — приоритет за screen-audio: это
+    // тот же контракт, что в 1-на-1 (replaceTrack на audio-sender). Без
+    // этого фикса screenAudioTrackRef добавлялся в localStream, но НИЧЬИХ
+    // пиров не достигал — audio-sender оставался на микрофоне.
+    let aTrack = screenAudioTrackRef.current || audioTrackRef.current;
     if (!aTrack) {
       if (!placeholderAudioRef.current) {
         placeholderAudioRef.current = createPlaceholderAudioTrack();
@@ -208,8 +243,12 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     // Без этого Chrome не fire-ит ontrack у пира при последующем
     // replaceTrack — демонстрация экрана/камера от не-инициатора
     // оказывались невидимыми у других участников.
+    // Аудио: при активном screen-share с аудио приоритет за screen-audio
+    // (зеркаля логику applyLocalTracksToPc), иначе late joiner получит
+    // микрофон, и onAnswer уже не пере-привязывает sender'ы со стороны
+    // инициатора — т.е. screen-audio до такого пира не дойдёт никогда.
     const ls = localStreamRef.current;
-    const aTrack = audioTrackRef.current;
+    const aTrack = screenAudioTrackRef.current || audioTrackRef.current;
     const vTrack = currentVideoTrack();
 
     let audioForSender = aTrack;
@@ -244,11 +283,15 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
       setRemotes((prev) => {
         const prevStream = prev[peerId];
         const set = new Set<MediaStreamTrack>(prevStream ? prevStream.getTracks() : []);
+        const before = set.size;
         if (ev.streams[0]) {
           for (const t of ev.streams[0].getTracks()) set.add(t);
         } else {
           set.add(ev.track);
         }
+        // Если набор треков не изменился — оставляем прежний MediaStream,
+        // чтобы не триггерить пересборку srcObject/play() в RemoteAudio.
+        if (prevStream && set.size === before) return prev;
         return { ...prev, [peerId]: new MediaStream([...set]) };
       });
     };
@@ -266,6 +309,12 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
 
     pc.onconnectionstatechange = () => {
       const s = pc.connectionState;
+      if (s === 'connected') {
+        // Свежеподключённому пиру нужно отдать наше актуальное media-state,
+        // иначе у него ползунок громкости стрима не будет понимать, что
+        // у нас идёт screen-audio (а не голос).
+        setTimeout(emitMyMedia, 0);
+      }
       if (s === 'failed' || s === 'closed') {
         closePeer(peerId);
       }
@@ -291,7 +340,7 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     }
 
     return pc;
-  }, [closePeer, socket]);
+  }, [closePeer, emitMyMedia, socket]);
 
   // --- public API --------------------------------------------------------
   const join = useCallback(
@@ -357,7 +406,8 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     if (!t) return;
     t.enabled = !t.enabled;
     setMuted(!t.enabled);
-  }, []);
+    setTimeout(emitMyMedia, 0);
+  }, [emitMyMedia]);
 
   const toggleDeafen = useCallback(() => {
     setDeafened((d) => !d);
@@ -368,7 +418,8 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     if (!t) return;
     t.enabled = !t.enabled;
     setCameraOn(t.enabled);
-  }, []);
+    setTimeout(emitMyMedia, 0);
+  }, [emitMyMedia]);
 
   // Renegotiate ОДНОГО pc (для одного пира). Используется после
   // replaceTrack(real screen) — без renegotiation у пира остаются
@@ -401,21 +452,29 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
 
     if (sharingScreen && screenTrackRef.current) {
       // Выключаем демку — возвращаем камеру (если была) или placeholder.
+      // Захватываем треки и нулим ref'ы ДО stop()/await — чтобы наш же
+      // onended-handler, отрабатывающий на ended event от .stop(), увидел
+      // screenTrackRef.current === null и вышел по race-guard'у.
       const wasDeafenedForAudio = screenAudioDeafenRef.current;
-      try { screenTrackRef.current.stop(); } catch { /* */ }
-      if (screenAudioTrackRef.current) {
-        try { screenAudioTrackRef.current.stop(); } catch { /* */ }
-        screenAudioTrackRef.current = null;
-      }
+      const screenVideoTrack = screenTrackRef.current;
+      const screenAudioLocal = screenAudioTrackRef.current;
       screenTrackRef.current = null;
+      screenAudioTrackRef.current = null;
       screenAudioDeafenRef.current = false;
+
+      try { screenVideoTrack.stop(); } catch { /* */ }
+      if (screenAudioLocal) {
+        try { screenAudioLocal.stop(); } catch { /* */ }
+      }
       setSharingScreen(false);
-      // Возвращаем deafen если он был автоматически включён для звука экрана
       if (wasDeafenedForAudio) {
         setDeafened(false);
       }
-      const ls = localStreamRef.current || new MediaStream();
-      const tracks = ls.getTracks().filter((t) => t.kind !== 'video');
+      // Ребилд localStream от первичных треков. Раньше делали filter по
+      // kind !== 'video', но это сохраняло уже остановленный screen-audio
+      // в стриме (он добавлялся в ls при старте и не вычищался при стопе).
+      const tracks = [];
+      if (audioTrackRef.current) tracks.push(audioTrackRef.current);
       if (videoTrackRef.current) tracks.push(videoTrackRef.current);
       const next = new MediaStream(tracks);
       localStreamRef.current = next;
@@ -424,6 +483,7 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
         applyLocalTracksToPc(pc);
         renegotiatePeer(peerId);
       }
+      setTimeout(emitMyMedia, 0);
       return;
     }
 
@@ -464,9 +524,17 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     track.addEventListener('ended', () => {
       if (screenTrackRef.current !== track) return;
       screenTrackRef.current = null;
+      // Звуковой трек экрана живёт пока работает демка — при остановке
+      // демки через системный «Остановить показ» его тоже надо завершить
+      // и убрать из локального стрима, иначе screenAudio-флаг останется true.
+      if (screenAudioTrackRef.current) {
+        try { screenAudioTrackRef.current.stop(); } catch { /* */ }
+        screenAudioTrackRef.current = null;
+      }
       setSharingScreen(false);
-      const ls2 = localStreamRef.current || new MediaStream();
-      const tracks = ls2.getTracks().filter((t) => t.kind !== 'video');
+      // Восстанавливаем чистый набор: только мик-аудио + камера (если есть).
+      const tracks = [];
+      if (audioTrackRef.current) tracks.push(audioTrackRef.current);
       if (videoTrackRef.current) tracks.push(videoTrackRef.current);
       const next = new MediaStream(tracks);
       localStreamRef.current = next;
@@ -475,6 +543,7 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
         applyLocalTracksToPc(pc);
         renegotiatePeer(peerId);
       }
+      setTimeout(emitMyMedia, 0);
     });
 
     // Локальное превью: заменить камеру на screen.
@@ -491,7 +560,8 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
       }
       renegotiatePeer(peerId);
     }
-  }, [applyLocalTracksToPc, renegotiatePeer, sharingScreen, toast]);
+    setTimeout(emitMyMedia, 0);
+  }, [applyLocalTracksToPc, deafened, emitMyMedia, renegotiatePeer, sharingScreen, toast]);
 
   // --- signaling handlers -----------------------------------------------
   useEffect(() => {
@@ -593,9 +663,25 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
       try { await pc.addIceCandidate(candidate); } catch { /* */ }
     };
 
+    const onMediaState = ({ from, callId, groupId, state: st }) => {
+      if (!isMyCall({ groupId })) return;
+      if (callIdRef.current !== callId) return;
+      if (from === selfUser.id) return;
+      setPeersMedia((prev) => ({
+        ...prev,
+        [from]: {
+          mic: !!st?.mic,
+          camera: !!st?.camera,
+          screen: !!st?.screen,
+          screenAudio: !!st?.screenAudio,
+        },
+      }));
+    };
+
     socket.on('groupcall:peer-joined', onPeerJoined);
     socket.on('groupcall:peer-left', onPeerLeft);
     socket.on('groupcall:ended', onEnded);
+    socket.on('groupcall:media:state', onMediaState);
     socket.on('rtc:offer', onOffer);
     socket.on('rtc:answer', onAnswer);
     socket.on('rtc:ice', onIce);
@@ -604,6 +690,7 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
       socket.off('groupcall:peer-joined', onPeerJoined);
       socket.off('groupcall:peer-left', onPeerLeft);
       socket.off('groupcall:ended', onEnded);
+      socket.off('groupcall:media:state', onMediaState);
       socket.off('rtc:offer', onOffer);
       socket.off('rtc:answer', onAnswer);
       socket.off('rtc:ice', onIce);
@@ -664,6 +751,7 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     localStream,
     remotes,
     participants,
+    peersMedia,
     muted,
     deafened,
     cameraOn,

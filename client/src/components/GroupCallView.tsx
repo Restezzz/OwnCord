@@ -1,8 +1,8 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Mic, MicOff, Video, VideoOff, PhoneOff, Users as UsersIcon,
   ScreenShare, ScreenShareOff, Volume2, VolumeX, Settings,
-  Pin, PinOff,
+  Pin, PinOff, X,
 } from 'lucide-react';
 import Avatar from './Avatar';
 import ScreenQualityModal from './ScreenQualityModal';
@@ -11,7 +11,15 @@ import { getAvatarUrl, getDisplayName } from '../utils/user';
 
 const SettingsPanel = lazy(() => import('./SettingsPanel'));
 
-function StreamVideo({ stream, muted = false, className = '', mirror = false, onSize }) {
+type StreamVideoProps = {
+  stream: MediaStream | null;
+  muted?: boolean;
+  className?: string;
+  mirror?: boolean;
+  onSize?: (w: number, h: number) => void;
+};
+
+const StreamVideo = memo(function StreamVideo({ stream, muted = false, className = '', mirror = false, onSize }: StreamVideoProps) {
   const ref = useRef(null);
   useEffect(() => {
     const el = ref.current;
@@ -42,9 +50,16 @@ function StreamVideo({ stream, muted = false, className = '', mirror = false, on
       style={mirror ? { transform: 'scaleX(-1)' } : undefined}
     />
   );
-}
+});
 
-function RemoteAudio({ stream, sinkId, volume, muted = false }) {
+type RemoteAudioProps = {
+  stream: MediaStream | null;
+  sinkId?: string;
+  volume?: number;
+  muted?: boolean;
+};
+
+const RemoteAudio = memo(function RemoteAudio({ stream, sinkId, volume, muted = false }: RemoteAudioProps) {
   const ref = useRef(null);
   useEffect(() => {
     const el = ref.current;
@@ -52,23 +67,25 @@ function RemoteAudio({ stream, sinkId, volume, muted = false }) {
     if (el.srcObject !== stream) el.srcObject = stream || null;
     if (stream) el.play?.().catch(() => { /* autoplay policy */ });
   }, [stream]);
+  // Громкость и mute накладываем только на сам <audio>. Трогать track.enabled
+  // на receiver-стороне нельзя: тот же MediaStreamTrack читает
+  // useSpeakingDetector (AnalyserNode); если выключить трек — зелёная рамка
+  // «говорит» перестаёт работать у deafen-нутого. Видео-плитки замьючены
+  // через muted-проп (см. Tile), так что единственный аудио-выход — этот.
+  // Зависим от stream защитно — переустановка свойств идемпотентна.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     el.volume = Math.max(0, Math.min(1, volume ?? 1));
-  }, [volume]);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
     el.muted = !!muted;
-  }, [muted]);
+  }, [stream, muted, volume]);
   useEffect(() => {
     const el = ref.current;
     if (!el || !sinkId || typeof el.setSinkId !== 'function') return;
     el.setSinkId(sinkId === 'default' ? '' : sinkId).catch(() => { /* not supported */ });
   }, [sinkId]);
   return <audio ref={ref} autoPlay />;
-}
+});
 
 /**
  * Плитка одного участника. Всегда рендерит <video> с remote-стримом
@@ -82,7 +99,7 @@ function RemoteAudio({ stream, sinkId, volume, muted = false }) {
  */
 function Tile({
   stream, user, self = false, muted = false, mirror = false, className = '',
-  onClick, pinned, pinnable, speaking = false,
+  onClick, onContextMenu = undefined, pinned, pinnable, speaking = false,
 }) {
   const [size, setSize] = useState({ w: 0, h: 0 });
   const hasStream = !!stream && stream.getVideoTracks().length > 0;
@@ -101,6 +118,7 @@ function Tile({
   return (
     <div
       onClick={onClick}
+      onContextMenu={onContextMenu}
       className={`relative bg-bg-2 rounded-xl overflow-hidden border-2 ${
         speaking
           // Зелёная рамка + мягкое свечение, когда участник говорит.
@@ -144,8 +162,12 @@ export default function GroupCallView({ call, usersById, selfId }) {
   // его плитка растягивается на всё основное поле, остальные
   // уходят в верхний стрип.
   const [pinnedKey, setPinnedKey] = useState(null);
+  // Per-peer громкость стрима (0..100). Применяется только когда у пира
+  // на самом деле идёт screenAudio — голос регулируется лишь deafen-ом.
+  const [streamVolumes, setStreamVolumes] = useState<Record<number, number>>({});
+  const [streamVolumeMenu, setStreamVolumeMenu] = useState<{ x: number; y: number; userId: number } | null>(null);
   const {
-    state, group, localStream, remotes, participants,
+    state, group, localStream, remotes, participants, peersMedia,
     muted, deafened, cameraOn, sharingScreen, withVideo,
     speakingUserIds,
     toggleMute, toggleDeafen, toggleCamera, toggleScreenShare, leave,
@@ -168,6 +190,16 @@ export default function GroupCallView({ call, usersById, selfId }) {
     if (pinnedKey === null || pinnedKey === 'self') return;
     if (!participants.includes(pinnedKey)) setPinnedKey(null);
   }, [participants, pinnedKey]);
+
+  // Если у пира, для которого сейчас открыто меню громкости, пропал
+  // screenAudio (или он вообще ушёл из звонка) — закрываем меню.
+  useEffect(() => {
+    if (!streamVolumeMenu) return;
+    const uid = streamVolumeMenu.userId;
+    if (!participants.includes(uid) || !peersMedia?.[uid]?.screenAudio) {
+      setStreamVolumeMenu(null);
+    }
+  }, [streamVolumeMenu, participants, peersMedia]);
 
   if (state === 'idle') return null;
 
@@ -205,12 +237,22 @@ export default function GroupCallView({ call, usersById, selfId }) {
     const u = usersById?.[t.userId]
       || group?.members?.find((m) => m.id === t.userId)
       || { id: t.userId, displayName: `#${t.userId}` };
+    // ПКМ открывает меню громкости стрима только если у пира сейчас идёт
+    // звук экрана. На голосе/камере без звука слайдер бесполезен —
+    // отдаём системное контекстное меню браузеру.
+    const onTileContextMenu = peersMedia?.[t.userId]?.screenAudio
+      ? (e: React.MouseEvent) => {
+          e.preventDefault();
+          setStreamVolumeMenu({ x: e.clientX, y: e.clientY, userId: t.userId });
+        }
+      : undefined;
     return (
       <Tile
         key={`tile-${t.userId}${opts.suffix || ''}`}
         stream={remotes[t.userId]}
         user={u}
         onClick={onTileClick}
+        onContextMenu={onTileContextMenu}
         pinned={isPinned}
         pinnable
         speaking={speaks(t.userId)}
@@ -255,18 +297,27 @@ export default function GroupCallView({ call, usersById, selfId }) {
           </div>
         )}
 
-        {/* Невидимые аудио-элементы для каждого пира (кроме self) */}
+        {/* Невидимые аудио-элементы для каждого пира (кроме self).
+            Множитель ползунка стрима применяется только когда пир сейчас
+            транслирует звук экрана; голос всегда идёт на полной громкости
+            (settings.outputVolume) и регулируется только deafen-кнопкой. */}
         {participants
           .filter((id) => id !== selfId)
-          .map((uid) => (
-            <RemoteAudio
-              key={`a-${uid}`}
-              stream={remotes[uid]}
-              sinkId={settings.outputDeviceId}
-              volume={settings.outputVolume}
-              muted={deafened}
-            />
-          ))}
+          .map((uid) => {
+            const base = settings.outputVolume ?? 1;
+            const streamMul = peersMedia?.[uid]?.screenAudio
+              ? Math.max(0, Math.min(1, (streamVolumes[uid] ?? 100) / 100))
+              : 1;
+            return (
+              <RemoteAudio
+                key={`a-${uid}`}
+                stream={remotes[uid]}
+                sinkId={settings.outputDeviceId}
+                volume={base * streamMul}
+                muted={deafened}
+              />
+            );
+          })}
 
         <div className="absolute top-4 left-4 flex items-center gap-2">
           <div className="px-3 py-1.5 text-xs rounded-full bg-black/60 backdrop-blur border border-white/10 flex items-center gap-1.5">
@@ -350,6 +401,57 @@ export default function GroupCallView({ call, usersById, selfId }) {
           toggleScreenShare(preset, includeAudio);
         }}
       />
+
+      {/* Меню громкости стрима конкретного участника */}
+      {streamVolumeMenu && (() => {
+        const uid = streamVolumeMenu.userId;
+        const u = usersById?.[uid]
+          || group?.members?.find((m) => m.id === uid)
+          || { id: uid, displayName: `#${uid}` };
+        const v = streamVolumes[uid] ?? 100;
+        return (
+          <>
+            <div
+              className="fixed inset-0 z-[89]"
+              onClick={() => setStreamVolumeMenu(null)}
+            />
+            <div
+              className="fixed z-[90] bg-bg-1 border border-border rounded-lg shadow-xl p-4 w-64"
+              style={{ left: streamVolumeMenu.x, top: streamVolumeMenu.y }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium truncate pr-2">
+                  Громкость стрима · {getDisplayName(u)}
+                </span>
+                <button
+                  onClick={() => setStreamVolumeMenu(null)}
+                  className="text-slate-400 hover:text-white"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={v}
+                onChange={(e) => {
+                  const nv = Number(e.target.value);
+                  setStreamVolumes((prev) => ({ ...prev, [uid]: nv }));
+                }}
+                className="range w-full"
+                style={{ '--range-progress': `${v}%` } as React.CSSProperties}
+              />
+              <div className="flex justify-between text-xs text-slate-400 mt-1">
+                <span>0%</span>
+                <span>{v}%</span>
+                <span>100%</span>
+              </div>
+            </div>
+          </>
+        );
+      })()}
     </div>
   );
 }

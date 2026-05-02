@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, memo, Suspense, useEffect, useRef, useState } from 'react';
 import {
   Mic, MicOff, Video, VideoOff, Monitor, MonitorOff, PhoneOff, Settings, Loader2,
   Volume2, VolumeX, X,
@@ -10,7 +10,14 @@ import { formatDuration, getAvatarUrl, getDisplayName } from '../utils/user';
 
 const SettingsPanel = lazy(() => import('./SettingsPanel'));
 
-function StreamVideo({ stream, muted = false, className = '', mirror = false }) {
+type StreamVideoProps = {
+  stream: MediaStream | null;
+  muted?: boolean;
+  className?: string;
+  mirror?: boolean;
+};
+
+const StreamVideo = memo(function StreamVideo({ stream, muted = false, className = '', mirror = false }: StreamVideoProps) {
   const ref = useRef(null);
   useEffect(() => {
     const el = ref.current;
@@ -27,21 +34,27 @@ function StreamVideo({ stream, muted = false, className = '', mirror = false }) 
       style={mirror ? { transform: 'scaleX(-1)' } : undefined}
     />
   );
-}
+});
 
 /**
  * Отдельный невидимый audio-элемент для удалённого звука.
  * Нужен, т.к. без видео звука у `<video>` может не быть, а также
  * чтобы применять outputDeviceId через setSinkId и управлять громкостью.
  */
-function RemoteAudio({ stream, sinkId, volume, muted = false }) {
+type RemoteAudioProps = {
+  stream: MediaStream | null;
+  sinkId?: string;
+  volume?: number;
+  muted?: boolean;
+};
+
+const RemoteAudio = memo(function RemoteAudio({ stream, sinkId, volume, muted = false }: RemoteAudioProps) {
   const ref = useRef(null);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     if (el.srcObject !== stream) {
-      console.log('RemoteAudio: stream changed, setting srcObject');
       el.srcObject = stream || null;
     }
     if (stream) {
@@ -49,49 +62,32 @@ function RemoteAudio({ stream, sinkId, volume, muted = false }) {
     }
   }, [stream]);
 
+  // Громкость и mute накладываем ТОЛЬКО на сам <audio>. Трогать
+  // track.enabled на receiver-стороне нельзя: тот же MediaStreamTrack
+  // читает useSpeakingDetector (AnalyserNode), и если выключить трек,
+  // зелёная рамка «говорит» перестанет работать у deafen-нутого. Видео-
+  // элемент с тем же стримом замьючен через muted-проп (см. вызов выше),
+  // так что аудио-канал у нас единственный — этот <audio>.
+  // Зависим от stream защитно — на случай браузерного квирка при смене
+  // srcObject; идемпотентная переустановка свойств не вредит.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const vol = Math.min(1, (volume ?? 100) / 100);
-    console.log('RemoteAudio: setting volume to', vol, 'from volume prop', volume, 'audio element volume', el.volume);
-    el.volume = vol;
-    console.log('RemoteAudio: after setting, audio element volume is', el.volume);
-    
-    // Также отключаем аудио трек напрямую если volume 0
-    if (el.srcObject) {
-      const audioTracks = el.srcObject.getAudioTracks();
-      audioTracks.forEach(track => {
-        console.log('RemoteAudio: setting track.enabled to', vol > 0, 'for track', track.id);
-        track.enabled = vol > 0;
-      });
-    }
-  }, [volume]);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    console.log('RemoteAudio: setting muted to', muted, 'audio element muted', el.muted);
+    el.volume = Math.max(0, Math.min(1, (volume ?? 100) / 100));
     el.muted = !!muted;
-    console.log('RemoteAudio: after setting, audio element muted is', el.muted);
-    
-    // Также отключаем аудио трек напрямую если muted
-    if (el.srcObject) {
-      const audioTracks = el.srcObject.getAudioTracks();
-      audioTracks.forEach(track => {
-        console.log('RemoteAudio: setting track.enabled to', !muted, 'for track', track.id, '(muted check)');
-        track.enabled = !muted;
-      });
-    }
-  }, [muted]);
+  }, [stream, muted, volume]);
 
   useEffect(() => {
     const el = ref.current;
     if (!el || !sinkId || typeof el.setSinkId !== 'function') return;
-    el.setSinkId(sinkId).catch(() => { /* not supported */ });
+    // 'default' в нашем UI — синоним «системного устройства»; setSinkId
+    // принимает '' для того же значения. Пустой строки — единый формат
+    // (так же поступают VoicePlayer/GroupCallView).
+    el.setSinkId(sinkId === 'default' ? '' : sinkId).catch(() => { /* not supported */ });
   }, [sinkId]);
 
   return <audio ref={ref} autoPlay />;
-}
+});
 
 export default function CallView({ call }) {
   const { settings } = useSettings();
@@ -121,6 +117,12 @@ export default function CallView({ call }) {
     const i = setInterval(() => tick((n) => n + 1), 1000);
     return () => clearInterval(i);
   }, [state]);
+
+  // Если пир выключил звук стрима, пока меню громкости было открыто —
+  // закрываем его, чтобы ползунок не висел зря.
+  useEffect(() => {
+    if (!peerMedia?.screenAudio) setStreamVolumeMenu(null);
+  }, [peerMedia?.screenAudio]);
 
   if (state === 'idle' || state === 'incoming') return null;
 
@@ -153,12 +155,17 @@ export default function CallView({ call }) {
         )}
         {showRemoteVideo ? (
           <div className="absolute inset-0" onContextMenu={(e) => {
+            // Меню громкости имеет смысл только когда у пира идёт звук экрана.
+            // На голос/камеру без звука стрима ползунок не влияет (см. RemoteAudio
+            // выше) — поэтому пропускаем открытие, чтобы не путать пользователя.
+            if (!peerMedia?.screenAudio) return;
             e.preventDefault();
             setStreamVolumeMenu({ x: e.clientX, y: e.clientY });
           }}>
             <StreamVideo
               key={`${peerMedia?.camera ? 'c' : ''}${peerMedia?.screen ? 's' : ''}`}
               stream={remoteStream}
+              muted
               className="absolute inset-0 w-full h-full object-contain bg-black"
             />
             {/* Внутренняя рамка-overlay поверх видео — рисуем через ring
@@ -210,11 +217,14 @@ export default function CallView({ call }) {
           </div>
         )}
 
-        {/* Remote audio (воспроизводится всегда, когда есть stream) */}
+        {/* Remote audio (воспроизводится всегда, когда есть stream).
+            Ползунок громкости стрима применяем только когда пир сейчас
+            транслирует звук экрана (а не голос). Голос регулируется
+            исключительно deafen-кнопкой — слайдер на него не влияет. */}
         <RemoteAudio
           stream={remoteStream}
           sinkId={settings.outputDeviceId}
-          volume={streamVolume}
+          volume={peerMedia?.screenAudio ? streamVolume : 100}
           muted={deafened}
         />
 
