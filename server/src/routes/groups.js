@@ -107,6 +107,18 @@ function getMessage(id) {
   return db.prepare(`SELECT ${MSG_COLS} FROM messages WHERE id = ?`).get(id);
 }
 
+function getReactionsForMessage(messageId) {
+  const reactions = db.prepare(
+    `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
+     FROM message_reactions WHERE message_id = ? GROUP BY emoji`
+  ).all(messageId);
+  return reactions.map(r => ({
+    emoji: r.emoji,
+    count: r.count,
+    users: r.users ? r.users.split(',').map(Number) : [],
+  }));
+}
+
 /**
  * Вставляет системное сообщение в групповой чат и сразу эмитит его всем
  * подписчикам комнаты группы. Используется для событий состава (создание
@@ -221,7 +233,11 @@ router.patch('/:id', authRequired, (req, res) => {
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
   const row = groupRow(id);
   if (!row) return res.status(404).json({ error: 'not found' });
-  if (!isOwner(id, req.user.id)) return res.status(403).json({ error: 'owner only' });
+  // Owner и admin могут редактировать группу
+  const member = db.prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?').get(id, req.user.id);
+  if (!member || (member.role !== 'owner' && member.role !== 'admin')) {
+    return res.status(403).json({ error: 'owner or admin only' });
+  }
 
   const { name } = req.body || {};
   if ('name' in (req.body || {})) {
@@ -279,6 +295,62 @@ function emitToUser_byRoom(userId, event, payload) {
 }
 
 // ---------- участники ------------------------------------------------------
+
+// Проверка прав: может ли текущий пользователь управлять ролями
+// Только owner может управлять ролями (повышать/понижать)
+function canManageRoles(groupId, userId) {
+  const member = db.prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?').get(groupId, userId);
+  if (!member) return false;
+  return member.role === 'owner';
+}
+
+// Проверка: может ли текущий пользователь кикнуть целевого пользователя
+function canKickUser(groupId, actorId, targetId) {
+  const actor = db.prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?').get(groupId, actorId);
+  const target = db.prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?').get(groupId, targetId);
+  if (!actor || !target) return false;
+  // Админ не может кикнуть создателя
+  if (actor.role === 'admin' && target.role === 'owner') return false;
+  // Админ не может кикнуть другого админа
+  if (actor.role === 'admin' && target.role === 'admin') return false;
+  // Создатель может кикнуть любого
+  if (actor.role === 'owner') return true;
+  // Админ может кикнуть только участников
+  return actor.role === 'admin' && target.role === 'member';
+}
+
+// Изменение роли участника (повышение/понижение)
+router.patch('/:id/members/:userId/role', authRequired, (req, res) => {
+  const id = Number(req.params.id);
+  const targetId = Number(req.params.userId);
+  if (!Number.isInteger(id) || !Number.isInteger(targetId)) return res.status(400).json({ error: 'bad id' });
+  
+  const { role } = req.body || {};
+  if (!['owner', 'admin', 'member'].includes(role)) return res.status(400).json({ error: 'invalid role' });
+  
+  const group = groupRow(id);
+  if (!group) return res.status(404).json({ error: 'group not found' });
+  
+  // Проверяем что текущий пользователь может управлять ролями
+  if (!canManageRoles(id, req.user.id)) return res.status(403).json({ error: 'insufficient permissions' });
+  
+  // Проверяем что целевой пользователь существует в группе
+  const targetMember = db.prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?').get(id, targetId);
+  if (!targetMember) return res.status(404).json({ error: 'member not found' });
+  
+  // Создателя нельзя понизить или изменить его роль
+  if (group.owner_id === targetId && role !== 'owner') return res.status(403).json({ error: 'cannot change owner role' });
+  
+  // Админ не может повысить до owner или понизить owner
+  const actorRole = db.prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?').get(id, req.user.id).role;
+  if (actorRole === 'admin' && role === 'owner') return res.status(403).json({ error: 'admins cannot promote to owner' });
+  
+  db.prepare('UPDATE group_members SET role = ? WHERE group_id = ? AND user_id = ?').run(role, id, targetId);
+  
+  const full = toGroup(group, membersDetailed(id));
+  emitToGroup(id, 'group:update', full);
+  res.json({ ok: true, group: full });
+});
 
 router.post('/:id/members', authRequired, (req, res) => {
   const id = Number(req.params.id);
@@ -340,9 +412,13 @@ router.delete('/:id/members/:userId', authRequired, (req, res) => {
   if (!row) return res.status(404).json({ error: 'not found' });
 
   const me = req.user.id;
-  const owner = row.owner_id === me;
   const selfLeave = userId === me;
-  if (!owner && !selfLeave) return res.status(403).json({ error: 'not allowed' });
+  
+  // Проверка прав: можно ли кикнуть пользователя
+  if (!selfLeave && !canKickUser(id, me, userId)) {
+    return res.status(403).json({ error: 'not allowed' });
+  }
+  
   if (userId === row.owner_id) {
     return res.status(400).json({ error: 'cannot remove owner (delete the group)' });
   }
@@ -373,7 +449,11 @@ router.delete('/:id/members/:userId', authRequired, (req, res) => {
 router.post('/:id/avatar', authRequired, uploadAvatar.single('avatar'), sniff('image'), (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
-  if (!isOwner(id, req.user.id)) return res.status(403).json({ error: 'owner only' });
+  // Owner и admin могут загружать аватар
+  const member = db.prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?').get(id, req.user.id);
+  if (!member || (member.role !== 'owner' && member.role !== 'admin')) {
+    return res.status(403).json({ error: 'owner or admin only' });
+  }
   if (!req.file) return res.status(400).json({ error: 'no file' });
 
   const old = db.prepare('SELECT avatar_path FROM groups WHERE id = ?').get(id);
@@ -394,7 +474,11 @@ router.post('/:id/avatar', authRequired, uploadAvatar.single('avatar'), sniff('i
 router.delete('/:id/avatar', authRequired, (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
-  if (!isOwner(id, req.user.id)) return res.status(403).json({ error: 'owner only' });
+  // Owner и admin могут удалять аватар
+  const member = db.prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?').get(id, req.user.id);
+  if (!member || (member.role !== 'owner' && member.role !== 'admin')) {
+    return res.status(403).json({ error: 'owner or admin only' });
+  }
   const row = groupRow(id);
   if (!row) return res.status(404).json({ error: 'not found' });
   if (row.avatar_path) {
@@ -422,7 +506,12 @@ router.get('/:id/messages', authRequired, (req, res) => {
        LIMIT 500`,
     )
     .all(id);
-  res.json({ messages: rows.map(rowToMessage) });
+  const messages = rows.map(rowToMessage);
+  // Загружаем реакции для каждого сообщения
+  for (const msg of messages) {
+    msg.reactions = getReactionsForMessage(msg.id);
+  }
+  res.json({ messages });
 });
 
 router.post('/:id/messages/text', authRequired, (req, res) => {
@@ -471,33 +560,123 @@ router.post('/:id/messages/voice', authRequired, uploadVoice.single('voice'), sn
   res.json({ ok: true, message: msg });
 });
 
-router.post('/:id/messages/file', authRequired, uploadAttachment.single('file'), sniff(), (req, res) => {
+router.post('/:id/messages/file', authRequired, uploadAttachment.array('files', 10), sniff(), (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
   if (!isMember(id, req.user.id)) return res.status(403).json({ error: 'not a member' });
-  if (!req.file) return res.status(400).json({ error: 'no file' });
+  const files = Array.isArray(req.files) ? req.files : (req.file ? [req.file] : []);
+  if (files.length === 0) return res.status(400).json({ error: 'no file' });
 
   const caption = typeof req.body.content === 'string' ? req.body.content.trim().slice(0, 4000) : '';
-  const pubPath = publicPathFor(req.file.path);
-  const mime = req.file.mimetype || 'application/octet-stream';
-  const kind = mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : 'file';
   const now = Date.now();
+  
+  // Первый файл идёт в основные колонки, остальные - в payload
+  const firstFile = files[0];
+  const pubPath = publicPathFor(firstFile.path);
+  const mime = firstFile.mimetype || 'application/octet-stream';
+  const kind = mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : 'file';
+  
+  let payload = null;
+  if (files.length > 1) {
+    const additionalAttachments = files.slice(1).map(f => {
+      const p = publicPathFor(f.path);
+      const m = f.mimetype || 'application/octet-stream';
+      const k = m.startsWith('image/') ? 'image' : m.startsWith('video/') ? 'video' : 'file';
+      return {
+        path: p,
+        name: f.originalname,
+        size: f.size,
+        mime: m,
+        kind: k,
+      };
+    });
+    payload = { additionalAttachments };
+  }
+  
   const info = db
     .prepare(
       `INSERT INTO messages (
          sender_id, group_id, content, created_at, kind,
-         attachment_path, attachment_name, attachment_size, attachment_mime
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         attachment_path, attachment_name, attachment_size, attachment_mime, payload
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       req.user.id, id, caption, now, kind,
-      pubPath, req.file.originalname, req.file.size, mime,
+      pubPath, firstFile.originalname, firstFile.size, mime,
+      payload ? JSON.stringify(payload) : null,
     );
   db.prepare('UPDATE groups SET updated_at = ? WHERE id = ?').run(now, id);
 
   const msg = rowToMessage(getMessage(info.lastInsertRowid));
   emitToGroup(id, 'dm:new', msg);
   res.json({ ok: true, message: msg });
+});
+
+// --- Реакции на сообщения ---
+
+// Добавить/удалить реакцию на групповое сообщение
+router.post('/:id/messages/:msgId/reaction', authRequired, (req, res) => {
+  const { id, msgId } = req.params;
+  const { emoji } = req.body;
+  if (!emoji || typeof emoji !== 'string') return res.status(400).json({ error: 'invalid emoji' });
+
+  if (!isMember(id, req.user.id)) return res.status(403).json({ error: 'not a member' });
+
+  const msg = db.prepare('SELECT id, sender_id, group_id FROM messages WHERE id = ? AND group_id = ?').get(msgId, id);
+  if (!msg) return res.status(404).json({ error: 'message not found' });
+  if (msg.sender_id === req.user.id) return res.status(400).json({ error: 'cannot react to own message' });
+
+  // Проверяем, есть ли уже такая реакция от этого пользователя
+  const existing = db.prepare(
+    'SELECT id FROM message_reactions WHERE message_id = ? AND user_id = ? AND emoji = ?'
+  ).get(msgId, req.user.id, emoji);
+
+  if (existing) {
+    // Удаляем реакцию (toggle)
+    db.prepare('DELETE FROM message_reactions WHERE id = ?').run(existing.id);
+  } else {
+    // Добавляем реакцию
+    db.prepare(
+      'INSERT INTO message_reactions (message_id, user_id, emoji) VALUES (?, ?, ?)'
+    ).run(msgId, req.user.id, emoji);
+  }
+
+  // Получаем все реакции для этого сообщения
+  const reactions = db.prepare(
+    `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
+     FROM message_reactions WHERE message_id = ? GROUP BY emoji`
+  ).all(msgId);
+
+  const reactionsMap = reactions.map(r => ({
+    emoji: r.emoji,
+    count: r.count,
+    users: r.users ? r.users.split(',').map(Number) : [],
+  }));
+
+  emitToGroup(id, 'dm:reaction', { messageId: Number(msgId), reactions: reactionsMap });
+  res.json({ ok: true, reactions: reactionsMap });
+});
+
+// Получить реакции на групповое сообщение
+router.get('/:id/messages/:msgId/reactions', authRequired, (req, res) => {
+  const { id, msgId } = req.params;
+  if (!isMember(id, req.user.id)) return res.status(403).json({ error: 'not a member' });
+
+  const msg = db.prepare('SELECT id FROM messages WHERE id = ? AND group_id = ?').get(msgId, id);
+  if (!msg) return res.status(404).json({ error: 'message not found' });
+
+  const reactions = db.prepare(
+    `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
+     FROM message_reactions WHERE message_id = ? GROUP BY emoji`
+  ).all(msgId);
+
+  const reactionsMap = reactions.map(r => ({
+    emoji: r.emoji,
+    count: r.count,
+    users: r.users ? r.users.split(',').map(Number) : [],
+  }));
+
+  res.json({ reactions: reactionsMap });
 });
 
 export default router;

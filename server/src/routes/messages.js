@@ -56,6 +56,18 @@ function getMessage(id) {
   return db.prepare(`SELECT ${MSG_COLS} FROM messages WHERE id = ?`).get(id);
 }
 
+function getReactionsForMessage(messageId) {
+  const reactions = db.prepare(
+    `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
+     FROM message_reactions WHERE message_id = ? GROUP BY emoji`
+  ).all(messageId);
+  return reactions.map(r => ({
+    emoji: r.emoji,
+    count: r.count,
+    users: r.users ? r.users.split(',').map(Number) : [],
+  }));
+}
+
 function canAccessRow(userId, row) {
   if (!row) return false;
   if (row.group_id) {
@@ -81,7 +93,12 @@ router.get('/:peerId', authRequired, (req, res) => {
        LIMIT 500`,
     )
     .all(me, peerId, peerId, me);
-  res.json({ messages: rows.map(rowToMessage) });
+  const messages = rows.map(rowToMessage);
+  // Загружаем реакции для каждого сообщения
+  for (const msg of messages) {
+    msg.reactions = getReactionsForMessage(msg.id);
+  }
+  res.json({ messages });
 });
 
 // Отправка голосового сообщения (multipart/form-data: file=voice, to=peerId, durationMs?).
@@ -108,28 +125,52 @@ router.post('/voice', authRequired, uploadVoice.single('voice'), sniff('audio'),
 });
 
 // Отправка вложения произвольного типа (multipart/form-data: file, to, content?).
-router.post('/file', authRequired, uploadAttachment.single('file'), sniff(), (req, res) => {
+// Поддерживает multiple files через files[] array.
+router.post('/file', authRequired, uploadAttachment.array('files', 10), sniff(), (req, res) => {
   const to = Number(req.body.to);
   if (!Number.isInteger(to)) return res.status(400).json({ error: 'bad to' });
-  if (!req.file) return res.status(400).json({ error: 'no file' });
+  const files = Array.isArray(req.files) ? req.files : (req.file ? [req.file] : []);
+  if (files.length === 0) return res.status(400).json({ error: 'no file' });
   const peer = db.prepare('SELECT id FROM users WHERE id = ?').get(to);
   if (!peer) return res.status(404).json({ error: 'no such user' });
 
   const caption = typeof req.body.content === 'string' ? req.body.content.trim().slice(0, 4000) : '';
-  const pubPath = publicPathFor(req.file.path);
-  const mime = req.file.mimetype || 'application/octet-stream';
-  const kind = mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : 'file';
   const now = Date.now();
+  
+  // Первый файл идёт в основные колонки, остальные - в payload
+  const firstFile = files[0];
+  const pubPath = publicPathFor(firstFile.path);
+  const mime = firstFile.mimetype || 'application/octet-stream';
+  const kind = mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : 'file';
+  
+  let payload = null;
+  if (files.length > 1) {
+    const additionalAttachments = files.slice(1).map(f => {
+      const p = publicPathFor(f.path);
+      const m = f.mimetype || 'application/octet-stream';
+      const k = m.startsWith('image/') ? 'image' : m.startsWith('video/') ? 'video' : 'file';
+      return {
+        path: p,
+        name: f.originalname,
+        size: f.size,
+        mime: m,
+        kind: k,
+      };
+    });
+    payload = { additionalAttachments };
+  }
+  
   const info = db
     .prepare(
       `INSERT INTO messages (
          sender_id, receiver_id, content, created_at, kind,
-         attachment_path, attachment_name, attachment_size, attachment_mime
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         attachment_path, attachment_name, attachment_size, attachment_mime, payload
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       req.user.id, to, caption, now, kind,
-      pubPath, req.file.originalname, req.file.size, mime,
+      pubPath, firstFile.originalname, firstFile.size, mime,
+      payload ? JSON.stringify(payload) : null,
     );
 
   const msg = rowToMessage(getMessage(info.lastInsertRowid));
@@ -203,6 +244,71 @@ router.delete('/:id', authRequired, (req, res) => {
     id, senderId: row.sender_id, receiverId: row.receiver_id, groupId: row.group_id,
   });
   res.json({ ok: true, message: updated });
+});
+
+// --- Реакции на сообщения ---
+
+// Добавить/удалить реакцию на личное сообщение
+router.post('/:id/reaction', authRequired, (req, res) => {
+  const { id } = req.params;
+  const { emoji } = req.body;
+  if (!emoji || typeof emoji !== 'string') return res.status(400).json({ error: 'invalid emoji' });
+
+  const msg = db.prepare('SELECT id, sender_id, receiver_id, group_id FROM messages WHERE id = ?').get(id);
+  if (!msg) return res.status(404).json({ error: 'message not found' });
+  if (msg.group_id) return res.status(400).json({ error: 'use group reaction endpoint' });
+  if (msg.sender_id === req.user.id) return res.status(400).json({ error: 'cannot react to own message' });
+
+  // Проверяем, есть ли уже такая реакция от этого пользователя
+  const existing = db.prepare(
+    'SELECT id FROM message_reactions WHERE message_id = ? AND user_id = ? AND emoji = ?'
+  ).get(id, req.user.id, emoji);
+
+  if (existing) {
+    // Удаляем реакцию (toggle)
+    db.prepare('DELETE FROM message_reactions WHERE id = ?').run(existing.id);
+  } else {
+    // Добавляем реакцию
+    db.prepare(
+      'INSERT INTO message_reactions (message_id, user_id, emoji) VALUES (?, ?, ?)'
+    ).run(id, req.user.id, emoji);
+  }
+
+  // Получаем все реакции для этого сообщения
+  const reactions = db.prepare(
+    `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
+     FROM message_reactions WHERE message_id = ? GROUP BY emoji`
+  ).all(id);
+
+  const reactionsMap = reactions.map(r => ({
+    emoji: r.emoji,
+    count: r.count,
+    users: r.users ? r.users.split(',').map(Number) : [],
+  }));
+
+  emitMessage('dm:reaction', msg, { messageId: Number(id), reactions: reactionsMap });
+  res.json({ ok: true, reactions: reactionsMap });
+});
+
+// Получить реакции на личное сообщение
+router.get('/:id/reactions', authRequired, (req, res) => {
+  const { id } = req.params;
+  const msg = db.prepare('SELECT id, group_id FROM messages WHERE id = ?').get(id);
+  if (!msg) return res.status(404).json({ error: 'message not found' });
+  if (msg.group_id) return res.status(400).json({ error: 'use group reaction endpoint' });
+
+  const reactions = db.prepare(
+    `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
+     FROM message_reactions WHERE message_id = ? GROUP BY emoji`
+  ).all(id);
+
+  const reactionsMap = reactions.map(r => ({
+    emoji: r.emoji,
+    count: r.count,
+    users: r.users ? r.users.split(',').map(Number) : [],
+  }));
+
+  res.json({ reactions: reactionsMap });
 });
 
 export default router;
