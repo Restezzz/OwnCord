@@ -90,11 +90,10 @@ const RemoteAudio = memo(function RemoteAudio({ stream, sinkId, volume, muted = 
 });
 
 export default function CallView({ call }) {
-  const { settings } = useSettings();
+  const { settings, update } = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [qualityOpen, setQualityOpen] = useState(false);
   const [streamVolumeMenu, setStreamVolumeMenu] = useState(null);
-  const [streamVolume, setStreamVolume] = useState(100);
   const [, tick] = useState(0);
 
   const {
@@ -118,12 +117,6 @@ export default function CallView({ call }) {
     return () => clearInterval(i);
   }, [state]);
 
-  // Если пир выключил звук стрима, пока меню громкости было открыто —
-  // закрываем его, чтобы ползунок не висел зря.
-  useEffect(() => {
-    if (!peerMedia?.screenAudio) setStreamVolumeMenu(null);
-  }, [peerMedia?.screenAudio]);
-
   if (state === 'idle' || state === 'incoming') return null;
 
   const waiting = state === 'waiting';
@@ -131,6 +124,9 @@ export default function CallView({ call }) {
   // Без этого `<video>` будет чёрным квадратом, т.к. receiver-трек всегда есть.
   const showRemoteVideo = !waiting && !!(peerMedia?.camera || peerMedia?.screen);
   const hasLocalVideo = cameraOn || sharingScreen;
+  const peerId = peer?.id;
+  const peerUserVolume = peerId ? settings.userVolumes?.[peerId] ?? 100 : 100;
+  const peerStreamVolume = peerId ? settings.streamVolumes?.[peerId] ?? 100 : 100;
 
   const waitLeft = waiting && waitingUntil
     ? Math.max(0, waitingUntil - Date.now())
@@ -155,10 +151,7 @@ export default function CallView({ call }) {
         )}
         {showRemoteVideo ? (
           <div className="absolute inset-0" onContextMenu={(e) => {
-            // Меню громкости имеет смысл только когда у пира идёт звук экрана.
-            // На голос/камеру без звука стрима ползунок не влияет (см. RemoteAudio
-            // выше) — поэтому пропускаем открытие, чтобы не путать пользователя.
-            if (!peerMedia?.screenAudio) return;
+            if (!peerId) return;
             e.preventDefault();
             setStreamVolumeMenu({ x: e.clientX, y: e.clientY });
           }}>
@@ -180,7 +173,14 @@ export default function CallView({ call }) {
             />
           </div>
         ) : (
-          <div className="absolute inset-0 grid place-items-center">
+          <div
+            className="absolute inset-0 grid place-items-center"
+            onContextMenu={(e) => {
+              if (!peerId) return;
+              e.preventDefault();
+              setStreamVolumeMenu({ x: e.clientX, y: e.clientY });
+            }}
+          >
             <div className="flex flex-col items-center gap-4 text-center">
               <div
                 className={`rounded-full p-1 transition-shadow duration-150 ${
@@ -217,15 +217,12 @@ export default function CallView({ call }) {
           </div>
         )}
 
-        {/* Remote audio (воспроизводится всегда, когда есть stream).
-            Ползунок громкости стрима применяем только когда пир сейчас
-            транслирует звук экрана (а не голос). Голос регулируется
-            исключительно deafen-кнопкой — слайдер на него не влияет. */}
+        {/* Remote audio (воспроизводится всегда, когда есть stream). */}
         <RemoteAudio
           stream={remoteStream}
           sinkId={settings.outputDeviceId}
-          volume={peerMedia?.screenAudio ? streamVolume : 100}
-          muted={deafened}
+          volume={peerMedia?.screenAudio ? peerStreamVolume : peerUserVolume}
+          muted={deafened && !peerMedia?.screenAudio}
         />
 
         {/* Локальное превью */}
@@ -325,43 +322,70 @@ export default function CallView({ call }) {
         }}
       />
 
-      {/* Меню громкости стрима */}
-      {streamVolumeMenu && (
+      {/* Меню громкости */}
+      {streamVolumeMenu && peerId && (
         <div
           className="fixed z-[90] bg-bg-1 border border-border rounded-lg shadow-xl p-4 w-64"
           style={{ left: streamVolumeMenu.x, top: streamVolumeMenu.y }}
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium">Громкость стрима</span>
+            <span className="text-sm font-medium truncate pr-2">
+              Громкость · {getDisplayName(peer)}
+            </span>
             <button
               onClick={() => setStreamVolumeMenu(null)}
               className="text-slate-400 hover:text-white"
+              aria-label="Закрыть меню громкости"
             >
               <X size={16} />
             </button>
           </div>
+          <label className="block text-xs text-slate-400 mb-1">Пользователь</label>
           <input
             type="range"
             min="0"
             max="100"
-            value={streamVolume}
+            value={peerUserVolume}
             onChange={(e) => {
               const newValue = Number(e.target.value);
-              setStreamVolume(newValue);
-              e.currentTarget.style.setProperty('--range-progress', `${newValue}%`);
+              update({ userVolumes: { ...(settings.userVolumes || {}), [peerId]: newValue } });
             }}
             className="range w-full"
-            style={{ '--range-progress': `${streamVolume}%` } as React.CSSProperties}
+            aria-label="Громкость пользователя"
+            style={{ '--range-progress': `${peerUserVolume}%` } as React.CSSProperties}
           />
           <div className="flex justify-between text-xs text-slate-400 mt-1">
             <span>0%</span>
-            <span>{streamVolume}%</span>
+            <span>{peerUserVolume}%</span>
             <span>100%</span>
           </div>
+          {peerMedia?.screenAudio && (
+            <div className="mt-4">
+              <label className="block text-xs text-slate-400 mb-1">Стрим</label>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={peerStreamVolume}
+                onChange={(e) => {
+                  const newValue = Number(e.target.value);
+                  update({ streamVolumes: { ...(settings.streamVolumes || {}), [peerId]: newValue } });
+                }}
+                className="range w-full"
+                aria-label="Громкость стрима"
+                style={{ '--range-progress': `${peerStreamVolume}%` } as React.CSSProperties}
+              />
+              <div className="flex justify-between text-xs text-slate-400 mt-1">
+                <span>0%</span>
+                <span>{peerStreamVolume}%</span>
+                <span>100%</span>
+              </div>
+            </div>
+          )}
         </div>
       )}
-      {streamVolumeMenu && (
+      {streamVolumeMenu && peerId && (
         <div
           className="fixed inset-0 z-[89]"
           onClick={() => setStreamVolumeMenu(null)}

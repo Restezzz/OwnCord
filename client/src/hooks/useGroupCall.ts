@@ -46,9 +46,8 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
   const [remotes, setRemotes] = useState({});      // userId -> MediaStream
   const [participants, setParticipants] = useState([]);
   // userId -> { mic, camera, screen, screenAudio } — что пиры сейчас шлют.
-  // Нужно UI'у, чтобы знать, у кого включён звук стрима (per-peer ползунок
-  // громкости в GroupCallView применяем только к таким пирам — голос
-  // регулируется лишь deafen-ом).
+  // Нужно UI'у, чтобы знать, у кого включён звук стрима: deafen глушит
+  // голоса остальных участников, но не должен глушить screen-audio.
   const [peersMedia, setPeersMedia] = useState({});
   const [muted, setMuted] = useState(false);
   // Локальный «глухой режим» — только для UI: все <audio> получают

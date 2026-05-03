@@ -4,7 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
   Mic, Volume2, X, Bell, BellOff, Upload, Trash2, User, ShieldCheck, Headphones, Play,
   KeyRound, Copy, Check, RefreshCw, Smartphone, UserX, AlertTriangle, Lock,
-  Download, ExternalLink, Sliders,
+  Download, ExternalLink, Sliders, Video, MonitorUp,
 } from 'lucide-react';
 import { modalVariants, overlayVariants, reducedVariants } from '../utils/motion';
 import {
@@ -538,10 +538,47 @@ function PasswordTab() {
 
 // ---------------- Audio -----------------------------------------------------
 
+const PERMISSION_TEXT = {
+  granted: 'Разрешено',
+  denied: 'Запрещено',
+  prompt: 'Нужно разрешение',
+  unknown: 'Неизвестно',
+};
+
+function permissionClass(status) {
+  if (status === 'granted') return 'text-emerald-400';
+  if (status === 'denied') return 'text-red-400';
+  return 'text-amber-300';
+}
+
+async function queryPermission(name) {
+  if (!navigator.permissions?.query) return 'unknown';
+  try {
+    const result = await navigator.permissions.query({ name: name as PermissionName });
+    return result.state || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+function stopMediaStream(stream) {
+  stream?.getTracks?.().forEach((track) => {
+    try { track.stop(); } catch { /* ignore */ }
+  });
+}
+
 function AudioTab() {
   const { settings, update } = useSettings();
+  const toast = useToast();
   const [devices, setDevices] = useState({ input: [], output: [] });
-  const [permissionChecked, setPermissionChecked] = useState(false);
+  const [permissions, setPermissions] = useState({
+    microphone: 'unknown',
+    camera: 'unknown',
+    screen: 'prompt',
+  });
+  const [permissionBusy, setPermissionBusy] = useState(null);
+  const [permissionError, setPermissionError] = useState('');
+  const [deviceRefreshKey, setDeviceRefreshKey] = useState(0);
   const [micLevel, setMicLevel] = useState({ percent: 0, db: -100 });
   const [isTestingMic, setIsTestingMic] = useState(false);
   const [isTestingSpeaker, setIsTestingSpeaker] = useState(false);
@@ -554,6 +591,69 @@ function AudioTab() {
 
   const canPickOutput = typeof HTMLAudioElement !== 'undefined'
     && 'setSinkId' in HTMLAudioElement.prototype;
+
+  const refreshPermissions = async () => {
+    const [microphone, camera] = await Promise.all([
+      queryPermission('microphone'),
+      queryPermission('camera'),
+    ]);
+    setPermissions({
+      microphone,
+      camera,
+      screen: 'prompt',
+    });
+  };
+
+  useEffect(() => {
+    refreshPermissions();
+  }, []);
+
+  const requestPermission = async (kind) => {
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices) {
+      setPermissionError('Браузер не поддерживает доступ к медиаустройствам.');
+      return;
+    }
+    if (kind !== 'screen' && !mediaDevices.getUserMedia) {
+      setPermissionError('Браузер не поддерживает доступ к микрофону и камере.');
+      return;
+    }
+    setPermissionBusy(kind);
+    setPermissionError('');
+    let stream = null;
+    try {
+      if (kind === 'microphone') {
+        stream = await mediaDevices.getUserMedia({ audio: true });
+        toast.success('Доступ к микрофону разрешён');
+      } else if (kind === 'camera') {
+        stream = await mediaDevices.getUserMedia({ video: true });
+        toast.success('Доступ к камере разрешён');
+      } else if (kind === 'media') {
+        stream = await mediaDevices.getUserMedia({ audio: true, video: true });
+        toast.success('Доступ к микрофону и камере разрешён');
+      } else if (kind === 'screen') {
+        if (!mediaDevices.getDisplayMedia) {
+          throw new Error('Браузер не поддерживает демонстрацию экрана.');
+        }
+        stream = await mediaDevices.getDisplayMedia({ video: true, audio: true });
+        toast.success('Доступ к демонстрации экрана проверен');
+      }
+      stopMediaStream(stream);
+      await refreshPermissions();
+      setDeviceRefreshKey((n) => n + 1);
+    } catch (err) {
+      stopMediaStream(stream);
+      const denied = err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError';
+      setPermissionError(
+        denied
+          ? 'Разрешение отклонено. Если браузер запомнил отказ, включите доступ в настройках сайта.'
+          : err?.message || 'Не удалось запросить разрешение.',
+      );
+      await refreshPermissions();
+    } finally {
+      setPermissionBusy(null);
+    }
+  };
 
   // Визуализация уровня микрофона
   useEffect(() => {
@@ -750,41 +850,89 @@ function AudioTab() {
 
   useEffect(() => {
     let cancelled = false;
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices?.enumerateDevices) return undefined;
     async function loadDevices() {
       try {
-        const list = await navigator.mediaDevices.enumerateDevices();
+        const list = await mediaDevices.enumerateDevices();
         if (cancelled) return;
         const input = list.filter((d) => d.kind === 'audioinput');
         const output = list.filter((d) => d.kind === 'audiooutput');
         setDevices({ input, output });
-        const needPermission = input.some((d) => !d.label) || output.some((d) => !d.label);
-        if (needPermission && !permissionChecked) {
-          setPermissionChecked(true);
-          try {
-            const s = await navigator.mediaDevices.getUserMedia({ audio: true });
-            s.getTracks().forEach((t) => t.stop());
-            const list2 = await navigator.mediaDevices.enumerateDevices();
-            if (!cancelled) {
-              setDevices({
-                input: list2.filter((d) => d.kind === 'audioinput'),
-                output: list2.filter((d) => d.kind === 'audiooutput'),
-              });
-            }
-          } catch { /* отказ */ }
-        }
       } catch { /* ignore */ }
     }
     loadDevices();
     const handler = () => loadDevices();
-    navigator.mediaDevices.addEventListener?.('devicechange', handler);
+    mediaDevices.addEventListener?.('devicechange', handler);
     return () => {
       cancelled = true;
-      navigator.mediaDevices.removeEventListener?.('devicechange', handler);
+      mediaDevices.removeEventListener?.('devicechange', handler);
     };
-  }, [permissionChecked]);
+  }, [deviceRefreshKey]);
 
   return (
     <section className="space-y-6">
+      <div className="space-y-2">
+        <label className="text-xs text-slate-400 uppercase tracking-wider">
+          Разрешения
+        </label>
+        <div className="rounded-lg border border-border bg-bg-2 divide-y divide-border">
+          <PermissionRow
+            icon={<Mic size={16} />}
+            title="Микрофон"
+            description="Нужен для голосовых сообщений и звонков"
+            status={permissions.microphone}
+            busy={permissionBusy === 'microphone' || permissionBusy === 'media'}
+            onRequest={() => requestPermission('microphone')}
+          />
+          <PermissionRow
+            icon={<Video size={16} />}
+            title="Камера"
+            description="Нужна для видеозвонков"
+            status={permissions.camera}
+            busy={permissionBusy === 'camera' || permissionBusy === 'media'}
+            onRequest={() => requestPermission('camera')}
+          />
+          <PermissionRow
+            icon={<MonitorUp size={16} />}
+            title="Демонстрация экрана"
+            description="Браузер спрашивает доступ каждый раз при запуске показа"
+            status={permissions.screen}
+            busy={permissionBusy === 'screen'}
+            onRequest={() => requestPermission('screen')}
+          />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="btn-primary h-9 px-3 text-xs disabled:opacity-50"
+            onClick={() => requestPermission('media')}
+            disabled={!!permissionBusy}
+          >
+            {permissionBusy === 'media' ? 'Запрашиваем…' : 'Разрешить микрофон и камеру'}
+          </button>
+          <button
+            type="button"
+            className="btn-ghost h-9 px-3 text-xs"
+            onClick={() => {
+              refreshPermissions();
+              setDeviceRefreshKey((n) => n + 1);
+            }}
+            disabled={!!permissionBusy}
+          >
+            <RefreshCw size={12} className="mr-1" />
+            Обновить
+          </button>
+        </div>
+        {permissionError && (
+          <div className="text-xs text-amber-300">
+            {permissionError}
+          </div>
+        )}
+      </div>
+
+      <div className="h-px bg-border" />
+
       <div className="space-y-1.5">
         <label className="text-xs text-slate-400 uppercase tracking-wider">
           Микрофон (исходящий)
@@ -1452,6 +1600,34 @@ function InviteRow({ code, onRevoke }) {
 }
 
 // ---------------- Atoms -----------------------------------------------------
+
+function PermissionRow({ icon, title, description, status, busy, onRequest }) {
+  const label = PERMISSION_TEXT[status] || PERMISSION_TEXT.unknown;
+  return (
+    <div className="flex items-center justify-between gap-3 px-3 py-2.5">
+      <div className="flex items-center gap-3 min-w-0">
+        <span className="opacity-70 shrink-0">{icon}</span>
+        <div className="min-w-0">
+          <div className="text-sm">{title}</div>
+          <div className="text-xs text-slate-500">{description}</div>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <span className={`text-xs tabular-nums ${permissionClass(status)}`}>
+          {label}
+        </span>
+        <button
+          type="button"
+          className="btn-ghost h-8 px-2 text-xs disabled:opacity-50"
+          onClick={onRequest}
+          disabled={busy}
+        >
+          {busy ? '…' : 'Разрешить'}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function SliderRow({ icon, value, min, max, step, unit = '', onChange, disabled = false }) {
   return (

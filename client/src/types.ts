@@ -99,6 +99,8 @@ export type Settings = {
   soundConnect: boolean;
   soundDisconnect: boolean;
   uiVolume: number;
+  userVolumes?: Record<number, number>;
+  streamVolumes?: Record<number, number>;
   screenQuality?: string;
 };
 
@@ -120,8 +122,8 @@ export type MediaState = {
   camera: boolean;
   screen: boolean;
   // true когда аудио-сендер сейчас транслирует звук экрана, а не микрофон.
-  // Получатель смотрит на этот флаг, чтобы решать — применять ли свой
-  // ползунок громкости стрима к входящему треку (для голоса не применяется).
+  // Получатель смотрит на этот флаг, чтобы deafen глушил только голоса,
+  // а для входящего трека применялась громкость стрима.
   screenAudio?: boolean;
 };
 
