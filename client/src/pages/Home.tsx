@@ -70,7 +70,7 @@ export default function Home() {
   const socket = getSocket();
   const sounds = useSounds(settings);
   const call = useCall({ socket, selfUser, settings, toast, sounds });
-  const groupCall = useGroupCall({ socket, selfUser, toast, sounds });
+  const groupCall = useGroupCall({ socket, selfUser, settings, toast, sounds });
 
   const selectedUser = useMemo(() => {
     if (!selected || selected.kind !== 'user') return null;

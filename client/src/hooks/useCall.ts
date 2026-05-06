@@ -10,6 +10,10 @@ import {
   createPlaceholderAudioTrack,
   createPlaceholderVideoTrack,
 } from '../utils/media';
+import {
+  createMicPipeline,
+  pickAudioFilterSettings,
+} from '../utils/audioProcessing';
 
 /**
  * useCall — один активный звонок между двумя пользователями.
@@ -59,13 +63,23 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   const audioSenderRef = useRef(null);
   const videoSenderRef = useRef(null);
   const iceServersRef = useRef(null);
+  // Watchdog: если ICE/connection не пришёл в 'connected' за разумное время,
+  // принудительно роняем звонок. Без этого мобильные браузеры (Safari iOS,
+  // Yandex) могут «висеть» в connecting на симметричном NAT/CGNAT'е без
+  // TURN — пользователь видит вечный спиннер «Соединение…».
+  const iceTimeoutRef = useRef(null);
+  const ICE_CONNECT_TIMEOUT_MS = 45_000;
 
-  // Локальные треки. Аудио берём СЫРЫМ из getUserMedia — без AudioContext-
-  // прослойки. AudioContext в suspended-состоянии (что часто происходит
-  // после async-цепочки accept→getUserMedia) превращал входящий микрофон
-  // в немой трек, и пир слышал тишину. Теперь идёт raw track напрямую в PC.
+  // Локальные треки. Микрофон прогоняем через AudioContext-pipeline
+  // (HighPass → Compressor → NoiseGate → MakeupGain) — см. utils/audioProcessing.
+  // Прошлая версия ходила «сырым» треком, потому что AudioContext в
+  // suspended-состоянии после async-цепочки accept→getUserMedia отдавал
+  // немой track. Сейчас явно делаем ctx.resume() в createMicPipeline,
+  // и проблема не воспроизводится. micTrackRef.current = OUTPUT-трек
+  // pipeline'а; toggleMute дёргает .enabled именно у него.
   const localStreamRef = useRef(null);
   const micTrackRef = useRef(null);
+  const micPipelineRef = useRef(null);
   const cameraTrackRef = useRef(null);
   const screenTrackRef = useRef(null);
   const screenAudioDeafenRef = useRef(false); // Отслеживаем автоматически включённый deafen для звука экрана
@@ -128,11 +142,18 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       sounds?.stopIncoming?.();
       sounds?.stopOutgoing?.();
 
+      // Снимаем watchdog ICE — иначе он может выстрелить на уже закрытом PC.
+      if (iceTimeoutRef.current) {
+        clearTimeout(iceTimeoutRef.current);
+        iceTimeoutRef.current = null;
+      }
+
       try {
         if (pcRef.current) {
           pcRef.current.ontrack = null;
           pcRef.current.onicecandidate = null;
           pcRef.current.onconnectionstatechange = null;
+          pcRef.current.oniceconnectionstatechange = null;
           pcRef.current.close();
         }
       } catch { /* ignore */ }
@@ -147,6 +168,15 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       const ls = localStreamRef.current;
       if (ls) ls.getTracks().forEach((t) => { try { t.stop(); } catch { /* */ } });
       localStreamRef.current = null;
+
+      // Pipeline сам остановит свои raw-треки и закроет AudioContext.
+      // Делаем это ДО обнуления micTrackRef, чтобы destroy() мог дёрнуть
+      // outputTrack.stop() — иначе выходной трек MediaStreamDestination
+      // может остаться висеть.
+      if (micPipelineRef.current) {
+        try { micPipelineRef.current.destroy(); } catch { /* */ }
+        micPipelineRef.current = null;
+      }
 
       for (const ref of [
         cameraTrackRef, screenTrackRef, micTrackRef,
@@ -177,11 +207,16 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   // чтобы он вернулся. Не трогаем локальные треки (микрофон/камера),
   // чтобы при возврате не перевыбирать устройства.
   const enterWaiting = useCallback(() => {
+    if (iceTimeoutRef.current) {
+      clearTimeout(iceTimeoutRef.current);
+      iceTimeoutRef.current = null;
+    }
     try {
       if (pcRef.current) {
         pcRef.current.ontrack = null;
         pcRef.current.onicecandidate = null;
         pcRef.current.onconnectionstatechange = null;
+        pcRef.current.oniceconnectionstatechange = null;
         pcRef.current.close();
       }
     } catch { /* ignore */ }
@@ -246,6 +281,12 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       pc.onconnectionstatechange = () => {
         const s = pc.connectionState;
         if (s === 'connected') {
+          // Соединение установлено — снимаем watchdog, чтобы он не сработал
+          // на гипотетическом подвисании после рестарта ICE.
+          if (iceTimeoutRef.current) {
+            clearTimeout(iceTimeoutRef.current);
+            iceTimeoutRef.current = null;
+          }
           setState('in-call');
           sounds?.stopOutgoing?.();
           sounds?.stopIncoming?.();
@@ -253,9 +294,54 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
           emitMyMedia();
         }
         if (s === 'failed' || s === 'closed') {
+          if (iceTimeoutRef.current) {
+            clearTimeout(iceTimeoutRef.current);
+            iceTimeoutRef.current = null;
+          }
           hangup('connection-failed');
         }
       };
+
+      // Дублируем как iceconnectionstatechange — на старых Chromium-движках
+      // (Yandex 22-23, некоторые WebView) connectionState не апдейтится
+      // вовсе, и единственный сигнал перехода — это ICE-state.
+      pc.oniceconnectionstatechange = () => {
+        const s = pc.iceConnectionState;
+        if ((s === 'connected' || s === 'completed') && iceTimeoutRef.current) {
+          clearTimeout(iceTimeoutRef.current);
+          iceTimeoutRef.current = null;
+          // Если основной pc.connectionState не двинулся — двигаем UI вручную.
+          if (pc.connectionState !== 'connected') {
+            setState((prev) => (prev === 'connecting' || prev === 'calling' ? 'in-call' : prev));
+          }
+        }
+        if (s === 'failed' && iceTimeoutRef.current) {
+          clearTimeout(iceTimeoutRef.current);
+          iceTimeoutRef.current = null;
+          toast?.error?.(
+            'Не удалось установить P2P-соединение. Возможно, ваша сеть требует TURN-сервер. Попробуйте сменить Wi-Fi или браузер.',
+          );
+          hangup('ice-failed');
+        }
+      };
+
+      // Если за 45 секунд PeerConnection не дошёл до 'connected' — роняем
+      // звонок и сообщаем пользователю про NAT/TURN. Это ровно тот случай,
+      // когда мобильный браузер «висит на коннекте» бесконечно.
+      if (iceTimeoutRef.current) {
+        clearTimeout(iceTimeoutRef.current);
+      }
+      iceTimeoutRef.current = setTimeout(() => {
+        iceTimeoutRef.current = null;
+        if (pcRef.current !== pc) return;
+        const cs = pc.connectionState;
+        const ics = pc.iceConnectionState;
+        if (cs === 'connected' || ics === 'connected' || ics === 'completed') return;
+        toast?.error?.(
+          'Соединение не установлено за 45 секунд. Возможно, требуется TURN-сервер или другая сеть (мобильные операторы и Яндекс.Браузер часто блокируют прямое P2P).',
+        );
+        hangup('ice-timeout');
+      }, ICE_CONNECT_TIMEOUT_MS);
 
       // КЛЮЧЕВОЕ: addTrack() ВСЕГДА с реальным MediaStreamTrack — даже если
       // у пользователя нет камеры или (теоретически) микрофона. Если трека
@@ -303,17 +389,40 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   );
 
   // --- Локальный медиа-стрим --------------------------------------------
-  // Захват микрофона/камеры. Аудио идёт сырым в PC — никаких AudioContext-
-  // прослоек, чтобы исключить «немой трек» при suspended-контексте.
+  // Захват микрофона/камеры. Микрофон прогоняем через AudioContext-pipeline
+  // (HighPass → Compressor → NoiseGate → MakeupGain). AudioContext явно
+  // резюмируется внутри createMicPipeline, поэтому проблемы «немого трека»
+  // больше нет. На PC уходит processed-track из MediaStreamDestination.
   const getLocalMedia = useCallback(
     async (wantVideo) => {
-      const stream = await captureLocalMedia({
+      // Берём raw-стрим с echoCancellation/noiseSuppression/AGC от браузера —
+      // эти три флага мы НЕ дублируем в нашей цепочке: их реализация в
+      // браузере существенно лучше любого Web Audio наколеночного варианта.
+      const rawStream = await captureLocalMedia({
         wantVideo,
         audioDeviceId: settings.inputDeviceId,
       });
 
-      const micTrack = stream.getAudioTracks()[0] || null;
-      const videoTrack = stream.getVideoTracks()[0] || null;
+      const rawMic = rawStream.getAudioTracks()[0] || null;
+      const videoTrack = rawStream.getVideoTracks()[0] || null;
+
+      let micTrack = rawMic;
+      if (rawMic) {
+        try {
+          const pipeline = await createMicPipeline(
+            new MediaStream([rawMic]),
+            pickAudioFilterSettings(settings),
+          );
+          micPipelineRef.current = pipeline;
+          micTrack = pipeline.outputTrack;
+        } catch (e) {
+          // Fallback: если что-то сломалось при сборке pipeline (ноды/ctx),
+          // отдаём сырой трек, чтобы звонок всё-таки прошёл. Это лучше,
+          // чем «немой» вызов без диагностики.
+          console.warn('Mic pipeline failed, falling back to raw track:', e);
+          micTrack = rawMic;
+        }
+      }
 
       micTrackRef.current = micTrack;
       if (videoTrack) cameraTrackRef.current = videoTrack;
@@ -325,8 +434,34 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       if (videoTrack) setCameraOn(true);
       return { micTrack, videoTrack };
     },
-    [setLocal, settings.inputDeviceId],
+    [setLocal, settings],
   );
+
+  // Прокидываем изменения настроек фильтров в живой pipeline без пересборки.
+  // Если pipeline'а нет (вне звонка) — useEffect просто ничего не делает.
+  useEffect(() => {
+    const pipeline = micPipelineRef.current;
+    if (!pipeline) return;
+    try {
+      pipeline.updateSettings(pickAudioFilterSettings(settings));
+    } catch { /* ignore */ }
+  }, [
+    settings.inputVolume,
+    settings.noiseSuppression,
+    settings.noiseThreshold,
+    settings.noiseGateHoldMs,
+    settings.noiseGateAttackMs,
+    settings.noiseGateReleaseMs,
+    settings.highPassFilter,
+    settings.highPassFrequency,
+    settings.compressorEnabled,
+    settings.compressorThreshold,
+    settings.compressorRatio,
+    settings.compressorAttack,
+    settings.compressorRelease,
+    settings.compressorKnee,
+    settings.makeupGainDb,
+  ]);
 
   // applyLocalTracks больше не нужен — createPeerConnection сам подвязывает
   // треки через addTrack/addTransceiver. Оставлено как явный no-op-маркер.

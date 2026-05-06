@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { X, Monitor } from 'lucide-react';
+import { X, Monitor, Info } from 'lucide-react';
 import { SCREEN_PRESETS, SCREEN_PRESET_KEYS } from '../utils/media';
 import { modalVariants, overlayVariants, reducedVariants } from '../utils/motion';
 
@@ -98,6 +98,25 @@ export default function ScreenQualityModal({
                 </div>
               </div>
             </label>
+            {includeAudio && (
+              <div className="mt-3 flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-[11px] leading-relaxed text-amber-200/90">
+                <Info size={14} className="shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <div>
+                    <strong className="text-amber-100">Чтобы передать звук только одного приложения</strong> —
+                    в системном окне выбора выберите вкладку браузера
+                    («<em>Chrome Tab</em>» / «<em>Вкладка</em>») и поставьте
+                    галочку «<em>Поделиться звуком вкладки</em>».
+                  </div>
+                  <div>
+                    При выборе «Окно» или «Весь экран» Windows/Chrome отдают
+                    общий микшер — то есть звук <em>всех</em> приложений сразу
+                    (другой браузер на этом же ПК тоже попадёт в стрим).
+                    Это ограничение ОС, а не приложения.
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

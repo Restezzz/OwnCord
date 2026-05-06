@@ -4,8 +4,9 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
   Mic, Volume2, X, Bell, BellOff, Upload, Trash2, User, ShieldCheck, Headphones, Play,
   KeyRound, Copy, Check, RefreshCw, Smartphone, UserX, AlertTriangle, Lock,
-  Download, ExternalLink, Sliders, Video, MonitorUp,
+  Download, ExternalLink, Sliders, Video, MonitorUp, Activity, ChevronDown, ChevronRight,
 } from 'lucide-react';
+import { createMicPipeline, pickAudioFilterSettings } from '../utils/audioProcessing';
 import { modalVariants, overlayVariants, reducedVariants } from '../utils/motion';
 import {
   pushSupported, getPushStatus, enablePush, disablePush,
@@ -579,14 +580,19 @@ function AudioTab() {
   const [permissionBusy, setPermissionBusy] = useState(null);
   const [permissionError, setPermissionError] = useState('');
   const [deviceRefreshKey, setDeviceRefreshKey] = useState(0);
-  const [micLevel, setMicLevel] = useState({ percent: 0, db: -100 });
+  // micLevel.db — RMS уровень после всей цепочки фильтров (то, что услышит пир).
+  // gateOpen — true когда noise gate сейчас пропускает звук (для индикатора).
+  const [micLevel, setMicLevel] = useState({ percent: 0, db: -100, gateOpen: false });
   const [isTestingMic, setIsTestingMic] = useState(false);
   const [isTestingSpeaker, setIsTestingSpeaker] = useState(false);
-  const micStreamRef = useRef(null);
-  const audioContextRef = useRef(null);
-  const analyserRef = useRef(null);
-  const inputGainNodeRef = useRef(null);
-  const noiseGateRef = useRef(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  // Pipeline проживает на время теста микрофона. Тут лежат и AudioContext,
+  // и MediaStream'ы — pipeline.destroy() сам всё закроет.
+  const pipelineRef = useRef(null);
+  // Невидимый <audio> для loopback'а: подключаем к outputStream pipeline'а,
+  // чтобы юзер слышал ровно то, что услышит собеседник. Echo-cancellation
+  // при getUserMedia'е сглаживает риск обратной связи.
+  const loopbackAudioRef = useRef(null);
   const testAudioRef = useRef(null);
 
   const canPickOutput = typeof HTMLAudioElement !== 'undefined'
@@ -655,150 +661,136 @@ function AudioTab() {
     }
   };
 
-  // Визуализация уровня микрофона
+  // Визуализация уровня микрофона. Читаем pipeline.analyser, который стоит
+  // в самом конце цепочки — то есть видим именно то, что услышит пир.
+  // gateOpen вытягиваем из gateGain.gain.value: если ворота закрыты, индикатор
+  // погаснет (так юзер на глаз видит, как порог режет паузы).
   useEffect(() => {
-    let animationFrame;
-    if (!isTestingMic || !analyserRef.current) return;
-
-    const updateLevel = () => {
-      if (!analyserRef.current) return;
-      const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
-      analyserRef.current.getByteFrequencyData(dataArray);
-      const average = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
-      const level = Math.min(100, (average / 128) * 100);
-      
-      // Вычисляем RMS из time domain данных для более точных децибел
-      const timeData = new Uint8Array(analyserRef.current.fftSize);
-      analyserRef.current.getByteTimeDomainData(timeData);
-      let sum = 0;
-      for (let i = 0; i < timeData.length; i++) {
-        const x = (timeData[i] - 128) / 128; // нормализация -1..1
-        sum += x * x;
-      }
-      const rms = Math.sqrt(sum / timeData.length);
-      // Конвертируем RMS в децибелы (полная шкала -100..0 дБ)
-      const db = rms > 0 ? Math.max(-100, 20 * Math.log10(rms)) : -100;
-      setMicLevel({ percent: level, db: Math.round(db) });
-      
-      // Применяем шумодавку на основе порога
-      const threshold = settings.noiseThreshold ?? -50;
-      if (settings.noiseSuppression !== false && (micStreamRef.current?.noiseGate || noiseGateRef.current)) {
-        const gate = micStreamRef.current?.noiseGate || noiseGateRef.current;
-        if (db < threshold) {
-          // Полностью отключаем звук когда ниже порога
-          gate.gain.setValueAtTime(0, audioContextRef.current.currentTime);
-        } else {
-          // Включаем звук когда выше порога
-          gate.gain.setValueAtTime(1, audioContextRef.current.currentTime);
-        }
-      }
-      
-      animationFrame = requestAnimationFrame(updateLevel);
+    if (!isTestingMic) return undefined;
+    const pipeline = pipelineRef.current;
+    if (!pipeline) return undefined;
+    let raf = 0;
+    let cancelled = false;
+    const buf = new Float32Array(pipeline.analyser.fftSize);
+    const tick = () => {
+      if (cancelled) return;
+      try {
+        pipeline.analyser.getFloatTimeDomainData(buf as any);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i += 1) sum += buf[i] * buf[i];
+        const rms = Math.sqrt(sum / buf.length);
+        const db = rms > 0 ? Math.max(-100, 20 * Math.log10(rms)) : -100;
+        const percent = Math.min(100, Math.max(0, ((db + 60) / 60) * 100));
+        // Грубо «ворота открыты» — если RMS заметно выше порога. Только UI.
+        const threshold = settings.noiseThreshold ?? -55;
+        const gateOpen = db >= threshold;
+        setMicLevel({ percent, db: Math.round(db), gateOpen });
+      } catch { /* */ }
+      raf = requestAnimationFrame(tick);
     };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+  }, [isTestingMic, settings.noiseThreshold]);
 
-    updateLevel();
-    return () => cancelAnimationFrame(animationFrame);
-  }, [isTestingMic, settings.noiseThreshold, settings.noiseSuppression]);
-
-  // Очистка ресурсов при размонтировании
+  // Очистка при размонтировании панели — на случай, если юзер закрыл
+  // настройки, не остановив тест явно.
   useEffect(() => {
     return () => {
-      if (micStreamRef.current) {
-        micStreamRef.current.getTracks().forEach(track => track.stop());
+      if (pipelineRef.current) {
+        try { pipelineRef.current.destroy(); } catch { /* */ }
+        pipelineRef.current = null;
       }
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
+      if (loopbackAudioRef.current) {
+        try { loopbackAudioRef.current.pause(); } catch { /* */ }
+        try { loopbackAudioRef.current.srcObject = null; } catch { /* */ }
+        loopbackAudioRef.current = null;
       }
     };
   }, []);
 
-  // Обновление громкости микрофона во время теста
+  // Прокидывает новые настройки в живой pipeline во время теста.
+  // Пользователь крутит ползунки — слышит результат сразу, без рестарта.
   useEffect(() => {
-    if (isTestingMic && inputGainNodeRef.current) {
-      inputGainNodeRef.current.gain.value = settings.inputVolume ?? 1;
-    }
-  }, [isTestingMic, settings.inputVolume]);
+    if (!isTestingMic) return;
+    const pipeline = pipelineRef.current;
+    if (!pipeline) return;
+    try {
+      pipeline.updateSettings(pickAudioFilterSettings(settings));
+    } catch { /* */ }
+  }, [
+    isTestingMic,
+    settings.inputVolume,
+    settings.noiseSuppression,
+    settings.noiseThreshold,
+    settings.noiseGateHoldMs,
+    settings.noiseGateAttackMs,
+    settings.noiseGateReleaseMs,
+    settings.highPassFilter,
+    settings.highPassFrequency,
+    settings.compressorEnabled,
+    settings.compressorThreshold,
+    settings.compressorRatio,
+    settings.compressorAttack,
+    settings.compressorRelease,
+    settings.compressorKnee,
+    settings.makeupGainDb,
+  ]);
 
   const startMicTest = async () => {
     try {
-      const constraints = {
-        audio: {
-          deviceId: settings.inputDeviceId ? { exact: settings.inputDeviceId } : undefined,
-          echoCancellation: true,
-          noiseSuppression: settings.noiseSuppression !== false,
-          autoGainControl: true,
-        },
+      const audioConstraints: any = {
+        deviceId: settings.inputDeviceId && settings.inputDeviceId !== 'default'
+          ? { exact: settings.inputDeviceId }
+          : undefined,
+        echoCancellation: true,
+        // noiseSuppression на уровне браузера всегда включаем — наш gate
+        // работает ПОВЕРХ него, отрезая то, что NS не догасил.
+        noiseSuppression: true,
+        autoGainControl: true,
       };
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      micStreamRef.current = stream;
-      
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      audioContextRef.current = audioContext;
-      
-      const source = audioContext.createMediaStreamSource(stream);
-      
-      // Применяем громкость микрофона к источнику перед анализатором
-      const inputGainNode = audioContext.createGain();
-      inputGainNode.gain.value = settings.inputVolume ?? 1;
-      source.connect(inputGainNode);
-      inputGainNodeRef.current = inputGainNode;
-      
-      const analyser = audioContext.createAnalyser();
-      analyser.fftSize = 256;
-      inputGainNode.connect(analyser);
-      analyserRef.current = analyser;
-      
-      // Шумодавка на основе порога
-      const noiseGate = audioContext.createGain();
-      noiseGate.gain.value = 1;
-      
-      // Дополнительный high-pass фильтр для удаления низкочастотного шума
-      let highPassFilter = null;
-      if (settings.highPassFilter !== false) {
-        highPassFilter = audioContext.createBiquadFilter();
-        highPassFilter.type = 'highpass';
-        highPassFilter.frequency.value = 200; // отсекаем частоты ниже 200 Гц
-        highPassFilter.Q.value = 1;
-        inputGainNode.connect(highPassFilter);
-        highPassFilter.connect(noiseGate);
-      } else {
-        inputGainNode.connect(noiseGate);
+      const rawStream = await navigator.mediaDevices.getUserMedia({
+        audio: audioConstraints,
+      });
+      // Тот же createMicPipeline, что в реальном звонке (см. useCall/useGroupCall).
+      // Это гарантирует: что юзер слышит в тесте — то и услышит собеседник.
+      const pipeline = await createMicPipeline(rawStream, pickAudioFilterSettings(settings));
+      pipelineRef.current = pipeline;
+
+      // Loopback: HTMLAudioElement с outputStream pipeline'а. По умолчанию
+      // звук пойдёт в выбранное юзером устройство вывода (см. setSinkId).
+      const audioEl = document.createElement('audio');
+      audioEl.autoplay = true;
+      (audioEl as any).playsInline = true;
+      audioEl.srcObject = pipeline.outputStream;
+      // Делаем тише, чтобы не вызвать обратную связь с открытыми колонками.
+      audioEl.volume = 0.6;
+      if (canPickOutput && settings.outputDeviceId && settings.outputDeviceId !== 'default') {
+        try { await (audioEl as any).setSinkId?.(settings.outputDeviceId); } catch { /* */ }
       }
-      
-      // Loopback с delay для предотвращения захлёбывания
-      const delayNode = audioContext.createDelay(1.0);
-      delayNode.delayTime.value = 0.1; // 100ms задержка
-      const outputGainNode = audioContext.createGain();
-      outputGainNode.gain.value = 0.3; // 30% громкости для loopback
-      noiseGate.connect(delayNode);
-      delayNode.connect(outputGainNode);
-      outputGainNode.connect(audioContext.destination);
-      
-      noiseGateRef.current = noiseGate;
-      noiseGateRef.current.filter = highPassFilter;
-      
-      micStreamRef.current.noiseGate = noiseGate;
-      micStreamRef.current.analyser = analyser;
-      
+      try { await audioEl.play(); } catch { /* autoplay-policy: контекст всё равно живой */ }
+      loopbackAudioRef.current = audioEl;
+
       setIsTestingMic(true);
     } catch (err) {
       console.error('Mic test error:', err);
+      toast.error?.('Не удалось начать тест микрофона. Проверьте разрешения.');
     }
   };
 
   const stopMicTest = () => {
-    if (micStreamRef.current) {
-      micStreamRef.current.getTracks().forEach(track => track.stop());
-      micStreamRef.current = null;
+    if (pipelineRef.current) {
+      try { pipelineRef.current.destroy(); } catch { /* */ }
+      pipelineRef.current = null;
     }
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
+    if (loopbackAudioRef.current) {
+      try { loopbackAudioRef.current.pause(); } catch { /* */ }
+      try { loopbackAudioRef.current.srcObject = null; } catch { /* */ }
+      loopbackAudioRef.current = null;
     }
-    inputGainNodeRef.current = null;
-    noiseGateRef.current = null;
-    analyserRef.current = null;
-    setMicLevel({ percent: 0, db: -100 });
+    setMicLevel({ percent: 0, db: -100, gateOpen: false });
     setIsTestingMic(false);
   };
 
@@ -965,15 +957,17 @@ function AudioTab() {
             <div className="flex items-center gap-2 mb-1">
               <div className="flex-1 h-2 bg-bg-3 rounded-full overflow-hidden relative">
                 <div
-                  className="h-full bg-accent transition-all duration-100"
+                  className={`h-full transition-all duration-75 ${
+                    micLevel.gateOpen ? 'bg-emerald-500' : 'bg-slate-500'
+                  }`}
                   style={{ width: `${((micLevel.db + 100) / 100) * 100}%` }}
                 />
-                {/* Маркер порога шумодавки */}
+                {/* Маркер порога ворот */}
                 {settings.noiseSuppression !== false && (
                   <div
                     className="absolute top-0 h-full w-0.5 bg-red-400"
-                    style={{ left: `${((settings.noiseThreshold ?? -50) + 100) / 100 * 100}%` }}
-                    title={`Порог: ${settings.noiseThreshold ?? -50} дБ`}
+                    style={{ left: `${((settings.noiseThreshold ?? -55) + 100) / 100 * 100}%` }}
+                    title={`Порог ворот: ${settings.noiseThreshold ?? -55} дБ`}
                   />
                 )}
               </div>
@@ -982,7 +976,9 @@ function AudioTab() {
               </span>
             </div>
             <div className="text-[10px] text-slate-500">
-              Порог: {settings.noiseThreshold ?? -50} дБ
+              {micLevel.gateOpen
+                ? 'Ворота открыты — звук идёт собеседнику'
+                : `Ниже порога ${settings.noiseThreshold ?? -55} дБ — пир сейчас слышит тишину`}
             </div>
           </div>
         )}
@@ -1055,39 +1051,204 @@ function AudioTab() {
         </div>
       </div>
 
-      <div className="space-y-1.5">
+      <div className="space-y-3">
         <label className="text-xs text-slate-400 uppercase tracking-wider">
-          Шумодавка
+          Обработка микрофона
         </label>
-        <ToggleRow
-          title="Автоматическое подавление шума"
-          description="Уменьшает фоновый шум при звонках"
-          icon={<Mic size={16} />}
-          checked={settings.noiseSuppression !== false}
-          onChange={(v) => update({ noiseSuppression: v })}
-        />
-        <div className="pt-2">
-          <label className="text-[11px] text-slate-500">
-            Порог чувствительности (дБ)
-          </label>
-          <SliderRow
-            icon={null}
-            value={settings.noiseThreshold ?? -50}
-            min={-100}
-            max={0}
-            step={1}
-            unit=" дБ"
-            onChange={(v) => update({ noiseThreshold: v })}
-            disabled={settings.noiseSuppression === false}
-          />
+        <div className="text-[11px] text-slate-500 -mt-1.5">
+          Цепочка: HighPass → Compressor → NoiseGate → MakeupGain. Применяется
+          к исходящему звуку звонка. Кнопка «Проверить микрофон» воспроизводит
+          ровно тот же результат, что услышит собеседник.
         </div>
+
+        {/* High-pass --------------------------------------------- */}
         <ToggleRow
           title="Высокочастотный фильтр"
-          description="Удаляет низкочастотный шум (гудение, вентилятор)"
+          description="Срезает низкочастотный гул (вентилятор, гудение, бубнение в стол)"
           icon={<Sliders size={16} />}
           checked={settings.highPassFilter !== false}
           onChange={(v) => update({ highPassFilter: v })}
         />
+        {settings.highPassFilter !== false && (
+          <div className="pl-7">
+            <label className="text-[11px] text-slate-500">
+              Частота среза
+            </label>
+            <SliderRow
+              icon={null}
+              value={settings.highPassFrequency ?? 100}
+              min={20}
+              max={400}
+              step={5}
+              unit=" Гц"
+              onChange={(v) => update({ highPassFrequency: v })}
+            />
+          </div>
+        )}
+
+        {/* Compressor -------------------------------------------- */}
+        <ToggleRow
+          title="Компрессор"
+          description="Выравнивает громкость: тихое подтягивает, громкое прижимает (как в OBS / Discord)"
+          icon={<Activity size={16} />}
+          checked={settings.compressorEnabled !== false}
+          onChange={(v) => update({ compressorEnabled: v })}
+        />
+        {settings.compressorEnabled !== false && (
+          <div className="pl-7 space-y-2">
+            <div>
+              <label className="text-[11px] text-slate-500">Порог (threshold)</label>
+              <SliderRow
+                icon={null}
+                value={settings.compressorThreshold ?? -24}
+                min={-60}
+                max={0}
+                step={1}
+                unit=" дБ"
+                onChange={(v) => update({ compressorThreshold: v })}
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-slate-500">Степень сжатия (ratio)</label>
+              <SliderRow
+                icon={null}
+                value={settings.compressorRatio ?? 4}
+                min={1}
+                max={20}
+                step={0.5}
+                unit=":1"
+                onChange={(v) => update({ compressorRatio: v })}
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-slate-500">Атака</label>
+              <SliderRow
+                icon={null}
+                value={settings.compressorAttack ?? 5}
+                min={0}
+                max={100}
+                step={1}
+                unit=" мс"
+                onChange={(v) => update({ compressorAttack: v })}
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-slate-500">Спад (release)</label>
+              <SliderRow
+                icon={null}
+                value={settings.compressorRelease ?? 50}
+                min={0}
+                max={500}
+                step={5}
+                unit=" мс"
+                onChange={(v) => update({ compressorRelease: v })}
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-slate-500">Перегиб (knee)</label>
+              <SliderRow
+                icon={null}
+                value={settings.compressorKnee ?? 30}
+                min={0}
+                max={40}
+                step={1}
+                unit=" дБ"
+                onChange={(v) => update({ compressorKnee: v })}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Noise gate -------------------------------------------- */}
+        <ToggleRow
+          title="Шумовые ворота (gate)"
+          description="Полностью режет звук между фразами, когда вы молчите"
+          icon={<Mic size={16} />}
+          checked={settings.noiseSuppression !== false}
+          onChange={(v) => update({ noiseSuppression: v })}
+        />
+        {settings.noiseSuppression !== false && (
+          <div className="pl-7">
+            <label className="text-[11px] text-slate-500">
+              Порог открытия ворот
+            </label>
+            <SliderRow
+              icon={null}
+              value={settings.noiseThreshold ?? -55}
+              min={-100}
+              max={0}
+              step={1}
+              unit=" дБ"
+              onChange={(v) => update({ noiseThreshold: v })}
+            />
+          </div>
+        )}
+
+        {/* Advanced (expandable) -------------------------------- */}
+        <button
+          type="button"
+          onClick={() => setAdvancedOpen((v) => !v)}
+          className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200"
+        >
+          {advancedOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          {advancedOpen ? 'Скрыть' : 'Показать'} расширенные параметры
+        </button>
+        {advancedOpen && (
+          <div className="space-y-2 pl-1">
+            <div>
+              <label className="text-[11px] text-slate-500">Make-up gain (после компрессора)</label>
+              <SliderRow
+                icon={null}
+                value={settings.makeupGainDb ?? 0}
+                min={-12}
+                max={12}
+                step={0.5}
+                unit=" дБ"
+                onChange={(v) => update({ makeupGainDb: v })}
+              />
+            </div>
+            {settings.noiseSuppression !== false && (
+              <>
+                <div>
+                  <label className="text-[11px] text-slate-500">Hangover ворот (как долго держать открытыми после паузы)</label>
+                  <SliderRow
+                    icon={null}
+                    value={settings.noiseGateHoldMs ?? 200}
+                    min={0}
+                    max={1000}
+                    step={10}
+                    unit=" мс"
+                    onChange={(v) => update({ noiseGateHoldMs: v })}
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-slate-500">Атака ворот (плавность открытия)</label>
+                  <SliderRow
+                    icon={null}
+                    value={settings.noiseGateAttackMs ?? 10}
+                    min={0}
+                    max={200}
+                    step={1}
+                    unit=" мс"
+                    onChange={(v) => update({ noiseGateAttackMs: v })}
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-slate-500">Спад ворот (плавность закрытия)</label>
+                  <SliderRow
+                    icon={null}
+                    value={settings.noiseGateReleaseMs ?? 80}
+                    min={0}
+                    max={500}
+                    step={5}
+                    unit=" мс"
+                    onChange={(v) => update({ noiseGateReleaseMs: v })}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </section>
   );

@@ -132,16 +132,57 @@ export function getScreenPreset(key) {
 // Захватить экран с выбранным пресетом. Chrome обычно отдаёт
 // разрешение источника «как есть», но ideal-поля подсказывают браузеру
 // верхнюю планку (иначе браузер может скипалировать вниз).
+//
+// Про звук — важная деталь, из-за которой пользователи спрашивают
+// «почему стрим из браузера передаёт звук другого браузера на одном ПК»:
+//
+//   • При выборе «Окно» (Window) или «Весь экран» (Screen) Chromium на
+//     Windows захватывает системный аудио-микшер. Изолировать звук
+//     одного приложения от другого через getDisplayMedia невозможно —
+//     это ограничение ОС/браузера, не наше.
+//   • Чтобы захватить звук ТОЛЬКО одной вкладки/приложения, юзер должен
+//     в системном диалоге выбрать «Вкладка» (Tab) и поставить галочку
+//     «Поделиться звуком вкладки». Тогда система отдаёт только её аудио.
+//
+// Мы выставляем максимально качественные ограничения (48k stereo, без AEC),
+// чтобы музыка/игры передавались без артефактов, и подсказку
+// `systemAudio: 'include'` для Chromium.
 export async function captureDisplay(presetKey, includeAudio = false) {
   const preset = getScreenPreset(presetKey);
-  return navigator.mediaDevices.getDisplayMedia({
+  // Если просим аудио — задаём «studio»-настройки. Применять
+  // echoCancellation/noiseSuppression к системному звуку нельзя, иначе
+  // музыка и эффекты будут «жёванные».
+  const audio = includeAudio
+    ? {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        sampleRate: 48000,
+        channelCount: 2,
+      }
+    : false;
+
+  /** @type {any} */
+  const constraints = {
     video: {
       width:     { ideal: preset.width },
       height:    { ideal: preset.height },
       frameRate: { ideal: preset.frameRate, max: preset.frameRate },
     },
-    audio: includeAudio,
-  });
+    audio,
+    // Подсказки Chromium 107+: разрешаем юзеру выбрать любую поверхность
+    // (вкладку/окно/экран) и переключаться между вкладками во время стрима.
+    selfBrowserSurface: 'include',
+    surfaceSwitching: 'include',
+    // 'include' — намекаем, что хотим системный звук (если пользователь
+    // выбирает Tab — это её звук, если Screen — весь системный микшер).
+    // Без этого Chromium <115 в части сборок выключает аудио-чекбокс.
+    systemAudio: includeAudio ? 'include' : 'exclude',
+    // Опциональный флаг (Chrome 109+): не глушит звук в локальных колонках,
+    // когда стримим вкладку. Поведение по умолчанию `true` — звук падает
+    // только в стрим, и юзер сам себя не слышит. Оставляем дефолт.
+  };
+  return navigator.mediaDevices.getDisplayMedia(constraints);
 }
 
 // Применить maxBitrate к video sender'у. Без этого WebRTC берёт
