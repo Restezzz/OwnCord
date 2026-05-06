@@ -8,6 +8,10 @@ import {
   createPlaceholderAudioTrack,
   createPlaceholderVideoTrack,
 } from '../utils/media';
+import {
+  createMicPipeline,
+  pickAudioFilterSettings,
+} from '../utils/audioProcessing';
 import { useSpeakingDetector } from './useSpeakingDetector';
 
 /**
@@ -38,7 +42,7 @@ import { useSpeakingDetector } from './useSpeakingDetector';
  *   socket.on('groupcall:ended',       { groupId, callId })
  *   socket.on('rtc:offer'|'rtc:answer'|'rtc:ice', { from, callId, groupId, … })
  */
-export function useGroupCall({ socket, selfUser, toast, sounds }) {
+export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
   const [state, setState] = useState('idle');      // 'idle' | 'joining' | 'in-call'
   const [group, setGroup] = useState(null);
   const [callId, setCallId] = useState(null);
@@ -46,9 +50,8 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
   const [remotes, setRemotes] = useState({});      // userId -> MediaStream
   const [participants, setParticipants] = useState([]);
   // userId -> { mic, camera, screen, screenAudio } — что пиры сейчас шлют.
-  // Нужно UI'у, чтобы знать, у кого включён звук стрима (per-peer ползунок
-  // громкости в GroupCallView применяем только к таким пирам — голос
-  // регулируется лишь deafen-ом).
+  // Нужно UI'у, чтобы знать, у кого включён звук стрима: deafen глушит
+  // голоса остальных участников, но не должен глушить screen-audio.
   const [peersMedia, setPeersMedia] = useState({});
   const [muted, setMuted] = useState(false);
   // Локальный «глухой режим» — только для UI: все <audio> получают
@@ -62,6 +65,10 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
   const iceQueueRef = useRef(new Map());      // userId -> RTCIceCandidate[]
   const localStreamRef = useRef(null);
   const audioTrackRef = useRef(null);
+  // Pipeline обработки исходящего микрофона (см. utils/audioProcessing).
+  // audioTrackRef.current = pipeline.outputTrack — именно его кладём на
+  // sender'ы. Pipeline проживает столько же, сколько активный звонок.
+  const micPipelineRef = useRef(null);
   const videoTrackRef = useRef(null);   // камера
   const screenTrackRef = useRef(null);
   const screenAudioDeafenRef = useRef(false); // Отслеживаем автоматически включённый deafen для звука экрана
@@ -76,6 +83,10 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
   const stateRef = useRef(state);
   const participantsRef = useRef([]);
   const iceServersRef = useRef(null);
+  // Watchdog ICE на каждого пира — иначе мобильные/Yandex могут залипать в
+  // checking-state без 'failed'. peerId -> timeout id.
+  const iceTimeoutsRef = useRef(new Map());
+  const ICE_CONNECT_TIMEOUT_MS = 45_000;
 
   // Какой трек сейчас должен идти на video-сендер (экран приоритетнее камеры).
   const currentVideoTrack = () => screenTrackRef.current || videoTrackRef.current;
@@ -147,11 +158,17 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
         pc.ontrack = null;
         pc.onicecandidate = null;
         pc.onconnectionstatechange = null;
+        pc.oniceconnectionstatechange = null;
         pc.close();
       } catch { /* ignore */ }
       pcsRef.current.delete(userId);
     }
     iceQueueRef.current.delete(userId);
+    const tid = iceTimeoutsRef.current.get(userId);
+    if (tid) {
+      clearTimeout(tid);
+      iceTimeoutsRef.current.delete(userId);
+    }
     clearRemoteForPeer(userId);
   }, [clearRemoteForPeer]);
 
@@ -161,7 +178,19 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     pcsRef.current.clear();
     iceQueueRef.current.clear();
 
-    // остановить треки
+    // Снимаем все ICE-watchdog'и — иначе они стрельнут в hangup'ах после
+    // того, как мы уже закрыли соединения.
+    for (const tid of iceTimeoutsRef.current.values()) {
+      clearTimeout(tid);
+    }
+    iceTimeoutsRef.current.clear();
+
+    // остановить треки. Pipeline сам остановит свои raw-треки и закроет
+    // AudioContext в destroy() — поэтому делаем destroy ДО обнуления refs.
+    if (micPipelineRef.current) {
+      try { micPipelineRef.current.destroy(); } catch { /* */ }
+      micPipelineRef.current = null;
+    }
     const ls = localStreamRef.current;
     if (ls) ls.getTracks().forEach((t) => { try { t.stop(); } catch { /* */ } });
     localStreamRef.current = null;
@@ -310,6 +339,12 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     pc.onconnectionstatechange = () => {
       const s = pc.connectionState;
       if (s === 'connected') {
+        // Соединение установлено — снимаем watchdog по этому пиру.
+        const tid = iceTimeoutsRef.current.get(peerId);
+        if (tid) {
+          clearTimeout(tid);
+          iceTimeoutsRef.current.delete(peerId);
+        }
         // Свежеподключённому пиру нужно отдать наше актуальное media-state,
         // иначе у него ползунок громкости стрима не будет понимать, что
         // у нас идёт screen-audio (а не голос).
@@ -319,6 +354,44 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
         closePeer(peerId);
       }
     };
+
+    // Дублируем как ice-state — старые Chromium-сборки (Yandex, WebView)
+    // не апдейтят connectionState, а ice-state даёт сигнал перехода.
+    pc.oniceconnectionstatechange = () => {
+      const s = pc.iceConnectionState;
+      if (s === 'connected' || s === 'completed') {
+        const tid = iceTimeoutsRef.current.get(peerId);
+        if (tid) {
+          clearTimeout(tid);
+          iceTimeoutsRef.current.delete(peerId);
+        }
+      }
+      if (s === 'failed') {
+        const tid = iceTimeoutsRef.current.get(peerId);
+        if (tid) {
+          clearTimeout(tid);
+          iceTimeoutsRef.current.delete(peerId);
+        }
+        // В групповом звонке не роняем весь сейшн — закрываем только этого пира.
+        // UI увидит peer-left от сервера или просто пустую плитку.
+        closePeer(peerId);
+      }
+    };
+
+    // Watchdog: если ICE этого пира за 45с не пришёл в 'connected'/'completed' —
+    // закрываем PC и убираем плитку. Без этого один «зависший» пир (мобильный
+    // оператор/Yandex) держит у нас «Соединение…» на его плитке вечно.
+    const tid = setTimeout(() => {
+      iceTimeoutsRef.current.delete(peerId);
+      const cur = pcsRef.current.get(peerId);
+      if (cur !== pc) return;
+      const cs = pc.connectionState;
+      const ics = pc.iceConnectionState;
+      if (cs === 'connected' || ics === 'connected' || ics === 'completed') return;
+      console.warn(`groupcall: peer ${peerId} ICE timeout, closing`);
+      closePeer(peerId);
+    }, ICE_CONNECT_TIMEOUT_MS);
+    iceTimeoutsRef.current.set(peerId, tid);
 
     // Стартовый offer инициирует тот, чей id меньше (детерминированно).
     if (isInitiator) {
@@ -352,19 +425,66 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
       setWithVideo(!!wantVideo);
 
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-          video: wantVideo ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
-        });
-        localStreamRef.current = stream;
-        audioTrackRef.current = stream.getAudioTracks()[0] || null;
-        videoTrackRef.current = stream.getVideoTracks()[0] || null;
+        const audioConstraint = {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          ...(settings?.inputDeviceId && settings.inputDeviceId !== 'default'
+            ? { deviceId: { exact: settings.inputDeviceId } }
+            : {}),
+        };
+        let rawStream;
+        try {
+          rawStream = await navigator.mediaDevices.getUserMedia({
+            audio: audioConstraint,
+            video: wantVideo ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
+          });
+        } catch (err) {
+          // Если deviceId стал невалидным (микрофон сменили/отключили) —
+          // пробуем без exact-deviceId, иначе вызов ляжет в OverconstrainedError.
+          if (err?.name === 'OverconstrainedError' || err?.name === 'NotFoundError') {
+            rawStream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+              },
+              video: wantVideo ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
+            });
+          } else {
+            throw err;
+          }
+        }
+
+        const rawMic = rawStream.getAudioTracks()[0] || null;
+        videoTrackRef.current = rawStream.getVideoTracks()[0] || null;
+
+        // Прогоняем микрофон через AudioContext-pipeline (HighPass →
+        // Compressor → NoiseGate → MakeupGain). На sender'ы попадает
+        // processed-трек; raw-mic живёт внутри pipeline и завершится в
+        // pipeline.destroy().
+        let processedMic = rawMic;
+        if (rawMic) {
+          try {
+            const pipeline = await createMicPipeline(
+              new MediaStream([rawMic]),
+              pickAudioFilterSettings(settings),
+            );
+            micPipelineRef.current = pipeline;
+            processedMic = pipeline.outputTrack;
+          } catch (e) {
+            console.warn('Mic pipeline failed, falling back to raw track:', e);
+            processedMic = rawMic;
+          }
+        }
+        audioTrackRef.current = processedMic;
+
+        const ls = new MediaStream();
+        if (processedMic) ls.addTrack(processedMic);
+        if (videoTrackRef.current) ls.addTrack(videoTrackRef.current);
+        localStreamRef.current = ls;
         if (videoTrackRef.current) setCameraOn(true);
-        setLocalStream(stream);
+        setLocalStream(ls);
 
         // Отправляем серверу запрос на присоединение
         const ack = await new Promise<any>((resolve) => {
@@ -390,7 +510,7 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
         cleanup();
       }
     },
-    [cleanup, createPeerConnection, selfUser.id, socket, sounds, toast],
+    [cleanup, createPeerConnection, selfUser.id, settings, socket, sounds, toast],
   );
 
   const leave = useCallback(() => {
@@ -408,6 +528,33 @@ export function useGroupCall({ socket, selfUser, toast, sounds }) {
     setMuted(!t.enabled);
     setTimeout(emitMyMedia, 0);
   }, [emitMyMedia]);
+
+  // Прокидываем изменения фильтров в живой mic-pipeline без пересборки.
+  // useEffect-сравнение по плоским ключам, чтобы reconciler не дёргался
+  // на каждой мутации settings (там есть карты userVolumes/streamVolumes).
+  useEffect(() => {
+    const pipeline = micPipelineRef.current;
+    if (!pipeline) return;
+    try {
+      pipeline.updateSettings(pickAudioFilterSettings(settings));
+    } catch { /* ignore */ }
+  }, [
+    settings?.inputVolume,
+    settings?.noiseSuppression,
+    settings?.noiseThreshold,
+    settings?.noiseGateHoldMs,
+    settings?.noiseGateAttackMs,
+    settings?.noiseGateReleaseMs,
+    settings?.highPassFilter,
+    settings?.highPassFrequency,
+    settings?.compressorEnabled,
+    settings?.compressorThreshold,
+    settings?.compressorRatio,
+    settings?.compressorAttack,
+    settings?.compressorRelease,
+    settings?.compressorKnee,
+    settings?.makeupGainDb,
+  ]);
 
   const toggleDeafen = useCallback(() => {
     setDeafened((d) => !d);

@@ -18,10 +18,27 @@ const DEFAULTS = {
   soundDisconnect: true,       // короткий "даун" при завершении
   // Глобальная громкость UI-звуков (помимо outputVolume).
   uiVolume: 0.8,               // 0..1
-  // Настройки шумодавки
-  noiseSuppression: true,      // автоматическое подавление шума
-  noiseThreshold: -50,         // порог чувствительности в дБ (-100..0)
-  highPassFilter: true,        // высокочастотный фильтр для удаления низкочастотного шума
+  // Индивидуальные громкости сохраняются между звонками.
+  // Ключ — userId, значение — проценты 0..100.
+  userVolumes: {},
+  streamVolumes: {},
+  // Настройки исходящей аудио-цепочки (примерно как в OBS).
+  // Цепочка: HighPass → Compressor → NoiseGate → MakeupGain. Применяется
+  // как в звонке (useCall/useGroupCall), так и в тесте микрофона.
+  noiseSuppression: true,      // включить шумовые ворота (gate)
+  noiseThreshold: -55,         // порог ворот в дБ (-100..0)
+  noiseGateHoldMs: 200,        // hangover после падения ниже порога, мс
+  noiseGateAttackMs: 10,       // плавное открытие, мс (анти-щелчок)
+  noiseGateReleaseMs: 80,      // плавное закрытие, мс
+  highPassFilter: true,        // вырезать низкочастотный гул (вентилятор и т.п.)
+  highPassFrequency: 100,      // частота среза HP, Гц (20..400)
+  compressorEnabled: true,     // компрессор: выравнивает пики и тихие места
+  compressorThreshold: -24,    // порог срабатывания, дБ (как в OBS)
+  compressorRatio: 4,          // степень сжатия (1 — без эффекта)
+  compressorAttack: 5,         // атака, мс
+  compressorRelease: 50,       // спад, мс
+  compressorKnee: 30,          // мягкий перегиб, дБ
+  makeupGainDb: 0,             // добавочное усиление после компрессора, дБ
 };
 
 function load() {

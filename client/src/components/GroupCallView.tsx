@@ -155,16 +155,13 @@ function Tile({
 }
 
 export default function GroupCallView({ call, usersById, selfId }) {
-  const { settings } = useSettings();
+  const { settings, update } = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [qualityOpen, setQualityOpen] = useState(false);
   // pinnedKey: 'self' | userId | null. Когда запинен участник —
   // его плитка растягивается на всё основное поле, остальные
   // уходят в верхний стрип.
   const [pinnedKey, setPinnedKey] = useState(null);
-  // Per-peer громкость стрима (0..100). Применяется только когда у пира
-  // на самом деле идёт screenAudio — голос регулируется лишь deafen-ом.
-  const [streamVolumes, setStreamVolumes] = useState<Record<number, number>>({});
   const [streamVolumeMenu, setStreamVolumeMenu] = useState<{ x: number; y: number; userId: number } | null>(null);
   const {
     state, group, localStream, remotes, participants, peersMedia,
@@ -191,15 +188,15 @@ export default function GroupCallView({ call, usersById, selfId }) {
     if (!participants.includes(pinnedKey)) setPinnedKey(null);
   }, [participants, pinnedKey]);
 
-  // Если у пира, для которого сейчас открыто меню громкости, пропал
-  // screenAudio (или он вообще ушёл из звонка) — закрываем меню.
+  // Если участник, для которого сейчас открыто меню громкости, ушёл —
+  // закрываем меню.
   useEffect(() => {
     if (!streamVolumeMenu) return;
     const uid = streamVolumeMenu.userId;
-    if (!participants.includes(uid) || !peersMedia?.[uid]?.screenAudio) {
+    if (!participants.includes(uid)) {
       setStreamVolumeMenu(null);
     }
-  }, [streamVolumeMenu, participants, peersMedia]);
+  }, [streamVolumeMenu, participants]);
 
   if (state === 'idle') return null;
 
@@ -237,15 +234,10 @@ export default function GroupCallView({ call, usersById, selfId }) {
     const u = usersById?.[t.userId]
       || group?.members?.find((m) => m.id === t.userId)
       || { id: t.userId, displayName: `#${t.userId}` };
-    // ПКМ открывает меню громкости стрима только если у пира сейчас идёт
-    // звук экрана. На голосе/камере без звука слайдер бесполезен —
-    // отдаём системное контекстное меню браузеру.
-    const onTileContextMenu = peersMedia?.[t.userId]?.screenAudio
-      ? (e: React.MouseEvent) => {
-          e.preventDefault();
-          setStreamVolumeMenu({ x: e.clientX, y: e.clientY, userId: t.userId });
-        }
-      : undefined;
+    const onTileContextMenu = (e: React.MouseEvent) => {
+      e.preventDefault();
+      setStreamVolumeMenu({ x: e.clientX, y: e.clientY, userId: t.userId });
+    };
     return (
       <Tile
         key={`tile-${t.userId}${opts.suffix || ''}`}
@@ -297,24 +289,21 @@ export default function GroupCallView({ call, usersById, selfId }) {
           </div>
         )}
 
-        {/* Невидимые аудио-элементы для каждого пира (кроме self).
-            Множитель ползунка стрима применяется только когда пир сейчас
-            транслирует звук экрана; голос всегда идёт на полной громкости
-            (settings.outputVolume) и регулируется только deafen-кнопкой. */}
+        {/* Невидимые аудио-элементы для каждого пира (кроме self). */}
         {participants
           .filter((id) => id !== selfId)
           .map((uid) => {
             const base = settings.outputVolume ?? 1;
-            const streamMul = peersMedia?.[uid]?.screenAudio
-              ? Math.max(0, Math.min(1, (streamVolumes[uid] ?? 100) / 100))
-              : 1;
+            const hasScreenAudio = !!peersMedia?.[uid]?.screenAudio;
+            const userMul = Math.max(0, Math.min(1, (settings.userVolumes?.[uid] ?? 100) / 100));
+            const streamMul = Math.max(0, Math.min(1, (settings.streamVolumes?.[uid] ?? 100) / 100));
             return (
               <RemoteAudio
                 key={`a-${uid}`}
                 stream={remotes[uid]}
                 sinkId={settings.outputDeviceId}
-                volume={base * streamMul}
-                muted={deafened}
+                volume={base * (hasScreenAudio ? streamMul : userMul)}
+                muted={deafened && !hasScreenAudio}
               />
             );
           })}
@@ -402,13 +391,15 @@ export default function GroupCallView({ call, usersById, selfId }) {
         }}
       />
 
-      {/* Меню громкости стрима конкретного участника */}
+      {/* Меню громкости конкретного участника */}
       {streamVolumeMenu && (() => {
         const uid = streamVolumeMenu.userId;
         const u = usersById?.[uid]
           || group?.members?.find((m) => m.id === uid)
           || { id: uid, displayName: `#${uid}` };
-        const v = streamVolumes[uid] ?? 100;
+        const userVolume = settings.userVolumes?.[uid] ?? 100;
+        const streamVolume = settings.streamVolumes?.[uid] ?? 100;
+        const hasScreenAudio = !!peersMedia?.[uid]?.screenAudio;
         return (
           <>
             <div
@@ -422,32 +413,58 @@ export default function GroupCallView({ call, usersById, selfId }) {
             >
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm font-medium truncate pr-2">
-                  Громкость стрима · {getDisplayName(u)}
+                  Громкость · {getDisplayName(u)}
                 </span>
                 <button
                   onClick={() => setStreamVolumeMenu(null)}
                   className="text-slate-400 hover:text-white"
+                  aria-label="Закрыть меню громкости"
                 >
                   <X size={16} />
                 </button>
               </div>
+              <label className="block text-xs text-slate-400 mb-1">Пользователь</label>
               <input
                 type="range"
                 min="0"
                 max="100"
-                value={v}
+                value={userVolume}
                 onChange={(e) => {
                   const nv = Number(e.target.value);
-                  setStreamVolumes((prev) => ({ ...prev, [uid]: nv }));
+                  update({ userVolumes: { ...(settings.userVolumes || {}), [uid]: nv } });
                 }}
                 className="range w-full"
-                style={{ '--range-progress': `${v}%` } as React.CSSProperties}
+                aria-label="Громкость пользователя"
+                style={{ '--range-progress': `${userVolume}%` } as React.CSSProperties}
               />
               <div className="flex justify-between text-xs text-slate-400 mt-1">
                 <span>0%</span>
-                <span>{v}%</span>
+                <span>{userVolume}%</span>
                 <span>100%</span>
               </div>
+              {hasScreenAudio && (
+                <div className="mt-4">
+                  <label className="block text-xs text-slate-400 mb-1">Стрим</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={streamVolume}
+                    onChange={(e) => {
+                      const nv = Number(e.target.value);
+                      update({ streamVolumes: { ...(settings.streamVolumes || {}), [uid]: nv } });
+                    }}
+                    className="range w-full"
+                    aria-label="Громкость стрима"
+                    style={{ '--range-progress': `${streamVolume}%` } as React.CSSProperties}
+                  />
+                  <div className="flex justify-between text-xs text-slate-400 mt-1">
+                    <span>0%</span>
+                    <span>{streamVolume}%</span>
+                    <span>100%</span>
+                  </div>
+                </div>
+              )}
             </div>
           </>
         );
