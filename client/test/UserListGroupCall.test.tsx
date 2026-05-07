@@ -12,6 +12,13 @@ const groups = [
   { id: 11, name: 'Beta',  members: [{ id: 1 }, { id: 2 }, { id: 3 }] },
 ];
 
+function expectTextBefore(container: HTMLElement, first: string, second: string) {
+  const text = container.textContent || '';
+  expect(text.indexOf(first)).toBeGreaterThanOrEqual(0);
+  expect(text.indexOf(second)).toBeGreaterThanOrEqual(0);
+  expect(text.indexOf(first)).toBeLessThan(text.indexOf(second));
+}
+
 describe('UserList — групповой звонок индикатор', () => {
   it('показывает «Идёт звонок» только в активной группе', () => {
     render(
@@ -55,5 +62,41 @@ describe('UserList — групповой звонок индикатор', () =
     );
     // Не падает и не показывает индикатор.
     expect(screen.queryByText('Идёт звонок')).toBeNull();
+  });
+
+  it('сортирует группы внутри секции по последней активности', () => {
+    const { container } = render(
+      <UserList
+        users={users}
+        groups={groups}
+        selfId={1}
+        selected={null}
+        lastActivityByChat={{ 'g:10': 100, 'g:11': 200 }}
+      />,
+    );
+
+    expectTextBefore(container, 'Beta', 'Alpha');
+  });
+
+  it('сортирует пользователей внутри online/offline секций по последней активности', () => {
+    const list = [
+      { id: 1, username: 'me', displayName: 'Me', online: true },
+      { id: 2, username: 'bob', displayName: 'Bob', online: true, lastActivityAt: 100 },
+      { id: 3, username: 'cara', displayName: 'Cara', online: true, lastActivityAt: 300 },
+      { id: 4, username: 'dan', displayName: 'Dan', online: false, lastActivityAt: 100 },
+      { id: 5, username: 'eve', displayName: 'Eve', online: false, lastActivityAt: 400 },
+    ];
+    const { container } = render(
+      <UserList
+        users={list}
+        groups={[]}
+        selfId={1}
+        selected={null}
+        lastActivityByChat={{ 'u:2': 500 }}
+      />,
+    );
+
+    expectTextBefore(container, 'Bob', 'Cara');
+    expectTextBefore(container, 'Eve', 'Dan');
   });
 });

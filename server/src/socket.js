@@ -175,6 +175,36 @@ export function attachSocket(httpServer) {
 
     // --- Direct/group сообщения ---------------------------------------------
     // to — peer-id (DM) ИЛИ groupId — один из двух должен быть указан.
+    socket.on('chat:typing', (payload) => {
+      const { to, groupId, typing } = payload || {};
+      if (typeof typing !== 'boolean') return;
+
+      const toGroup = typeof groupId === 'number';
+      const toUser = typeof to === 'number';
+      if (toGroup === toUser) return;
+
+      if (toUser) {
+        if (to === me.id) return;
+        const peer = db.prepare('SELECT id FROM users WHERE id = ?').get(to);
+        if (!peer) return;
+        io.to(roomOf(to)).emit('chat:typing', { from: me.id, typing });
+        return;
+      }
+
+      const membership = db
+        .prepare('SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?')
+        .get(groupId, me.id);
+      if (!membership) return;
+
+      const memberIds = db
+        .prepare('SELECT user_id FROM group_members WHERE group_id = ? AND user_id != ?')
+        .all(groupId, me.id)
+        .map((r) => r.user_id);
+      for (const uid of memberIds) {
+        io.to(roomOf(uid)).emit('chat:typing', { from: me.id, groupId, typing });
+      }
+    });
+
     socket.on('dm:send', ({ to, groupId, content }, ack) => {
       if (typeof content !== 'string') return ack?.({ error: 'bad payload' });
       const trimmed = content.trim();

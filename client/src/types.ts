@@ -6,6 +6,7 @@ export type User = {
   displayName?: string | null;
   avatarPath?: string | null;
   createdAt?: number;
+  lastActivityAt?: number | null;
   online?: boolean;
   deleted?: boolean;
   self?: boolean;
@@ -131,6 +132,7 @@ export type CallState = 'idle' | 'calling' | 'incoming' | 'connecting' | 'in-cal
 export type GroupCallState = 'idle' | 'joining' | 'in-call';
 
 export type ClientToServerEvents = {
+  'chat:typing': (payload: { to?: number; groupId?: number; typing: boolean }) => void;
   'dm:send': (
     payload: { to?: number; groupId?: number; content: string },
     ack?: (ack: ApiAck<{ message?: Message }>) => void
@@ -173,6 +175,7 @@ export type ServerToClientEvents = {
   'dm:delete': (payload: { id: number; senderId: number; receiverId: number | null; groupId: number | null }) => void;
   'dm:remove': (payload: { id: number; senderId: number; receiverId: number | null; groupId: number | null }) => void;
   'dm:reaction': (payload: { messageId: number; reactions: MessageReaction[] }) => void;
+  'chat:typing': (payload: { from: number; groupId?: number; typing: boolean }) => void;
   'profile:self': (user: User) => void;
   'mutes:update': (payload: { ids: number[] }) => void;
   'account:deleted': () => void;

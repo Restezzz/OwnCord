@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Phone, Video, ArrowLeft, Send, Mic, Pencil, Trash2, Paperclip,
   Users as UsersIcon, Settings as SettingsIcon, X, File as FileIcon, Smile,
@@ -18,6 +18,8 @@ function formatLimit(bytes) {
   return `${(mb / 1024).toFixed(1)} ГБ`;
 }
 
+const TYPING_SEND_INTERVAL_MS = 1800;
+
 export default function ChatPanel({
   peer,
   group,
@@ -36,6 +38,8 @@ export default function ChatPanel({
   onShowProfile,
   onShowGroupSettings,
   onShowGroupMemberProfile,
+  onTypingChange = null,
+  typingUsers = [],
   onStartGroupCall,
   onJoinGroupCall,
   groupCallActive = false,
@@ -58,6 +62,8 @@ export default function ChatPanel({
   const scrollRef = useRef(null);
   const fileInputRef = useRef(null);
   const dropZoneRef = useRef(null);
+  const typingActiveRef = useRef(false);
+  const lastTypingSentAtRef = useRef(0);
 
   const isGroup = !!group;
   const target = isGroup ? group : peer;
@@ -91,6 +97,30 @@ export default function ChatPanel({
     setPendingAttachments([]);
   }, [target?.id, isGroup]);
 
+  const stopTyping = useCallback(() => {
+    if (!typingActiveRef.current) return;
+    onTypingChange?.(false);
+    typingActiveRef.current = false;
+    lastTypingSentAtRef.current = 0;
+  }, [onTypingChange]);
+
+  const sendTypingStart = useCallback(() => {
+    const now = Date.now();
+    if (
+      typingActiveRef.current
+      && now - lastTypingSentAtRef.current < TYPING_SEND_INTERVAL_MS
+    ) {
+      return;
+    }
+    onTypingChange?.(true);
+    typingActiveRef.current = true;
+    lastTypingSentAtRef.current = now;
+  }, [onTypingChange]);
+
+  useEffect(() => () => {
+    stopTyping();
+  }, [stopTyping, target?.id, isGroup]);
+
   if (!target) {
     return (
       <div className="h-full grid place-items-center text-slate-500 p-8 text-center">
@@ -116,6 +146,7 @@ export default function ChatPanel({
         await onSend(trimmed);
       }
       setText('');
+      stopTyping();
     } finally {
       setSending(false);
     }
@@ -187,6 +218,13 @@ export default function ChatPanel({
     addPendingAttachment(file);
   };
 
+  const onTextChange = (e) => {
+    const next = e.target.value;
+    setText(next);
+    if (next.trim()) sendTypingStart();
+    else stopTyping();
+  };
+
   const handleDrop = (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -210,7 +248,7 @@ export default function ChatPanel({
   };
 
   const handlePaste = (e) => {
-    const items = Array.from(e.clipboardData.items);
+    const items = Array.from(e.clipboardData.items || []) as DataTransferItem[];
     for (const item of items) {
       if (item.type.startsWith('image/')) {
         const file = item.getAsFile();
@@ -253,6 +291,20 @@ export default function ChatPanel({
   // Удалённому аккаунту нельзя звонить и писать — история остаётся
   // read-only. Сами кнопки скрываем, а поле ввода делаем disabled.
   const peerDeleted = !isGroup && isDeletedUser(peer);
+  const typingLabel = (() => {
+    if (peerDeleted || typingUsers.length === 0) return null;
+    if (!isGroup) return 'печатает…';
+    const firstName = getDisplayName(typingUsers[0]);
+    const rest = typingUsers.length - 1;
+    return rest > 0
+      ? `${firstName} и ещё ${rest} печатают…`
+      : `${firstName} печатает…`;
+  })();
+  const subtitle = typingLabel || (isGroup
+    ? `${group.members?.length || 0} участ.`
+    : peerDeleted
+      ? 'аккаунт удалён'
+      : (hasCustomDisplayName(peer) ? `@${peer.username} • ` : '') + (peer.online ? 'в сети' : 'не в сети'));
 
   return (
     <div 
@@ -296,13 +348,8 @@ export default function ChatPanel({
           )}
           <div className="min-w-0">
             <div className="truncate font-semibold">{displayName}</div>
-            <div className="text-xs text-slate-500 truncate">
-              {isGroup
-                ? `${group.members?.length || 0} участ.`
-                : peerDeleted
-                  ? 'аккаунт удалён'
-                  : (hasCustomDisplayName(peer) ? `@${peer.username} • ` : '') + (peer.online ? 'в сети' : 'не в сети')
-              }
+            <div className={`text-xs truncate ${typingLabel ? 'text-slate-300' : 'text-slate-500'}`}>
+              {subtitle}
             </div>
           </div>
         </button>
@@ -458,14 +505,17 @@ export default function ChatPanel({
                       : `Сообщение для @${peer.username}`
               }
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={onTextChange}
               onKeyDown={onKey}
               onPaste={handlePaste}
               rows={1}
               disabled={uploading}
             />
             <button
-              onClick={() => setRecording(true)}
+              onClick={() => {
+                stopTyping();
+                setRecording(true);
+              }}
               disabled={uploading}
               className="btn-icon bg-bg-3 hover:bg-bg-2 text-slate-100"
               style={{ height: 40, width: 40 }}
@@ -584,4 +634,3 @@ export default function ChatPanel({
     </div>
   );
 }
-
