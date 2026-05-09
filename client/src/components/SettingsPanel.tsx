@@ -5,8 +5,13 @@ import {
   Mic, Volume2, X, Bell, BellOff, Upload, Trash2, User, ShieldCheck, Headphones, Play,
   KeyRound, Copy, Check, RefreshCw, Smartphone, UserX, AlertTriangle, Lock,
   Download, ExternalLink, Sliders, Video, MonitorUp, Activity, ChevronDown, ChevronRight,
+  Sparkles, Keyboard, MicOff,
 } from 'lucide-react';
-import { createMicPipeline, pickAudioFilterSettings } from '../utils/audioProcessing';
+import {
+  createMicPipeline, pickAudioFilterSettings,
+  applyMicFilterPreset, detectMicFilterPreset,
+  type MicFilterPreset,
+} from '../utils/audioProcessing';
 import { modalVariants, overlayVariants, reducedVariants } from '../utils/motion';
 import {
   pushSupported, getPushStatus, enablePush, disablePush,
@@ -19,12 +24,19 @@ import Avatar from './Avatar';
 import PasswordInput from './PasswordInput';
 import { api } from '../api';
 import { getAvatarUrl, getDisplayName } from '../utils/user';
+import {
+  isDesktop, keyEventToAccelerator, formatAccelerator,
+  type ShortcutAction,
+} from '../utils/desktop';
 
+// adminOnly — видна только админам; desktopOnly — только в Electron-обёртке.
+// Логика фильтрации в render'е панели (см. TABS).
 const ALL_TABS = [
   { id: 'profile', label: 'Профиль', icon: User },
   { id: 'password', label: 'Пароль', icon: Lock },
   { id: 'audio', label: 'Звук', icon: Headphones },
   { id: 'notifications', label: 'Уведомления', icon: Bell },
+  { id: 'keybinds', label: 'Биндинги', icon: Keyboard, desktopOnly: true },
   { id: 'privacy', label: 'Приватность', icon: ShieldCheck },
   { id: 'invites', label: 'Приглашения', icon: KeyRound, adminOnly: true },
 ];
@@ -32,7 +44,12 @@ const ALL_TABS = [
 export default function SettingsPanel({ open, onClose }) {
   const { auth } = useAuth();
   const isAdmin = !!auth?.user?.isAdmin;
-  const TABS = ALL_TABS.filter((t) => !t.adminOnly || isAdmin);
+  const desktop = isDesktop();
+  const TABS = ALL_TABS.filter((t) => {
+    if (t.adminOnly && !isAdmin) return false;
+    if (t.desktopOnly && !desktop) return false;
+    return true;
+  });
   const [tab, setTab] = useState('profile');
   const reduce = useReducedMotion();
   const overlayV = reduce ? reducedVariants(overlayVariants) : overlayVariants;
@@ -92,6 +109,7 @@ export default function SettingsPanel({ open, onClose }) {
             {tab === 'password' && <PasswordTab />}
             {tab === 'audio' && <AudioTab />}
             {tab === 'notifications' && <NotificationsTab />}
+            {tab === 'keybinds' && desktop && <KeybindsTab />}
             {tab === 'privacy' && <PrivacyTab />}
             {tab === 'invites' && isAdmin && <InvitesTab />}
           </div>
@@ -586,6 +604,26 @@ function AudioTab() {
   const [isTestingMic, setIsTestingMic] = useState(false);
   const [isTestingSpeaker, setIsTestingSpeaker] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  // Активный пресет обработки микрофона. Источник истины — реальные значения
+  // ползунков; саму метку из settings.micFilterPreset не доверяем, потому что
+  // юзер мог покрутить ползунки между сессиями (и она устарела), а defaults
+  // могли поменяться при апгрейде. detectMicFilterPreset() сравнивает текущий
+  // settings со всеми пресетами и возвращает имя совпавшего или 'custom'.
+  const currentPreset: MicFilterPreset = detectMicFilterPreset(settings);
+  // Применить пресет = перезаписать пачку ключей одним update'ом.
+  const choosePreset = (name: Exclude<MicFilterPreset, 'custom'>) => {
+    update(applyMicFilterPreset(name));
+    // При выборе «Выкл» расширенный блок не нужен — там нечего настраивать.
+    if (name === 'off') setAdvancedOpen(false);
+  };
+  // Обёртка для индивидуальных ползунков «расширенных параметров»: помечает
+  // конфигурацию как 'custom', чтобы UI показал «Пользовательский» и юзер
+  // понимал, что у него своя конфигурация (а не один из готовых пресетов).
+  const updateAdvanced = (patch: Record<string, any>) => {
+    update({ ...patch, micFilterPreset: 'custom' });
+  };
+
   // Pipeline проживает на время теста микрофона. Тут лежат и AudioContext,
   // и MediaStream'ы — pipeline.destroy() сам всё закроет.
   const pipelineRef = useRef(null);
@@ -1056,135 +1094,50 @@ function AudioTab() {
           Обработка микрофона
         </label>
         <div className="text-[11px] text-slate-500 -mt-1.5">
-          Цепочка: HighPass → Compressor → NoiseGate → MakeupGain. Применяется
-          к исходящему звуку звонка. Кнопка «Проверить микрофон» воспроизводит
-          ровно тот же результат, что услышит собеседник.
+          Выберите готовый профиль или откройте расширенные параметры,
+          чтобы настроить цепочку HighPass → Compressor → NoiseGate → MakeupGain
+          вручную. Кнопка «Проверить микрофон» воспроизводит ровно тот же
+          результат, что услышит собеседник.
         </div>
 
-        {/* High-pass --------------------------------------------- */}
-        <ToggleRow
-          title="Высокочастотный фильтр"
-          description="Срезает низкочастотный гул (вентилятор, гудение, бубнение в стол)"
-          icon={<Sliders size={16} />}
-          checked={settings.highPassFilter !== false}
-          onChange={(v) => update({ highPassFilter: v })}
-        />
-        {settings.highPassFilter !== false && (
-          <div className="pl-7">
-            <label className="text-[11px] text-slate-500">
-              Частота среза
-            </label>
-            <SliderRow
-              icon={null}
-              value={settings.highPassFrequency ?? 100}
-              min={20}
-              max={400}
-              step={5}
-              unit=" Гц"
-              onChange={(v) => update({ highPassFrequency: v })}
-            />
+        {/* Пресеты обработки. Клик по карточке — это choosePreset(): он
+            одним update'ом перезаписывает все ключи цепочки разом
+            (см. applyMicFilterPreset в audioProcessing.ts). */}
+        <div className="grid grid-cols-3 gap-2">
+          <PresetCard
+            active={currentPreset === 'off'}
+            title="Выкл"
+            subtitle="Сырой микрофон"
+            description="Без обработки. Используйте, если у вас уже есть OBS, Krisp или внешний шумодав."
+            onClick={() => choosePreset('off')}
+          />
+          <PresetCard
+            active={currentPreset === 'standard'}
+            title="Стандарт"
+            subtitle="Рекомендуется"
+            description="Срез низов + лёгкий компрессор + ворота от шёпота. Подходит большинству."
+            onClick={() => choosePreset('standard')}
+          />
+          <PresetCard
+            active={currentPreset === 'aggressive'}
+            title="Агрессивный"
+            subtitle="AI-шумодав (RNNoise)"
+            description="Нейросеть гасит клавиатуру/вентилятор/фон комнаты + жёсткий gate и компрессор. Загружает ~150 КБ WASM при первом включении."
+            onClick={() => choosePreset('aggressive')}
+          />
+        </div>
+        {currentPreset === 'custom' && (
+          <div className="text-[11px] text-amber-300/80 flex items-center gap-1.5">
+            <Sliders size={12} />
+            Пользовательский профиль (значения отличаются от пресетов)
           </div>
         )}
 
-        {/* Compressor -------------------------------------------- */}
-        <ToggleRow
-          title="Компрессор"
-          description="Выравнивает громкость: тихое подтягивает, громкое прижимает (как в OBS / Discord)"
-          icon={<Activity size={16} />}
-          checked={settings.compressorEnabled !== false}
-          onChange={(v) => update({ compressorEnabled: v })}
-        />
-        {settings.compressorEnabled !== false && (
-          <div className="pl-7 space-y-2">
-            <div>
-              <label className="text-[11px] text-slate-500">Порог (threshold)</label>
-              <SliderRow
-                icon={null}
-                value={settings.compressorThreshold ?? -24}
-                min={-60}
-                max={0}
-                step={1}
-                unit=" дБ"
-                onChange={(v) => update({ compressorThreshold: v })}
-              />
-            </div>
-            <div>
-              <label className="text-[11px] text-slate-500">Степень сжатия (ratio)</label>
-              <SliderRow
-                icon={null}
-                value={settings.compressorRatio ?? 4}
-                min={1}
-                max={20}
-                step={0.5}
-                unit=":1"
-                onChange={(v) => update({ compressorRatio: v })}
-              />
-            </div>
-            <div>
-              <label className="text-[11px] text-slate-500">Атака</label>
-              <SliderRow
-                icon={null}
-                value={settings.compressorAttack ?? 5}
-                min={0}
-                max={100}
-                step={1}
-                unit=" мс"
-                onChange={(v) => update({ compressorAttack: v })}
-              />
-            </div>
-            <div>
-              <label className="text-[11px] text-slate-500">Спад (release)</label>
-              <SliderRow
-                icon={null}
-                value={settings.compressorRelease ?? 50}
-                min={0}
-                max={500}
-                step={5}
-                unit=" мс"
-                onChange={(v) => update({ compressorRelease: v })}
-              />
-            </div>
-            <div>
-              <label className="text-[11px] text-slate-500">Перегиб (knee)</label>
-              <SliderRow
-                icon={null}
-                value={settings.compressorKnee ?? 30}
-                min={0}
-                max={40}
-                step={1}
-                unit=" дБ"
-                onChange={(v) => update({ compressorKnee: v })}
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Noise gate -------------------------------------------- */}
-        <ToggleRow
-          title="Шумовые ворота (gate)"
-          description="Полностью режет звук между фразами, когда вы молчите"
-          icon={<Mic size={16} />}
-          checked={settings.noiseSuppression !== false}
-          onChange={(v) => update({ noiseSuppression: v })}
-        />
-        {settings.noiseSuppression !== false && (
-          <div className="pl-7">
-            <label className="text-[11px] text-slate-500">
-              Порог открытия ворот
-            </label>
-            <SliderRow
-              icon={null}
-              value={settings.noiseThreshold ?? -55}
-              min={-100}
-              max={0}
-              step={1}
-              unit=" дБ"
-              onChange={(v) => update({ noiseThreshold: v })}
-            />
-          </div>
-        )}
-
-        {/* Advanced (expandable) -------------------------------- */}
+        {/* Раскрывашка с экспертными параметрами. По умолчанию закрыта,
+            чтобы UI оставался простым; внутри — все старые ползунки.
+            При любом изменении updateAdvanced пометит конфигурацию как
+            'custom' (см. выше). При выбранном «Выкл» прятать раскрывашку
+            нет смысла — пусть юзер всё равно увидит, как «выглядит выключено». */}
         <button
           type="button"
           onClick={() => setAdvancedOpen((v) => !v)}
@@ -1194,23 +1147,146 @@ function AudioTab() {
           {advancedOpen ? 'Скрыть' : 'Показать'} расширенные параметры
         </button>
         {advancedOpen && (
-          <div className="space-y-2 pl-1">
-            <div>
-              <label className="text-[11px] text-slate-500">Make-up gain (после компрессора)</label>
-              <SliderRow
-                icon={null}
-                value={settings.makeupGainDb ?? 0}
-                min={-12}
-                max={12}
-                step={0.5}
-                unit=" дБ"
-                onChange={(v) => update({ makeupGainDb: v })}
-              />
-            </div>
-            {settings.noiseSuppression !== false && (
-              <>
+          <div className="space-y-3 pt-1">
+            {/* AI noise suppression (RNNoise) ---------------------- */}
+            {/* Эта ступень — первая в цепочке. WASM грузится lazy при
+                первом запуске пайплайна со включённым флагом, потом
+                кэшируется на всё приложение. Если загрузка падает,
+                createMicPipeline молча падает на цепочку без AI. */}
+            <ToggleRow
+              title="AI-шумодав (RNNoise)"
+              description="Нейросеть гасит клавиатуру, вентилятор, фон комнаты. ~150 КБ WASM, требует AudioWorklet (Chrome 80+/Firefox 76+/Safari 14.1+)."
+              icon={<Sparkles size={16} />}
+              checked={settings.aiNoiseSuppression === true}
+              onChange={(v) => updateAdvanced({ aiNoiseSuppression: v })}
+            />
+
+            {/* High-pass --------------------------------------------- */}
+            <ToggleRow
+              title="Высокочастотный фильтр"
+              description="Срезает низкочастотный гул (вентилятор, гудение, бубнение в стол)"
+              icon={<Sliders size={16} />}
+              checked={settings.highPassFilter !== false}
+              onChange={(v) => updateAdvanced({ highPassFilter: v })}
+            />
+            {settings.highPassFilter !== false && (
+              <div className="pl-7">
+                <label className="text-[11px] text-slate-500">
+                  Частота среза
+                </label>
+                <SliderRow
+                  icon={null}
+                  value={settings.highPassFrequency ?? 100}
+                  min={20}
+                  max={400}
+                  step={5}
+                  unit=" Гц"
+                  onChange={(v) => updateAdvanced({ highPassFrequency: v })}
+                />
+              </div>
+            )}
+
+            {/* Compressor -------------------------------------------- */}
+            <ToggleRow
+              title="Компрессор"
+              description="Выравнивает громкость: тихое подтягивает, громкое прижимает (как в OBS / Discord)"
+              icon={<Activity size={16} />}
+              checked={settings.compressorEnabled !== false}
+              onChange={(v) => updateAdvanced({ compressorEnabled: v })}
+            />
+            {settings.compressorEnabled !== false && (
+              <div className="pl-7 space-y-2">
                 <div>
-                  <label className="text-[11px] text-slate-500">Hangover ворот (как долго держать открытыми после паузы)</label>
+                  <label className="text-[11px] text-slate-500">Порог (threshold)</label>
+                  <SliderRow
+                    icon={null}
+                    value={settings.compressorThreshold ?? -24}
+                    min={-60}
+                    max={0}
+                    step={1}
+                    unit=" дБ"
+                    onChange={(v) => updateAdvanced({ compressorThreshold: v })}
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-slate-500">Степень сжатия (ratio)</label>
+                  <SliderRow
+                    icon={null}
+                    value={settings.compressorRatio ?? 4}
+                    min={1}
+                    max={20}
+                    step={0.5}
+                    unit=":1"
+                    onChange={(v) => updateAdvanced({ compressorRatio: v })}
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-slate-500">Атака</label>
+                  <SliderRow
+                    icon={null}
+                    value={settings.compressorAttack ?? 5}
+                    min={0}
+                    max={100}
+                    step={1}
+                    unit=" мс"
+                    onChange={(v) => updateAdvanced({ compressorAttack: v })}
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-slate-500">Спад (release)</label>
+                  <SliderRow
+                    icon={null}
+                    value={settings.compressorRelease ?? 50}
+                    min={0}
+                    max={500}
+                    step={5}
+                    unit=" мс"
+                    onChange={(v) => updateAdvanced({ compressorRelease: v })}
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-slate-500">Перегиб (knee)</label>
+                  <SliderRow
+                    icon={null}
+                    value={settings.compressorKnee ?? 30}
+                    min={0}
+                    max={40}
+                    step={1}
+                    unit=" дБ"
+                    onChange={(v) => updateAdvanced({ compressorKnee: v })}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Noise gate -------------------------------------------- */}
+            <ToggleRow
+              title="Шумовые ворота (gate)"
+              description="Полностью режет звук между фразами, когда вы молчите"
+              icon={<Mic size={16} />}
+              checked={settings.noiseSuppression !== false}
+              onChange={(v) => updateAdvanced({ noiseSuppression: v })}
+            />
+            {settings.noiseSuppression !== false && (
+              <div className="pl-7 space-y-2">
+                <div>
+                  <label className="text-[11px] text-slate-500">
+                    Порог открытия ворот
+                  </label>
+                  <SliderRow
+                    icon={null}
+                    value={settings.noiseThreshold ?? -55}
+                    min={-100}
+                    max={0}
+                    step={1}
+                    unit=" дБ"
+                    onChange={(v) => updateAdvanced({ noiseThreshold: v })}
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-slate-500">
+                    Hangover ворот (как долго держать открытыми после паузы)
+                  </label>
                   <SliderRow
                     icon={null}
                     value={settings.noiseGateHoldMs ?? 200}
@@ -1218,11 +1294,13 @@ function AudioTab() {
                     max={1000}
                     step={10}
                     unit=" мс"
-                    onChange={(v) => update({ noiseGateHoldMs: v })}
+                    onChange={(v) => updateAdvanced({ noiseGateHoldMs: v })}
                   />
                 </div>
                 <div>
-                  <label className="text-[11px] text-slate-500">Атака ворот (плавность открытия)</label>
+                  <label className="text-[11px] text-slate-500">
+                    Атака ворот (плавность открытия)
+                  </label>
                   <SliderRow
                     icon={null}
                     value={settings.noiseGateAttackMs ?? 10}
@@ -1230,11 +1308,13 @@ function AudioTab() {
                     max={200}
                     step={1}
                     unit=" мс"
-                    onChange={(v) => update({ noiseGateAttackMs: v })}
+                    onChange={(v) => updateAdvanced({ noiseGateAttackMs: v })}
                   />
                 </div>
                 <div>
-                  <label className="text-[11px] text-slate-500">Спад ворот (плавность закрытия)</label>
+                  <label className="text-[11px] text-slate-500">
+                    Спад ворот (плавность закрытия)
+                  </label>
                   <SliderRow
                     icon={null}
                     value={settings.noiseGateReleaseMs ?? 80}
@@ -1242,15 +1322,69 @@ function AudioTab() {
                     max={500}
                     step={5}
                     unit=" мс"
-                    onChange={(v) => update({ noiseGateReleaseMs: v })}
+                    onChange={(v) => updateAdvanced({ noiseGateReleaseMs: v })}
                   />
                 </div>
-              </>
+              </div>
             )}
+
+            <div>
+              <label className="text-[11px] text-slate-500">
+                Make-up gain (после компрессора)
+              </label>
+              <SliderRow
+                icon={null}
+                value={settings.makeupGainDb ?? 0}
+                min={-12}
+                max={12}
+                step={0.5}
+                unit=" дБ"
+                onChange={(v) => updateAdvanced({ makeupGainDb: v })}
+              />
+            </div>
           </div>
         )}
       </div>
     </section>
+  );
+}
+
+// Карточка пресета микрофона. Намеренно простая: заголовок, подзаголовок,
+// краткое описание; активная карточка обводится акцентом и подсвечивается.
+// Эту мелочь не выносим в отдельный файл — она нужна только тут.
+function PresetCard({
+  active,
+  title,
+  subtitle,
+  description,
+  onClick,
+}: {
+  active: boolean;
+  title: string;
+  subtitle: string;
+  description: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`text-left rounded-lg border p-3 transition-colors h-full
+        ${active
+          ? 'border-accent bg-accent/10 text-white'
+          : 'border-border bg-bg-2 hover:bg-bg-3 text-slate-200'}`}
+    >
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <div className="text-sm font-medium">{title}</div>
+        {active && <Check size={14} className="text-accent" />}
+      </div>
+      <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1.5">
+        {subtitle}
+      </div>
+      <div className="text-[11px] text-slate-400 leading-snug">
+        {description}
+      </div>
+    </button>
   );
 }
 
@@ -1293,6 +1427,11 @@ function NotificationsTab() {
     { key: 'soundOutgoing', label: 'Гудки исходящего', preview: 'outgoing' },
     { key: 'soundConnect', label: 'Соединение установлено', preview: 'connect' },
     { key: 'soundDisconnect', label: 'Завершение звонка', preview: 'disconnect' },
+    // Превью этих двух проигрывает обе половинки (mute → unmute), чтобы
+    // юзер услышал, как звучит каждое направление переключения. Сами
+    // тумблеры — общие на пару (см. useSounds.ts, разделение на 2 флага).
+    { key: 'soundMicMute', label: 'Микрофон вкл/выкл', preview: 'micMute' },
+    { key: 'soundDeafen', label: 'Звук собеседников вкл/выкл', preview: 'deafen' },
   ];
 
   return (
@@ -1419,6 +1558,148 @@ function PushBlock({ status, busy, onToggle }) {
         />
       </div>
     </div>
+  );
+}
+
+// ---------------- Keybinds (desktop only) ----------------------------------
+//
+// Запись хоткея — простая state-машина:
+//   1) idle: показываем текущий accelerator + кнопки «Записать» / «Очистить».
+//   2) recording: поле ловит keydown'ы; считаем accelerator на каждом
+//      нажатии (см. keyEventToAccelerator); как только key event приносит
+//      основную клавишу (не только модификаторы) — записываем accelerator
+//      в settings и выходим из recording.
+//   3) Esc отменяет запись без изменений.
+//
+// settings.keybinds мутируется через update({ keybinds: { ... } }) —
+// useKeybinds в Home.tsx видит новое значение и шлёт setShortcuts в main.
+// Главное: keybinds — вложенный объект, а update делает Object.assign на
+// верхнем уровне, поэтому мы СВОЕЙ рукой собираем полный объект и
+// передаём его целиком (иначе случайно потеряем второй ключ).
+
+const KEYBIND_ACTIONS: { id: ShortcutAction; label: string; description: string; Icon: any }[] = [
+  {
+    id: 'toggleMute',
+    label: 'Мьют микрофона',
+    description: 'Переключить микрофон вкл/выкл (тогл).',
+    Icon: MicOff,
+  },
+  {
+    id: 'toggleDeafen',
+    label: 'Глушить динамики',
+    description: 'Переключить звук собеседников (тогл).',
+    Icon: Headphones,
+  },
+];
+
+function KeybindRow({ action, label, description, Icon }) {
+  const { settings, update } = useSettings();
+  const [recording, setRecording] = useState(false);
+  const inputRef = useRef<HTMLDivElement>(null);
+  const current = settings.keybinds?.[action] || null;
+
+  useEffect(() => {
+    // Авто-фокус на скрытое div'е во время записи — чтобы оно ловило
+    // keydown'ы. Без этого фокус «уходит» на родительский <button>.
+    if (recording) inputRef.current?.focus();
+  }, [recording]);
+
+  const writeKeybind = (acc: string | null) => {
+    update({
+      keybinds: {
+        ...(settings.keybinds || {}),
+        [action]: acc,
+      },
+    });
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Escape') {
+      // Esc — отмена записи, оставляем старое значение.
+      setRecording(false);
+      return;
+    }
+    const acc = keyEventToAccelerator(e.nativeEvent as unknown as KeyboardEvent);
+    if (acc) {
+      writeKeybind(acc);
+      setRecording(false);
+    }
+    // Если пока нажаты только модификаторы — продолжаем слушать.
+  };
+
+  return (
+    <div className="flex items-center gap-3 px-3 py-2.5">
+      <div className="text-slate-400 shrink-0">
+        <Icon size={16} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm">{label}</div>
+        <div className="text-[11px] text-slate-500 leading-snug">{description}</div>
+      </div>
+      <div className="flex items-center gap-2">
+        {recording ? (
+          <div
+            ref={inputRef}
+            tabIndex={0}
+            onKeyDown={onKeyDown}
+            onBlur={() => setRecording(false)}
+            className="px-3 py-1.5 rounded-md text-xs bg-amber-500/15 border border-amber-500/40 text-amber-200 outline-none min-w-[160px] text-center font-mono"
+          >
+            Нажми комбинацию…
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setRecording(true)}
+            className="px-3 py-1.5 rounded-md text-xs bg-bg-3 hover:bg-bg-1 border border-border min-w-[160px] text-center font-mono"
+            title="Записать новую комбинацию"
+          >
+            {current ? formatAccelerator(current) : 'Не назначено'}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => writeKeybind(null)}
+          disabled={!current && !recording}
+          className="btn-ghost text-xs"
+          title="Снять хоткей"
+        >
+          Сбросить
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function KeybindsTab() {
+  return (
+    <section className="space-y-4">
+      <div className="text-xs text-slate-400 leading-snug">
+        Глобальные горячие клавиши срабатывают, даже когда окно OwnCord
+        не в фокусе. Используем формат Electron'а
+        (<code className="text-[11px]">Ctrl+Shift+M</code>,{' '}
+        <code className="text-[11px]">F8</code>, …).
+        Если комбинация занята другим приложением — будет молча проигнорирована.
+      </div>
+
+      <div className="rounded-lg border border-border divide-y divide-border bg-bg-2">
+        {KEYBIND_ACTIONS.map(({ id, label, description, Icon }) => (
+          <KeybindRow
+            key={id}
+            action={id}
+            label={label}
+            description={description}
+            Icon={Icon}
+          />
+        ))}
+      </div>
+
+      <div className="text-[11px] text-slate-500 leading-snug">
+        Esc — отменить запись комбинации. «Сбросить» — снять привязку.
+      </div>
+    </section>
   );
 }
 

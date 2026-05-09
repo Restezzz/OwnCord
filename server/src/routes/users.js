@@ -18,6 +18,7 @@ function publicUser(row, online) {
     displayName: deleted ? null : (row.display_name || row.username),
     avatarPath: deleted ? null : (row.avatar_path || null),
     createdAt: row.created_at,
+    lastActivityAt: row.last_activity_at ?? null,
     online: deleted ? false : online,
     deleted,
   };
@@ -30,11 +31,20 @@ router.get('/', authRequired, (req, res) => {
   // показывать в списке для звонков/писем или нет.
   const rows = db
     .prepare(
-      `SELECT id, username, display_name, avatar_path, created_at, deleted_at
-       FROM users
-        ORDER BY COALESCE(display_name, username) COLLATE NOCASE`,
+      `SELECT u.id, u.username, u.display_name, u.avatar_path, u.created_at, u.deleted_at,
+              (
+                SELECT MAX(m.created_at)
+                FROM messages m
+                WHERE m.group_id IS NULL
+                  AND (
+                    (m.sender_id = ? AND m.receiver_id = u.id)
+                    OR (m.sender_id = u.id AND m.receiver_id = ?)
+                  )
+              ) AS last_activity_at
+       FROM users u
+       ORDER BY COALESCE(u.display_name, u.username) COLLATE NOCASE`,
     )
-    .all();
+    .all(req.user.id, req.user.id);
   const online = getOnlineUserIds();
   const users = rows.map((u) => ({
     ...publicUser(u, online.has(u.id)),

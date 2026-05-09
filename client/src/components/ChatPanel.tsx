@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Phone, Video, ArrowLeft, Send, Mic, Pencil, Trash2, Paperclip,
   Users as UsersIcon, Settings as SettingsIcon, X, File as FileIcon, Smile,
@@ -18,6 +18,20 @@ function formatLimit(bytes) {
   return `${(mb / 1024).toFixed(1)} ГБ`;
 }
 
+const TYPING_SEND_INTERVAL_MS = 1800;
+
+// Размер встроенного окна звонка хранится в localStorage и переживает
+// перезагрузку. Минимум подобран так, чтобы аватарка (112) с её зелёной
+// рамкой и панель управления звонком (≈ 80px) оставались полностью
+// видимыми, плюс по 20px воздуха сверху-снизу от аватарок (фидбек юзера:
+// «уменьшаться оно должно максимум до размера аватарки +20px»).
+// Чату при этом гарантируем минимум CALL_CHAT_MIN_HEIGHT, чтобы поле
+// ввода и хотя бы пара сообщений были видны.
+const CALL_HEIGHT_STORAGE_KEY = 'owncord.callHeight';
+const CALL_BLOCK_MIN_HEIGHT = 240;
+const CALL_CHAT_MIN_HEIGHT = 200;
+const CALL_HEIGHT_DEFAULT = 360;
+
 export default function ChatPanel({
   peer,
   group,
@@ -36,6 +50,8 @@ export default function ChatPanel({
   onShowProfile,
   onShowGroupSettings,
   onShowGroupMemberProfile,
+  onTypingChange = null,
+  typingUsers = [],
   onStartGroupCall,
   onJoinGroupCall,
   groupCallActive = false,
@@ -43,6 +59,7 @@ export default function ChatPanel({
   firstUnreadId,
   maxFileBytes = 500 * 1024 * 1024,
   usersById,
+  callSlot = null,
 }) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
@@ -58,6 +75,82 @@ export default function ChatPanel({
   const scrollRef = useRef(null);
   const fileInputRef = useRef(null);
   const dropZoneRef = useRef(null);
+  const typingActiveRef = useRef(false);
+  // Resizable embedded call. callHeight — высота блока звонка в px.
+  // rootRef нужен, чтобы посчитать максимально допустимую высоту с учётом
+  // фактической высоты ChatPanel (минус место под чат). callBlockRef
+  // указывает на сам блок звонка, его top — точка от которой считается
+  // драг.
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const callBlockRef = useRef<HTMLDivElement | null>(null);
+  const [callHeight, setCallHeight] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem(CALL_HEIGHT_STORAGE_KEY);
+      if (raw) {
+        const n = Number(raw);
+        if (Number.isFinite(n) && n >= CALL_BLOCK_MIN_HEIGHT) return n;
+      }
+    } catch { /* */ }
+    return CALL_HEIGHT_DEFAULT;
+  });
+  const [resizing, setResizing] = useState(false);
+  // Сохраняем высоту блока звонка в localStorage при каждом изменении.
+  // Сохраняем в effect, а не в onPointerUp, чтобы клавиатурные изменения
+  // высоты (если когда-то добавим) тоже персистились без дубликата кода.
+  useEffect(() => {
+    try { localStorage.setItem(CALL_HEIGHT_STORAGE_KEY, String(callHeight)); } catch { /* */ }
+  }, [callHeight]);
+  // Авто-зажим callHeight при ресайзе окна: если окно стало уже/ниже,
+  // сохранённая высота могла стать больше, чем доступно (превратило бы
+  // чат в 0). Перерасчёт на каждом пересоздании контейнера и при resize.
+  useEffect(() => {
+    if (!callSlot) return undefined;
+    const clamp = () => {
+      const root = rootRef.current;
+      const block = callBlockRef.current;
+      if (!root || !block) return;
+      const rootBottom = root.getBoundingClientRect().bottom;
+      const blockTop = block.getBoundingClientRect().top;
+      const available = rootBottom - blockTop;
+      const maxH = Math.max(CALL_BLOCK_MIN_HEIGHT, available - CALL_CHAT_MIN_HEIGHT);
+      setCallHeight((prev) => Math.min(prev, maxH));
+    };
+    clamp();
+    window.addEventListener('resize', clamp);
+    return () => window.removeEventListener('resize', clamp);
+  }, [callSlot]);
+
+  const handleCallResizeStart = useCallback((e: React.PointerEvent) => {
+    // Только основная кнопка / тач — игнорируем правую/среднюю.
+    if (e.button !== undefined && e.button !== 0) return;
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = callHeight;
+    setResizing(true);
+
+    const onMove = (ev: PointerEvent) => {
+      const root = rootRef.current;
+      const block = callBlockRef.current;
+      if (!root || !block) return;
+      const rootBottom = root.getBoundingClientRect().bottom;
+      const blockTop = block.getBoundingClientRect().top;
+      const available = rootBottom - blockTop;
+      const maxH = Math.max(CALL_BLOCK_MIN_HEIGHT, available - CALL_CHAT_MIN_HEIGHT);
+      const desired = startH + (ev.clientY - startY);
+      const next = Math.max(CALL_BLOCK_MIN_HEIGHT, Math.min(maxH, desired));
+      setCallHeight(next);
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      setResizing(false);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }, [callHeight]);
+  const lastTypingSentAtRef = useRef(0);
 
   const isGroup = !!group;
   const target = isGroup ? group : peer;
@@ -91,7 +184,47 @@ export default function ChatPanel({
     setPendingAttachments([]);
   }, [target?.id, isGroup]);
 
+  const stopTyping = useCallback(() => {
+    if (!typingActiveRef.current) return;
+    onTypingChange?.(false);
+    typingActiveRef.current = false;
+    lastTypingSentAtRef.current = 0;
+  }, [onTypingChange]);
+
+  const sendTypingStart = useCallback(() => {
+    const now = Date.now();
+    if (
+      typingActiveRef.current
+      && now - lastTypingSentAtRef.current < TYPING_SEND_INTERVAL_MS
+    ) {
+      return;
+    }
+    onTypingChange?.(true);
+    typingActiveRef.current = true;
+    lastTypingSentAtRef.current = now;
+  }, [onTypingChange]);
+
+  useEffect(() => () => {
+    stopTyping();
+  }, [stopTyping, target?.id, isGroup]);
+
   if (!target) {
+    // Если активен звонок, но чат ещё не выбран — всё равно показываем
+    // звонок сверху, чтобы пользователь видел и контролы, и плейсхолдер
+    // под ними.
+    if (callSlot) {
+      return (
+        <div className="flex flex-col h-full">
+          <div className="flex-1 min-h-[280px] flex flex-col">{callSlot}</div>
+          <div className="flex-1 min-h-[200px] grid place-items-center text-slate-500 p-8 text-center">
+            <div>
+              <div className="text-lg mb-1">Выбери собеседника или группу слева</div>
+              <div className="text-sm">Чат можно открывать прямо во время звонка.</div>
+            </div>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="h-full grid place-items-center text-slate-500 p-8 text-center">
         <div>
@@ -116,6 +249,7 @@ export default function ChatPanel({
         await onSend(trimmed);
       }
       setText('');
+      stopTyping();
     } finally {
       setSending(false);
     }
@@ -187,6 +321,13 @@ export default function ChatPanel({
     addPendingAttachment(file);
   };
 
+  const onTextChange = (e) => {
+    const next = e.target.value;
+    setText(next);
+    if (next.trim()) sendTypingStart();
+    else stopTyping();
+  };
+
   const handleDrop = (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -210,7 +351,7 @@ export default function ChatPanel({
   };
 
   const handlePaste = (e) => {
-    const items = Array.from(e.clipboardData.items);
+    const items = Array.from(e.clipboardData.items || []) as DataTransferItem[];
     for (const item of items) {
       if (item.type.startsWith('image/')) {
         const file = item.getAsFile();
@@ -253,10 +394,27 @@ export default function ChatPanel({
   // Удалённому аккаунту нельзя звонить и писать — история остаётся
   // read-only. Сами кнопки скрываем, а поле ввода делаем disabled.
   const peerDeleted = !isGroup && isDeletedUser(peer);
+  const typingLabel = (() => {
+    if (peerDeleted || typingUsers.length === 0) return null;
+    if (!isGroup) return 'печатает…';
+    const firstName = getDisplayName(typingUsers[0]);
+    const rest = typingUsers.length - 1;
+    return rest > 0
+      ? `${firstName} и ещё ${rest} печатают…`
+      : `${firstName} печатает…`;
+  })();
+  const subtitle = typingLabel || (isGroup
+    ? `${group.members?.length || 0} участ.`
+    : peerDeleted
+      ? 'аккаунт удалён'
+      : (hasCustomDisplayName(peer) ? `@${peer.username} • ` : '') + (peer.online ? 'в сети' : 'не в сети'));
 
   return (
     <div 
-      className={`flex flex-col h-full ${isDragging ? 'ring-2 ring-accent ring-inset' : ''}`}
+      ref={rootRef}
+      className={`flex flex-col h-full ${isDragging ? 'ring-2 ring-accent ring-inset' : ''} ${
+        resizing ? 'select-none' : ''
+      }`}
       onDrop={handleDrop}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -267,10 +425,12 @@ export default function ChatPanel({
             <ArrowLeft size={18} />
           </button>
         )}
-        {/* Блок профиля/группы компактный, чтобы кнопки звонка были рядом с именем,
-            а не улетали в самый правый край. */}
+        {/* Блок профиля/группы — фиксированная ширина текстового слота
+            (sm:w-[260px]/w-[180px]), чтобы кнопки звонка были рядом с именем
+            и НЕ дрожали при смене статуса «в сети» ↔ «печатает…». Длинные
+            строки тримим через truncate. */}
         <button
-          className="flex items-center gap-3 min-w-0 max-w-[60%] text-left hover:opacity-90 shrink"
+          className="flex items-center gap-3 min-w-0 text-left hover:opacity-90 shrink-0"
           onClick={() => {
             if (isGroup) onShowGroupSettings?.(group.id);
             else onShowProfile?.(peer.id);
@@ -294,15 +454,17 @@ export default function ChatPanel({
               showStatus={!isGroup}
             />
           )}
-          <div className="min-w-0">
+          {/* Слот имени/статуса с фиксированной шириной — это ключ к
+              стабильности: subtitle меняется («в сети» / «печатает…» / число
+              участников), но визуальный «контейнер» остаётся одинаковым,
+              значит кнопки звонка не сдвигаются ни на пиксель. Ширина
+              подобрана так, чтобы кнопки сидели сразу за ником, без
+              лишней «дырки» между ним и иконками — но и не наезжали при
+              появлении «печатает…». */}
+          <div className="min-w-0 w-[130px] sm:w-[150px] md:w-[170px]">
             <div className="truncate font-semibold">{displayName}</div>
-            <div className="text-xs text-slate-500 truncate">
-              {isGroup
-                ? `${group.members?.length || 0} участ.`
-                : peerDeleted
-                  ? 'аккаунт удалён'
-                  : (hasCustomDisplayName(peer) ? `@${peer.username} • ` : '') + (peer.online ? 'в сети' : 'не в сети')
-              }
+            <div className={`text-xs truncate ${typingLabel ? 'text-slate-300' : 'text-slate-500'}`}>
+              {subtitle}
             </div>
           </div>
         </button>
@@ -369,6 +531,44 @@ export default function ChatPanel({
         <div className="flex-1" />
       </header>
 
+      {/* Активный звонок (1:1 или групповой) — встраивается СРАЗУ после
+          хедера, выше списка сообщений. Это «дискорд-стайл»: имя/кнопки
+          сверху, звонок под ними, чат ещё ниже. Высота блока звонка
+          фиксирована (callHeight, в px) и регулируется драг-хендлом
+          ниже — пользователь сам решает, сколько места отдаёт звонку,
+          сколько чату. Чат ниже flex-1 + min-h, поэтому всегда виден
+          инпут и хотя бы кусок сообщений. */}
+      {callSlot && (
+        <>
+          <div
+            ref={callBlockRef}
+            className="flex flex-col flex-shrink-0"
+            style={{ height: callHeight }}
+          >
+            {callSlot}
+          </div>
+          {/* Драг-хендл между звонком и чатом. Тонкая полоска — сам
+              cursor: row-resize плюс лёгкий ховер выделяет хват-зону.
+              pointerdown запускает обработчик, дальше глобальные
+              pointermove/up на window'е. */}
+          <div
+            role="separator"
+            aria-label="Изменить высоту окна звонка"
+            aria-orientation="horizontal"
+            onPointerDown={handleCallResizeStart}
+            className={`relative flex-shrink-0 cursor-row-resize bg-bg-1 border-y border-border transition-colors ${
+              resizing ? 'bg-accent/40' : 'hover:bg-bg-2'
+            }`}
+            style={{ height: 6 }}
+          >
+            <div
+              aria-hidden
+              className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-[3px] rounded-full bg-slate-500/60"
+            />
+          </div>
+        </>
+      )}
+
       {/* Баннер активного группового звонка — виден всем, кроме тех, кто уже внутри */}
       {isGroup && groupCallActive && !inGroupCall && (
         <div className="px-4 py-2 bg-emerald-500/15 border-b border-emerald-500/30 flex items-center gap-3">
@@ -386,7 +586,10 @@ export default function ChatPanel({
         </div>
       )}
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-2">
+      <div
+        ref={scrollRef}
+        className={`flex-1 overflow-y-auto px-4 py-4 space-y-2 ${callSlot ? 'min-h-[200px]' : ''}`}
+      >
         {loading && <div className="text-center text-slate-500 text-sm">Загрузка…</div>}
         {!loading && messages.length === 0 && (
           <div className="text-center text-slate-500 text-sm">
@@ -458,14 +661,17 @@ export default function ChatPanel({
                       : `Сообщение для @${peer.username}`
               }
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={onTextChange}
               onKeyDown={onKey}
               onPaste={handlePaste}
               rows={1}
               disabled={uploading}
             />
             <button
-              onClick={() => setRecording(true)}
+              onClick={() => {
+                stopTyping();
+                setRecording(true);
+              }}
               disabled={uploading}
               className="btn-icon bg-bg-3 hover:bg-bg-2 text-slate-100"
               style={{ height: 40, width: 40 }}
@@ -584,4 +790,3 @@ export default function ChatPanel({
     </div>
   );
 }
-

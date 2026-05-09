@@ -81,10 +81,12 @@ export default function CallMessage({ message, selfId, onRejoin = null }) {
     warn: 'text-amber-300 border-amber-500/30 bg-amber-500/10',
   };
 
-  const canRejoin = status === 'waiting'
-    && reconnectUntil
-    && reconnectUntil > now
-    && typeof onRejoin === 'function';
+  // Кнопка «Подключиться» в чат-плашке убрана — она дублирует кнопку
+  // в самом окне звонка (CallView в waiting-состоянии у leaver'а) и
+  // плодила путаницу: статус 'waiting' пишется в чат для обоих, и
+  // у того, кто остался в звонке, тоже появлялась кнопка, которую он
+  // не должен видеть. Реджойн теперь только через окно звонка.
+  void onRejoin;
 
   const time = new Date(message.createdAt).toLocaleTimeString([], {
     hour: '2-digit', minute: '2-digit',
@@ -101,15 +103,6 @@ export default function CallMessage({ message, selfId, onRejoin = null }) {
           <div className="font-medium leading-tight">{title}</div>
           <div className="text-xs opacity-80 truncate">{subtitle}</div>
         </div>
-        {canRejoin && (
-          <button
-            type="button"
-            onClick={() => onRejoin(payload.callId, message)}
-            className="btn-primary h-7 px-2.5 text-xs"
-          >
-            Подключиться
-          </button>
-        )}
         <span className="text-[10px] opacity-60 shrink-0">{time}</span>
       </div>
     </div>

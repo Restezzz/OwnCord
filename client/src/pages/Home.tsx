@@ -22,7 +22,8 @@ import GroupCallView from '../components/GroupCallView';
 import { useCall } from '../hooks/useCall';
 import { useGroupCall } from '../hooks/useGroupCall';
 import { useSounds } from '../hooks/useSounds';
-import { getAvatarUrl, getDisplayName } from '../utils/user';
+import { useKeybinds } from '../hooks/useKeybinds';
+import { getAvatarUrl, getDisplayName, isDeletedUser } from '../utils/user';
 
 const SettingsPanel = lazy(() => import('../components/SettingsPanel'));
 const ProfileModal = lazy(() => import('../components/ProfileModal'));
@@ -41,6 +42,56 @@ function keyForMessage(msg, selfId) {
   return `u:${peer}`;
 }
 
+const TYPING_TTL_MS = 4000;
+const TYPING_PRUNE_MS = 1000;
+
+function latestCreatedAt(messages) {
+  let latest = 0;
+  for (const msg of messages || []) {
+    if (typeof msg.createdAt === 'number' && msg.createdAt > latest) latest = msg.createdAt;
+  }
+  return latest;
+}
+
+function setActivity(prev, key, ts) {
+  if (!key || typeof ts !== 'number' || !Number.isFinite(ts)) return prev;
+  if ((prev[key] || 0) >= ts) return prev;
+  return { ...prev, [key]: ts };
+}
+
+function removeTypingUser(prev, key, userId) {
+  const byUser = prev[key];
+  if (!byUser?.[userId]) return prev;
+  const nextByUser = { ...byUser };
+  delete nextByUser[userId];
+  const next = { ...prev };
+  if (Object.keys(nextByUser).length > 0) next[key] = nextByUser;
+  else delete next[key];
+  return next;
+}
+
+function removeTypingChat(prev, key) {
+  if (!key || !prev[key]) return prev;
+  const next = { ...prev };
+  delete next[key];
+  return next;
+}
+
+function pruneTyping(prev, now) {
+  let changed = false;
+  const next = {};
+  for (const [key, byUser] of Object.entries(prev)) {
+    const kept = {};
+    for (const [userId, expiresAt] of Object.entries(byUser as Record<string, number>)) {
+      if (expiresAt > now) kept[userId] = expiresAt;
+      else changed = true;
+    }
+    if (Object.keys(kept).length > 0) next[key] = kept;
+    else changed = true;
+  }
+  return changed ? next : prev;
+}
+
 export default function Home() {
   const { auth, logout, updateUser } = useAuth();
   const { settings } = useSettings();
@@ -54,6 +105,8 @@ export default function Home() {
   const [users, setUsers] = useState([]);
   const [selected, setSelected] = useState(null);       // { kind: 'user'|'group', id }
   const [messagesByChat, setMessagesByChat] = useState({}); // chatKey -> msgs
+  const [lastActivityByChat, setLastActivityByChat] = useState({}); // chatKey -> timestamp
+  const [typingByChat, setTypingByChat] = useState({}); // chatKey -> { userId -> expiresAt }
   const [unread, setUnread] = useState({});             // chatKey -> count
   const [firstUnreadByChat, setFirstUnreadByChat] = useState({}); // chatKey -> messageId
   const [pendingUnread, setPendingUnread] = useState({});   // chatKey -> count
@@ -71,6 +124,9 @@ export default function Home() {
   const sounds = useSounds(settings);
   const call = useCall({ socket, selfUser, settings, toast, sounds });
   const groupCall = useGroupCall({ socket, selfUser, settings, toast, sounds });
+  // Регистрация глобальных хоткеев в десктоп-обёртке. На вебе хук
+  // — no-op (подробности в utils/desktop.ts и hooks/useKeybinds.ts).
+  useKeybinds(settings.keybinds);
 
   const selectedUser = useMemo(() => {
     if (!selected || selected.kind !== 'user') return null;
@@ -85,6 +141,7 @@ export default function Home() {
   // Если выбранной группы больше нет (удалили/исключили) — сбросить выделение.
   useEffect(() => {
     if (selected?.kind === 'group' && !selectedGroup) {
+      setTypingByChat((prev) => removeTypingChat(prev, chatKey(selected)));
       setSelected(null);
       setSidebarOpen(true);
     }
@@ -97,6 +154,13 @@ export default function Home() {
   useEffect(() => { mutesRef.current = mutes; }, [mutes]);
 
   const fetchedHistoryFor = useRef(new Set());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setTypingByChat((prev) => pruneTyping(prev, Date.now()));
+    }, TYPING_PRUNE_MS);
+    return () => window.clearInterval(timer);
+  }, []);
 
   // Построим карту usersById для поиска отправителей в групповых сообщениях.
   const usersById = useMemo(() => {
@@ -135,6 +199,10 @@ export default function Home() {
 
     const onDm = (msg) => {
       const key = keyForMessage(msg, selfUser.id);
+      setLastActivityByChat((prev) => setActivity(prev, key, msg.createdAt));
+      if (msg.senderId !== selfUser.id) {
+        setTypingByChat((prev) => removeTypingUser(prev, key, msg.senderId));
+      }
       setMessagesByChat((prev) => {
         const cur = prev[key] || [];
         if (cur.some((m) => m.id === msg.id)) return prev;
@@ -219,6 +287,21 @@ export default function Home() {
       setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, ...user } : u)));
     };
 
+    const onChatTyping = ({ from, groupId, typing }) => {
+      if (from === selfUser.id) return;
+      const key = typeof groupId === 'number' ? `g:${groupId}` : `u:${from}`;
+      setTypingByChat((prev) => {
+        if (!typing) return removeTypingUser(prev, key, from);
+        return {
+          ...prev,
+          [key]: {
+            ...(prev[key] || {}),
+            [from]: Date.now() + TYPING_TTL_MS,
+          },
+        };
+      });
+    };
+
     // Активные групповые звонки: глобальный индикатор по событиям сервера.
     const onGroupcallActive = ({ groupId }) => {
       setActiveGroupCalls((prev) => {
@@ -245,6 +328,7 @@ export default function Home() {
     socket.on('dm:delete', onDmDelete);
     socket.on('dm:remove', onDmRemove);
     socket.on('dm:reaction', onDmReaction);
+    socket.on('chat:typing', onChatTyping);
     socket.on('profile:self', onProfileSelf);
     socket.on('groupcall:active', onGroupcallActive);
     socket.on('groupcall:ended', onGroupcallEnded);
@@ -258,6 +342,7 @@ export default function Home() {
       socket.off('dm:delete', onDmDelete);
       socket.off('dm:remove', onDmRemove);
       socket.off('dm:reaction', onDmReaction);
+      socket.off('chat:typing', onChatTyping);
       socket.off('profile:self', onProfileSelf);
       socket.off('groupcall:active', onGroupcallActive);
       socket.off('groupcall:ended', onGroupcallEnded);
@@ -307,6 +392,7 @@ export default function Home() {
     promise
       .then(({ messages }) => {
         setMessagesByChat((prev) => ({ ...prev, [key]: messages }));
+        setLastActivityByChat((prev) => setActivity(prev, key, latestCreatedAt(messages)));
       })
       .catch(() => { fetchedHistoryFor.current.delete(key); })
       .finally(() => setLoadingMessages(false));
@@ -331,6 +417,9 @@ export default function Home() {
     const prevSel = selectedRef.current;
     const prevKey = prevSel ? chatKey(prevSel) : null;
     const newKey = chatKey(sel);
+    if (prevKey && prevKey !== newKey) {
+      setTypingByChat((prev) => removeTypingChat(prev, prevKey));
+    }
     // Уходя из предыдущего чата — убираем разделитель "новые"
     setFirstUnreadByChat((fu) => {
       if (!prevKey || prevKey === newKey) return fu;
@@ -506,7 +595,12 @@ export default function Home() {
       if (call.state === 'idle') {
         call.start(peerUser, { withVideo: wantVideo });
       } else if (call.state === 'waiting' && call.peer?.id === peerId) {
-        call.rejoinAsCaller();
+        // start() сам корректно обработает waiting-вход (видит state и
+        // не играет исходящий звонок, идёт сразу в connecting + getMedia).
+        // rejoinAsCaller предполагал, что локальные треки живы (он
+        // создавался для in-app waiting), а после F5 они null. Поэтому
+        // унифицируем вход через start().
+        call.start(peerUser, { withVideo: wantVideo });
       } else {
         // Звонок с другим пиром или иное состояние — игнор.
         toast?.info?.('Сначала завершите текущий звонок');
@@ -549,6 +643,14 @@ export default function Home() {
     [call.state, groupCall, toast],
   );
 
+  const handleTypingChange = useCallback((typing) => {
+    if (!socket || !selected) return;
+    const payload = selected.kind === 'group'
+      ? { groupId: selected.id, typing }
+      : { to: selected.id, typing };
+    socket.emit('chat:typing', payload);
+  }, [socket, selected]);
+
   const onUserContextMenu = useCallback((e, user) => {
     setUserMenu({ user, x: e.clientX, y: e.clientY });
   }, []);
@@ -570,10 +672,80 @@ export default function Home() {
     return groups.find((g) => g.id === groupModal.groupId) || null;
   }, [groupModal, groups]);
 
+  // Видим ли встроенный звонок внутри main? incoming-стадия отдельная —
+  // это модалка (IncomingCallModal), а не блок в чате.
+  const embeddedCallVisible = call.state !== 'idle' && call.state !== 'incoming';
+  const embeddedGroupCallVisible = groupCall.state !== 'idle';
+
+  // Авто-переключение чата на пира звонка ровно в момент его «оживления»
+  // (idle/incoming → calling/connecting/in-call/waiting). Это нужно из-за
+  // того, что окно звонка по фидбеку показывается ТОЛЬКО в чате с пиром
+  // звонка (см. callInThisChat ниже). Иначе пользователь, инициирующий
+  // звонок из контекстного меню сайдбара или принимающий входящий
+  // через модалку, не увидел бы окно звонка вообще, пока вручную не
+  // зайдёт в чат с пиром. Дальнейшие переходы (calling → connecting →
+  // in-call) уже не дёргают select — пользователь может спокойно уйти
+  // в другой чат, и звонок остаётся жить в фоне.
+  const lastCallStateRef = useRef('idle');
+  useEffect(() => {
+    const prev = lastCallStateRef.current;
+    const cur = call.state;
+    lastCallStateRef.current = cur;
+    const wasOff = prev === 'idle' || prev === 'incoming';
+    const wasActive = cur !== 'idle' && cur !== 'incoming';
+    if (wasOff && wasActive && call.peer?.id) {
+      setSelected({ kind: 'user', id: call.peer.id });
+      setSidebarOpen(false);
+    }
+  }, [call.state, call.peer?.id]);
+  const lastGroupCallStateRef = useRef('idle');
+  useEffect(() => {
+    const prev = lastGroupCallStateRef.current;
+    const cur = groupCall.state;
+    lastGroupCallStateRef.current = cur;
+    if (prev === 'idle' && cur !== 'idle' && groupCall.group?.id) {
+      setSelected({ kind: 'group', id: groupCall.group.id });
+      setSidebarOpen(false);
+    }
+  }, [groupCall.state, groupCall.group?.id]);
+
+  // По фидбеку: окно звонка показываем ТОЛЬКО в чате с тем, с кем
+  // сейчас разговариваешь. Сам звонок при этом продолжается (audio/
+  // video идут как обычно), просто UI прячется когда листаешь другие
+  // чаты — и снова появляется при возвращении в нужный.
+  const callInThisChat = embeddedCallVisible
+    && selected?.kind === 'user'
+    && selectedUser
+    && call.peer?.id === selectedUser.id;
+  const groupCallInThisChat = embeddedGroupCallVisible
+    && selected?.kind === 'group'
+    && selectedGroup
+    && groupCall.group?.id === selectedGroup.id;
+
   const key = selected ? chatKey(selected) : null;
   const messages = (key && messagesByChat[key]) || [];
   const firstUnreadId = key ? firstUnreadByChat[key] : null;
   const selfName = getDisplayName(selfUser);
+  const typingUsers = useMemo(() => {
+    if (!selected || !key) return [];
+    const now = Date.now();
+    const byUser = typingByChat[key] || {};
+    if (selected.kind === 'user') {
+      return selectedUser && !isDeletedUser(selectedUser) && byUser[selectedUser.id] > now
+        ? [selectedUser]
+        : [];
+    }
+
+    return Object.entries(byUser)
+      .filter(([uid, expiresAt]) => Number(uid) !== selfUser.id && (expiresAt as number) > now)
+      .map(([uid]) => {
+        const id = Number(uid);
+        return usersById[id]
+          || selectedGroup?.members?.find((m) => m.id === id)
+          || { id, displayName: `#${id}` };
+      })
+      .filter((user) => !isDeletedUser(user));
+  }, [key, selected, selectedGroup, selectedUser, selfUser.id, typingByChat, usersById]);
 
   // Групповой unread — выделяем отдельно для UserList (по id группы)
   const userUnread = useMemo(() => {
@@ -631,6 +803,7 @@ export default function Home() {
           selfId={selfUser.id}
           unread={userUnread}
           groupUnread={groupUnread}
+          lastActivityByChat={lastActivityByChat}
           mutedIds={mutes}
           activeGroupCalls={activeGroupCalls}
           onSelectUser={handleSelectUser}
@@ -656,6 +829,11 @@ export default function Home() {
             <div className="text-sm text-slate-400">Выбери собеседника или группу</div>
           </div>
         )}
+
+        {/* Активный звонок (1:1 или групповой) передаётся в ChatPanel
+            как callSlot — он рендерится СРАЗУ ПОД хедером (имя+кнопки),
+            ВЫШЕ списка сообщений. Это и есть «дискорд-стайл» из
+            фидбека: ник наверху, звонок под ним, чат ещё ниже. */}
         <ChatPanel
           peer={selectedUser}
           group={selectedGroup}
@@ -672,6 +850,8 @@ export default function Home() {
           onCallVideo={() => handleCallVideo()}
           onStartGroupCall={handleStartGroupCall}
           onJoinGroupCall={handleStartGroupCall}
+          onTypingChange={handleTypingChange}
+          typingUsers={typingUsers}
           groupCallActive={
             selectedGroup ? activeGroupCalls.has(selectedGroup.id) : false
           }
@@ -687,6 +867,13 @@ export default function Home() {
           firstUnreadId={firstUnreadId}
           maxFileBytes={maxUploadBytes}
           usersById={usersById}
+          callSlot={
+            callInThisChat
+              ? <CallView call={call} embedded selfUser={selfUser} />
+              : groupCallInThisChat
+                ? <GroupCallView call={groupCall} usersById={usersById} selfId={selfUser.id} embedded />
+                : null
+          }
         />
       </main>
 
@@ -815,14 +1002,10 @@ export default function Home() {
         </AnimatePresence>
       </Suspense>
 
-      {/* Overlay: входящий звонок */}
+      {/* Входящий звонок — это всё ещё модалка-оверлей: чтобы пользователь
+          гарантированно увидел приглашение, даже если у него открыт другой
+          чат и сайдбар свернут. Сам активный звонок встроен в main выше. */}
       <IncomingCallModal call={call} />
-
-      {/* Overlay: активный 1:1 звонок */}
-      <CallView call={call} />
-
-      {/* Overlay: активный групповой звонок */}
-      <GroupCallView call={groupCall} usersById={usersById} selfId={selfUser.id} />
 
       {/* Настройки */}
       <Suspense fallback={null}>

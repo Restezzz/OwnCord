@@ -22,13 +22,23 @@ function resolveSecret() {
 }
 
 const SECRET = resolveSecret();
-// 14 дней — компромисс: пользователю не нужно перелогиниваться каждую
-// неделю, но при компрометации токена окно атаки сокращено вдвое
-// относительно прежних 30 дней.
-const TOKEN_TTL = process.env.JWT_TTL || '14d';
+// По умолчанию токены БЕССРОЧНЫЕ — UX-приоритет (десктоп-приложение
+// не должно требовать повторного логина без причины). Безопасность
+// держится на:
+//   - Секрете JWT_SECRET (компрометация = ротация секрета = разлогин всех).
+//   - authRequired() проверяет users.deleted_at → удалённый аккаунт
+//     мгновенно теряет доступ даже с валидным токеном.
+//   - Юзер может вручную выйти из аккаунта.
+//
+// Если хочется ограниченный TTL — задай JWT_TTL=14d (или 1h, 7d, 30m;
+// формат jsonwebtoken). Любое из значений 'never' | 'none' | '0' | ''
+// означает «без срока».
+const RAW_TTL = (process.env.JWT_TTL || 'never').trim().toLowerCase();
+const TOKEN_TTL = ['never', 'none', '0', ''].includes(RAW_TTL) ? null : RAW_TTL;
 
 export function signToken(user) {
-  return jwt.sign({ id: user.id, username: user.username }, SECRET, { expiresIn: TOKEN_TTL });
+  const opts = TOKEN_TTL ? { expiresIn: TOKEN_TTL } : {};
+  return jwt.sign({ id: user.id, username: user.username }, SECRET, opts);
 }
 
 export function verifyToken(token) {

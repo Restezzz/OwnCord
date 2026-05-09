@@ -5,6 +5,21 @@ import {
 import Avatar from './Avatar';
 import { getAvatarUrl, getDisplayName } from '../utils/user';
 
+function activityValue(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function maxActivity(...values) {
+  return Math.max(...values.map(activityValue));
+}
+
+function sortByActivity(list, getActivity) {
+  return list
+    .map((item, index) => ({ item, index, activity: activityValue(getActivity(item)) }))
+    .sort((a, b) => (b.activity - a.activity) || (a.index - b.index))
+    .map(({ item }) => item);
+}
+
 /**
  * Сайдбар-список. Содержит две секции — "Группы" и "Пользователи" —
  * разделённые видимой чертой. Выбор хранится в объекте `selected`:
@@ -19,6 +34,7 @@ export default function UserList({
   selfId,
   unread = {},             // peerId -> count (для юзеров)
   groupUnread = {},        // groupId -> count
+  lastActivityByChat = {}, // chatKey -> timestamp
   mutedIds = {},
   activeGroupCalls = null, // Set<groupId> — где идёт групповой звонок
   onUserContextMenu = null,
@@ -36,14 +52,22 @@ export default function UserList({
     // системные плашки в истории чатов отображаются отдельно (через
     // глобальный usersById, см. ChatPanel).
     const list = users.filter((u) => u.id !== selfId && !u.deleted);
-    if (!needle) return list;
-    return list.filter((u) => match(u.username) || match(u.displayName));
-  }, [users, selfId, needle]);
+    const matched = needle
+      ? list.filter((u) => match(u.username) || match(u.displayName))
+      : list;
+    return sortByActivity(
+      matched,
+      (u) => maxActivity(lastActivityByChat[`u:${u.id}`], u.lastActivityAt),
+    );
+  }, [users, selfId, needle, lastActivityByChat]);
 
   const filteredGroups = useMemo(() => {
-    if (!needle) return groups;
-    return groups.filter((g) => match(g.name));
-  }, [groups, needle]);
+    const matched = needle ? groups.filter((g) => match(g.name)) : groups;
+    return sortByActivity(
+      matched,
+      (g) => maxActivity(lastActivityByChat[`g:${g.id}`], g.updatedAt),
+    );
+  }, [groups, needle, lastActivityByChat]);
 
   const online = filteredUsers.filter((u) => u.online);
   const offline = filteredUsers.filter((u) => !u.online);
