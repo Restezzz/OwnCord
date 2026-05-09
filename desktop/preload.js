@@ -17,6 +17,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Метка, по которой клиент детектит, что он в десктоп-обёртке.
   isDesktop: true,
 
+  // Версия desktop-приложения (из desktop/package.json через app.getVersion()).
+  // Используется в SettingsPanel для отображения "OwnCord X.Y.Z" в сайдбаре.
+  // Возвращает Promise<string>.
+  getVersion: () => ipcRenderer.invoke('app:version'),
+
   // --- Конфиг (server URL, autostart, hotkeysEnabled) ---
   getConfig: () => ipcRenderer.invoke('config:get'),
   setConfig: (patch) => ipcRenderer.invoke('config:set', patch),

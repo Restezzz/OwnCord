@@ -37,6 +37,7 @@ import { getAvatarUrl, getDisplayName, isDeletedUser } from '../utils/user';
 const SettingsPanel = lazy(() => import('../components/SettingsPanel'));
 const ProfileModal = lazy(() => import('../components/ProfileModal'));
 const GroupModal = lazy(() => import('../components/GroupModal'));
+const ConfirmModal = lazy(() => import('../components/ConfirmModal'));
 
 // --- helpers ------------------------------------------------------------
 // Ключ чата в хеш-словарях (сообщения, unread и т.п.).
@@ -126,6 +127,9 @@ export default function Home() {
   const [userMenu, setUserMenu] = useState(null); // { user, x, y }
   const [groupMenu, setGroupMenu] = useState(null); // { group, x, y }
   const [groupModal, setGroupModal] = useState(null); // { mode: 'create'|'edit', groupId? }
+  // Окно подтверждения logout. Случайный клик по иконке двери в углу
+  // сайдбара не должен мгновенно вышвыривать юзера: попросим подтверждение.
+  const [confirmLogoutOpen, setConfirmLogoutOpen] = useState(false);
   // Set<groupId> — в каких группах сейчас активный звонок (по событиям сервера).
   const [activeGroupCalls, setActiveGroupCalls] = useState(() => new Set());
 
@@ -834,7 +838,7 @@ export default function Home() {
           <button className="btn-ghost" onClick={() => setSettingsOpen(true)} title="Настройки">
             <SettingsIcon size={18} />
           </button>
-          <button className="btn-ghost" onClick={logout} title="Выйти">
+          <button className="btn-ghost" onClick={() => setConfirmLogoutOpen(true)} title="Выйти">
             <LogOut size={18} />
           </button>
         </div>
@@ -1053,6 +1057,25 @@ export default function Home() {
       {/* Настройки */}
       <Suspense fallback={null}>
         <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      </Suspense>
+
+      {/* Подтверждение logout. Используется один общий ConfirmModal —
+          он же может пригодиться для других «опасных» действий. */}
+      <Suspense fallback={null}>
+        <ConfirmModal
+          open={confirmLogoutOpen}
+          title="Выйти из аккаунта?"
+          description="Текущая сессия будет завершена. Чтобы вернуться, потребуется ввести логин и пароль."
+          icon={<LogOut size={20} />}
+          confirmLabel="Выйти"
+          cancelLabel="Остаться"
+          danger
+          onConfirm={() => {
+            setConfirmLogoutOpen(false);
+            logout();
+          }}
+          onClose={() => setConfirmLogoutOpen(false)}
+        />
       </Suspense>
     </div>
   );

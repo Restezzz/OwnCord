@@ -3,12 +3,12 @@
 // (см. ./ProfileTab, ./PasswordTab, …) — этот файл только роутит между
 // ними и решает, какие пункты вообще показывать (admin/desktop only).
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Bell, Headphones, KeyRound, Keyboard, Lock, ShieldCheck, User, X } from 'lucide-react';
 import { modalVariants, overlayVariants, reducedVariants } from '../../utils/motion';
 import { useAuth } from '../../context/AuthContext';
-import { isDesktop } from '../../utils/desktop';
+import { isDesktop, getDesktopVersion } from '../../utils/desktop';
 import { ProfileTab } from './ProfileTab';
 import { PasswordTab } from './PasswordTab';
 import { AudioTab } from './AudioTab';
@@ -24,7 +24,7 @@ const ALL_TABS = [
   { id: 'password', label: 'Пароль', icon: Lock },
   { id: 'audio', label: 'Звук', icon: Headphones },
   { id: 'notifications', label: 'Уведомления', icon: Bell },
-  { id: 'keybinds', label: 'Биндинги', icon: Keyboard, desktopOnly: true },
+  { id: 'keybinds', label: 'Горячие клавиши', icon: Keyboard, desktopOnly: true },
   { id: 'privacy', label: 'Приватность', icon: ShieldCheck },
   { id: 'invites', label: 'Приглашения', icon: KeyRound, adminOnly: true },
 ];
@@ -39,6 +39,18 @@ export default function SettingsPanel({ open, onClose }: { open: boolean; onClos
     return true;
   });
   const [tab, setTab] = useState('profile');
+  // Версия десктоп-приложения (null на вебе) — показываем мелким шрифтом
+  // в подвале сайдбара. На веб-версии футер с версией не рендерим вовсе.
+  const [desktopVersion, setDesktopVersion] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void getDesktopVersion().then((v) => {
+      if (alive) setDesktopVersion(v);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
   const reduce = useReducedMotion();
   const overlayV = reduce ? reducedVariants(overlayVariants) : overlayVariants;
   const panelV = reduce ? reducedVariants(modalVariants) : modalVariants;
@@ -80,6 +92,14 @@ export default function SettingsPanel({ open, onClose }: { open: boolean; onClos
                   </button>
                 );
               })}
+              {/* Версия десктоп-приложения — только в Electron'е, прибита
+                  к низу сайдбара. На вебе — пусто (на горизонтальном скролле
+                  тоже скроется через hidden md:block). */}
+              {desktopVersion && (
+                <div className="hidden md:block mt-auto pt-3 px-2 text-[10px] text-slate-500 select-text">
+                  OwnCord {desktopVersion}
+                </div>
+              )}
             </aside>
 
             {/* Content */}
