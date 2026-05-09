@@ -11,9 +11,11 @@ import react from '@vitejs/plugin-react';
 const baseLogger = createLogger();
 const origError = baseLogger.error.bind(baseLogger);
 baseLogger.error = (msg, opts) => {
-  if (typeof msg === 'string'
-      && /ws proxy socket error/i.test(msg)
-      && /(ECONNABORTED|ECONNRESET|EPIPE)/.test(msg)) {
+  if (
+    typeof msg === 'string' &&
+    /ws proxy socket error/i.test(msg) &&
+    /(ECONNABORTED|ECONNRESET|EPIPE)/.test(msg)
+  ) {
     return;
   }
   origError(msg, opts);

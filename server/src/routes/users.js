@@ -15,8 +15,8 @@ function publicUser(row, online) {
     // пользователь». Username тоже зануляем, чтобы он нигде случайно
     // не отрисовался.
     username: deleted ? null : row.username,
-    displayName: deleted ? null : (row.display_name || row.username),
-    avatarPath: deleted ? null : (row.avatar_path || null),
+    displayName: deleted ? null : row.display_name || row.username,
+    avatarPath: deleted ? null : row.avatar_path || null,
     createdAt: row.created_at,
     lastActivityAt: row.last_activity_at ?? null,
     online: deleted ? false : online,

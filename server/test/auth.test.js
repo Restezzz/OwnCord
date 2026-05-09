@@ -20,9 +20,7 @@ describe('auth', () => {
   });
 
   it('register rejects duplicate username', async () => {
-    await request(app)
-      .post('/api/auth/register')
-      .send({ username: 'bob', password: 'secret123' });
+    await request(app).post('/api/auth/register').send({ username: 'bob', password: 'secret123' });
     const res = await request(app)
       .post('/api/auth/register')
       .send({ username: 'bob', password: 'other123' });
@@ -52,9 +50,7 @@ describe('auth', () => {
   });
 
   it('login fails with bad password', async () => {
-    await request(app)
-      .post('/api/auth/register')
-      .send({ username: 'dave', password: 'secret123' });
+    await request(app).post('/api/auth/register').send({ username: 'dave', password: 'secret123' });
     const res = await request(app)
       .post('/api/auth/login')
       .send({ username: 'dave', password: 'wrong' });
@@ -65,9 +61,7 @@ describe('auth', () => {
     const r = await request(app)
       .post('/api/auth/register')
       .send({ username: 'eve', password: 'secret123' });
-    const res = await request(app)
-      .get('/api/me')
-      .set('Authorization', `Bearer ${r.body.token}`);
+    const res = await request(app).get('/api/me').set('Authorization', `Bearer ${r.body.token}`);
     expect(res.status).toBe(200);
     expect(res.body.user.username).toBe('eve');
   });

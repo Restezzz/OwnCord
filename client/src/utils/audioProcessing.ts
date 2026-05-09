@@ -34,16 +34,16 @@ export type AudioFilterSettings = {
   // DynamicsCompressor: выравнивает разницу между громкими/тихими местами.
   // Параметры повторяют OBS-овский Compressor.
   compressorEnabled?: boolean;
-  compressorThreshold?: number;  // dB, -100..0
-  compressorRatio?: number;      // 1..20
-  compressorAttack?: number;     // ms, 0..1000
-  compressorRelease?: number;    // ms, 0..1000
-  compressorKnee?: number;       // dB, 0..40
+  compressorThreshold?: number; // dB, -100..0
+  compressorRatio?: number; // 1..20
+  compressorAttack?: number; // ms, 0..1000
+  compressorRelease?: number; // ms, 0..1000
+  compressorKnee?: number; // dB, 0..40
 
   // Шумовые ворота: ниже порога звук режется в ноль. Сделаны на GainNode
   // с RMS-детектором, опрашиваемым в rAF — для голосового чата хватает.
   noiseGateEnabled?: boolean;
-  noiseGateThreshold?: number;   // dB, -100..0
+  noiseGateThreshold?: number; // dB, -100..0
   // Hangover: сколько держать ворота открытыми после падения сигнала ниже
   // порога. Без этого ворота моргают на согласных и паузах между словами.
   noiseGateHoldMs?: number;
@@ -83,7 +83,9 @@ export type MicPipeline = {
 // Дефолты на случай отсутствия настроек. Подобраны под обычный голосовой
 // чат: умеренный HP, компрессор «как в OBS» (ratio 4, threshold -24),
 // мягкие ворота на -55 dB (ниже комнатного фона, но выше тишины).
-export const DEFAULT_AUDIO_FILTERS: Required<Omit<AudioFilterSettings, 'enabled' | 'inputVolume'>> & {
+export const DEFAULT_AUDIO_FILTERS: Required<
+  Omit<AudioFilterSettings, 'enabled' | 'inputVolume'>
+> & {
   enabled: boolean;
   inputVolume: number;
 } = {
@@ -306,7 +308,7 @@ export async function createMicPipeline(
       if (db >= cs.noiseGateThreshold) {
         lastAboveTs = now;
       }
-      const open = (now - lastAboveTs) <= cs.noiseGateHoldMs;
+      const open = now - lastAboveTs <= cs.noiseGateHoldMs;
       const targetGain = open ? 1 : 0;
       const currentGain = gateGain.gain.value;
       // Плавный переход — без него на открытии/закрытии слышен щелчок.
@@ -317,7 +319,9 @@ export async function createMicPipeline(
           gateGain.gain.cancelScheduledValues(ctx.currentTime);
           gateGain.gain.setValueAtTime(currentGain, ctx.currentTime);
           gateGain.gain.linearRampToValueAtTime(targetGain, t);
-        } catch { /* */ }
+        } catch {
+          /* */
+        }
       }
     } else {
       // Ворота выключены — держим gain=1 без ramp'ов.
@@ -326,7 +330,9 @@ export async function createMicPipeline(
         try {
           gateGain.gain.cancelScheduledValues(ctx.currentTime);
           gateGain.gain.setValueAtTime(1, ctx.currentTime);
-        } catch { /* */ }
+        } catch {
+          /* */
+        }
       }
     }
     rafId = requestAnimationFrame(tick);
@@ -340,7 +346,11 @@ export async function createMicPipeline(
     // Ультра-редкий случай (сразу остановили браузер?) — fallback.
     cancelled = true;
     cancelAnimationFrame(rafId);
-    try { ctx.close(); } catch { /* */ }
+    try {
+      ctx.close();
+    } catch {
+      /* */
+    }
     throw new Error('Failed to create processed audio track');
   }
 
@@ -376,35 +386,93 @@ export async function createMicPipeline(
         compressor.ratio.setValueAtTime(1, now);
       }
       makeupGain.gain.setValueAtTime(dbToLinear(merged.makeupGainDb), now);
-    } catch { /* AudioParam validation — игнор, попробуем на след. тике */ }
+    } catch {
+      /* AudioParam validation — игнор, попробуем на след. тике */
+    }
   };
 
   const destroy: MicPipeline['destroy'] = () => {
     cancelled = true;
     cancelAnimationFrame(rafId);
-    try { source.disconnect(); } catch { /* */ }
+    try {
+      source.disconnect();
+    } catch {
+      /* */
+    }
     if (rnnoiseNode) {
-      try { (rnnoiseNode as any).disconnect?.(); } catch { /* */ }
+      try {
+        (rnnoiseNode as any).disconnect?.();
+      } catch {
+        /* */
+      }
       // У RnnoiseWorkletNode из @sapphi-red есть свой destroy(), который
       // освобождает WASM-память внутри worklet'а. Без него worklet
       // тихо утекает по 0.5 МБ/звонок.
-      try { (rnnoiseNode as any).destroy?.(); } catch { /* */ }
+      try {
+        (rnnoiseNode as any).destroy?.();
+      } catch {
+        /* */
+      }
     }
-    try { inputGain.disconnect(); } catch { /* */ }
-    try { highPass.disconnect(); } catch { /* */ }
-    try { compressor.disconnect(); } catch { /* */ }
-    try { gateAnalyser.disconnect(); } catch { /* */ }
-    try { gateGain.disconnect(); } catch { /* */ }
-    try { makeupGain.disconnect(); } catch { /* */ }
-    try { finalAnalyser.disconnect(); } catch { /* */ }
-    try { destination.disconnect(); } catch { /* */ }
+    try {
+      inputGain.disconnect();
+    } catch {
+      /* */
+    }
+    try {
+      highPass.disconnect();
+    } catch {
+      /* */
+    }
+    try {
+      compressor.disconnect();
+    } catch {
+      /* */
+    }
+    try {
+      gateAnalyser.disconnect();
+    } catch {
+      /* */
+    }
+    try {
+      gateGain.disconnect();
+    } catch {
+      /* */
+    }
+    try {
+      makeupGain.disconnect();
+    } catch {
+      /* */
+    }
+    try {
+      finalAnalyser.disconnect();
+    } catch {
+      /* */
+    }
+    try {
+      destination.disconnect();
+    } catch {
+      /* */
+    }
     // Сам outputTrack останавливать не нужно — он закончится при close().
-    try { outputTrack.stop(); } catch { /* */ }
+    try {
+      outputTrack.stop();
+    } catch {
+      /* */
+    }
     // Останавливаем raw-треки, чтобы освободить микрофон.
     for (const t of rawStream.getTracks()) {
-      try { t.stop(); } catch { /* */ }
+      try {
+        t.stop();
+      } catch {
+        /* */
+      }
     }
-    try { ctx.close(); } catch { /* */ }
+    try {
+      ctx.close();
+    } catch {
+      /* */
+    }
   };
 
   return {
@@ -465,7 +533,9 @@ export function createMicScreenMixer(opts: {
     // практике все таргеты OwnCord поддерживают AudioContext.
     return {
       outputTrack: opts.screenAudioTrack,
-      destroy: () => { /* */ },
+      destroy: () => {
+        /* */
+      },
     };
   }
   const ctx: AudioContext = new Ctx({ latencyHint: 'interactive' });
@@ -475,7 +545,9 @@ export function createMicScreenMixer(opts: {
   // (в отличие от createMicPipeline, который подвержен 'silent track'-
   // багу при создании ДО первого user gesture). Тут контекст всегда
   // создаётся уже после клика по кнопке «Демонстрация со звуком».
-  ctx.resume().catch(() => { /* */ });
+  ctx.resume().catch(() => {
+    /* */
+  });
 
   const micSource = ctx.createMediaStreamSource(new MediaStream([opts.micTrack]));
   const screenSource = ctx.createMediaStreamSource(new MediaStream([opts.screenAudioTrack]));
@@ -492,13 +564,41 @@ export function createMicScreenMixer(opts: {
   const outputTrack = dest.stream.getAudioTracks()[0];
 
   const destroy = () => {
-    try { micSource.disconnect(); } catch { /* */ }
-    try { screenSource.disconnect(); } catch { /* */ }
-    try { micGainNode.disconnect(); } catch { /* */ }
-    try { screenGainNode.disconnect(); } catch { /* */ }
-    try { dest.disconnect(); } catch { /* */ }
-    try { outputTrack?.stop(); } catch { /* */ }
-    try { ctx.close(); } catch { /* */ }
+    try {
+      micSource.disconnect();
+    } catch {
+      /* */
+    }
+    try {
+      screenSource.disconnect();
+    } catch {
+      /* */
+    }
+    try {
+      micGainNode.disconnect();
+    } catch {
+      /* */
+    }
+    try {
+      screenGainNode.disconnect();
+    } catch {
+      /* */
+    }
+    try {
+      dest.disconnect();
+    } catch {
+      /* */
+    }
+    try {
+      outputTrack?.stop();
+    } catch {
+      /* */
+    }
+    try {
+      ctx.close();
+    } catch {
+      /* */
+    }
   };
 
   return { outputTrack, destroy };
@@ -653,10 +753,14 @@ export function detectMicFilterPreset(settings: any): MicFilterPreset {
       // равно дефолту 'standard' (это и так живёт в DEFAULTS).
       const a = actual === undefined ? STANDARD_PRESET[k] : actual;
       if (typeof expected === 'boolean') {
-        if (Boolean(a) !== expected) { match = false; break; }
+        if (Boolean(a) !== expected) {
+          match = false;
+          break;
+        }
       } else {
         if (typeof a !== 'number' || Math.abs(a - (expected as number)) > 0.001) {
-          match = false; break;
+          match = false;
+          break;
         }
       }
     }

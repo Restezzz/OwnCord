@@ -3,11 +3,14 @@ import fs from 'node:fs';
 import db from '../db.js';
 import { authRequired } from '../auth.js';
 import {
-  uploadAvatar, uploadVoice, uploadAttachment, publicPathFor, absolutePathFor, sniff,
+  uploadAvatar,
+  uploadVoice,
+  uploadAttachment,
+  publicPathFor,
+  absolutePathFor,
+  sniff,
 } from '../uploads.js';
-import {
-  emitToGroup, emitToUsers, joinUserToGroup, leaveUserFromGroup,
-} from '../ioHub.js';
+import { emitToGroup, emitToUsers, joinUserToGroup, leaveUserFromGroup } from '../ioHub.js';
 
 const router = Router();
 
@@ -19,7 +22,9 @@ const NAME_MAX = 64;
 
 function groupRow(id) {
   return db
-    .prepare('SELECT id, name, avatar_path, owner_id, created_at, updated_at FROM groups WHERE id = ?')
+    .prepare(
+      'SELECT id, name, avatar_path, owner_id, created_at, updated_at FROM groups WHERE id = ?',
+    )
     .get(id);
 }
 
@@ -78,7 +83,11 @@ function rowToMessage(row) {
   if (!row) return null;
   let payload = null;
   if (row.payload) {
-    try { payload = JSON.parse(row.payload); } catch { /* ignore */ }
+    try {
+      payload = JSON.parse(row.payload);
+    } catch {
+      /* ignore */
+    }
   }
   return {
     id: row.id,
@@ -108,11 +117,13 @@ function getMessage(id) {
 }
 
 function getReactionsForMessage(messageId) {
-  const reactions = db.prepare(
-    `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
-     FROM message_reactions WHERE message_id = ? GROUP BY emoji`
-  ).all(messageId);
-  return reactions.map(r => ({
+  const reactions = db
+    .prepare(
+      `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
+     FROM message_reactions WHERE message_id = ? GROUP BY emoji`,
+    )
+    .all(messageId);
+  return reactions.map((r) => ({
     emoji: r.emoji,
     count: r.count,
     users: r.users ? r.users.split(',').map(Number) : [],
@@ -186,7 +197,8 @@ router.post('/', authRequired, (req, res) => {
   const ids = Array.isArray(raw) ? [...new Set(raw.map(Number).filter(Number.isInteger))] : [];
   // Создатель — всегда участник (owner). Не дублируем.
   const uniqMembers = ids.filter((i) => i !== req.user.id);
-  if (uniqMembers.length < 1) return res.status(400).json({ error: 'need at least one other member' });
+  if (uniqMembers.length < 1)
+    return res.status(400).json({ error: 'need at least one other member' });
   if (uniqMembers.length + 1 > MAX_MEMBERS) {
     return res.status(400).json({ error: `too many members (max ${MAX_MEMBERS})` });
   }
@@ -202,9 +214,7 @@ router.post('/', authRequired, (req, res) => {
 
   const now = Date.now();
   const info = db
-    .prepare(
-      `INSERT INTO groups (name, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?)`,
-    )
+    .prepare(`INSERT INTO groups (name, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?)`)
     .run(validName, req.user.id, now, now);
   const groupId = info.lastInsertRowid;
 
@@ -234,7 +244,9 @@ router.patch('/:id', authRequired, (req, res) => {
   const row = groupRow(id);
   if (!row) return res.status(404).json({ error: 'not found' });
   // Owner и admin могут редактировать группу
-  const member = db.prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?').get(id, req.user.id);
+  const member = db
+    .prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?')
+    .get(id, req.user.id);
   if (!member || (member.role !== 'owner' && member.role !== 'admin')) {
     return res.status(403).json({ error: 'owner or admin only' });
   }
@@ -243,8 +255,7 @@ router.patch('/:id', authRequired, (req, res) => {
   if ('name' in (req.body || {})) {
     const v = validateName(name);
     if (!v) return res.status(400).json({ error: 'bad name' });
-    db.prepare('UPDATE groups SET name = ?, updated_at = ? WHERE id = ?')
-      .run(v, Date.now(), id);
+    db.prepare('UPDATE groups SET name = ?, updated_at = ? WHERE id = ?').run(v, Date.now(), id);
   }
 
   const full = toGroup(groupRow(id), membersDetailed(id));
@@ -267,7 +278,10 @@ router.delete('/:id', authRequired, (req, res) => {
     const allIds = memberIds(id);
     if (row.avatar_path) {
       const abs = absolutePathFor(row.avatar_path);
-      if (abs) fs.promises.unlink(abs).catch(() => { /* ignore */ });
+      if (abs)
+        fs.promises.unlink(abs).catch(() => {
+          /* ignore */
+        });
     }
     db.prepare('DELETE FROM groups WHERE id = ?').run(id);
     for (const uid of allIds) leaveUserFromGroup(uid, id);
@@ -299,15 +313,21 @@ function emitToUser_byRoom(userId, event, payload) {
 // Проверка прав: может ли текущий пользователь управлять ролями
 // Только owner может управлять ролями (повышать/понижать)
 function canManageRoles(groupId, userId) {
-  const member = db.prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?').get(groupId, userId);
+  const member = db
+    .prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?')
+    .get(groupId, userId);
   if (!member) return false;
   return member.role === 'owner';
 }
 
 // Проверка: может ли текущий пользователь кикнуть целевого пользователя
 function canKickUser(groupId, actorId, targetId) {
-  const actor = db.prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?').get(groupId, actorId);
-  const target = db.prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?').get(groupId, targetId);
+  const actor = db
+    .prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?')
+    .get(groupId, actorId);
+  const target = db
+    .prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?')
+    .get(groupId, targetId);
   if (!actor || !target) return false;
   // Админ не может кикнуть создателя
   if (actor.role === 'admin' && target.role === 'owner') return false;
@@ -323,30 +343,43 @@ function canKickUser(groupId, actorId, targetId) {
 router.patch('/:id/members/:userId/role', authRequired, (req, res) => {
   const id = Number(req.params.id);
   const targetId = Number(req.params.userId);
-  if (!Number.isInteger(id) || !Number.isInteger(targetId)) return res.status(400).json({ error: 'bad id' });
-  
+  if (!Number.isInteger(id) || !Number.isInteger(targetId))
+    return res.status(400).json({ error: 'bad id' });
+
   const { role } = req.body || {};
-  if (!['owner', 'admin', 'member'].includes(role)) return res.status(400).json({ error: 'invalid role' });
-  
+  if (!['owner', 'admin', 'member'].includes(role))
+    return res.status(400).json({ error: 'invalid role' });
+
   const group = groupRow(id);
   if (!group) return res.status(404).json({ error: 'group not found' });
-  
+
   // Проверяем что текущий пользователь может управлять ролями
-  if (!canManageRoles(id, req.user.id)) return res.status(403).json({ error: 'insufficient permissions' });
-  
+  if (!canManageRoles(id, req.user.id))
+    return res.status(403).json({ error: 'insufficient permissions' });
+
   // Проверяем что целевой пользователь существует в группе
-  const targetMember = db.prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?').get(id, targetId);
+  const targetMember = db
+    .prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?')
+    .get(id, targetId);
   if (!targetMember) return res.status(404).json({ error: 'member not found' });
-  
+
   // Создателя нельзя понизить или изменить его роль
-  if (group.owner_id === targetId && role !== 'owner') return res.status(403).json({ error: 'cannot change owner role' });
-  
+  if (group.owner_id === targetId && role !== 'owner')
+    return res.status(403).json({ error: 'cannot change owner role' });
+
   // Админ не может повысить до owner или понизить owner
-  const actorRole = db.prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?').get(id, req.user.id).role;
-  if (actorRole === 'admin' && role === 'owner') return res.status(403).json({ error: 'admins cannot promote to owner' });
-  
-  db.prepare('UPDATE group_members SET role = ? WHERE group_id = ? AND user_id = ?').run(role, id, targetId);
-  
+  const actorRole = db
+    .prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?')
+    .get(id, req.user.id).role;
+  if (actorRole === 'admin' && role === 'owner')
+    return res.status(403).json({ error: 'admins cannot promote to owner' });
+
+  db.prepare('UPDATE group_members SET role = ? WHERE group_id = ? AND user_id = ?').run(
+    role,
+    id,
+    targetId,
+  );
+
   const full = toGroup(group, membersDetailed(id));
   emitToGroup(id, 'group:update', full);
   res.json({ ok: true, group: full });
@@ -376,7 +409,8 @@ router.post('/:id/members', authRequired, (req, res) => {
       .prepare(`SELECT id FROM users WHERE id IN (${placeholders})`)
       .all(...toAdd)
       .map((r) => r.id);
-    if (found.length !== toAdd.length) return res.status(400).json({ error: 'some users not found' });
+    if (found.length !== toAdd.length)
+      return res.status(400).json({ error: 'some users not found' });
   }
 
   const now = Date.now();
@@ -396,7 +430,9 @@ router.post('/:id/members', authRequired, (req, res) => {
     // Системное сообщение «X добавил Y, Z» — после joinUserToGroup,
     // чтобы новички тоже получили событие через group:<id> комнату.
     insertSystemMessage(id, {
-      type: 'member_added', actorId: req.user.id, targetIds: toAdd,
+      type: 'member_added',
+      actorId: req.user.id,
+      targetIds: toAdd,
     });
   }
   res.json({ group: full });
@@ -413,12 +449,12 @@ router.delete('/:id/members/:userId', authRequired, (req, res) => {
 
   const me = req.user.id;
   const selfLeave = userId === me;
-  
+
   // Проверка прав: можно ли кикнуть пользователя
   if (!selfLeave && !canKickUser(id, me, userId)) {
     return res.status(403).json({ error: 'not allowed' });
   }
-  
+
   if (userId === row.owner_id) {
     return res.status(400).json({ error: 'cannot remove owner (delete the group)' });
   }
@@ -433,7 +469,9 @@ router.delete('/:id/members/:userId', authRequired, (req, res) => {
     insertSystemMessage(id, { type: 'member_left', actorId: userId });
   } else {
     insertSystemMessage(id, {
-      type: 'member_removed', actorId: me, targetIds: [userId],
+      type: 'member_removed',
+      actorId: me,
+      targetIds: [userId],
     });
   }
 
@@ -446,36 +484,52 @@ router.delete('/:id/members/:userId', authRequired, (req, res) => {
 
 // ---------- аватар группы ---------------------------------------------------
 
-router.post('/:id/avatar', authRequired, uploadAvatar.single('avatar'), sniff('image'), (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
-  // Owner и admin могут загружать аватар
-  const member = db.prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?').get(id, req.user.id);
-  if (!member || (member.role !== 'owner' && member.role !== 'admin')) {
-    return res.status(403).json({ error: 'owner or admin only' });
-  }
-  if (!req.file) return res.status(400).json({ error: 'no file' });
+router.post(
+  '/:id/avatar',
+  authRequired,
+  uploadAvatar.single('avatar'),
+  sniff('image'),
+  (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
+    // Owner и admin могут загружать аватар
+    const member = db
+      .prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?')
+      .get(id, req.user.id);
+    if (!member || (member.role !== 'owner' && member.role !== 'admin')) {
+      return res.status(403).json({ error: 'owner or admin only' });
+    }
+    if (!req.file) return res.status(400).json({ error: 'no file' });
 
-  const old = db.prepare('SELECT avatar_path FROM groups WHERE id = ?').get(id);
-  if (old?.avatar_path) {
-    const abs = absolutePathFor(old.avatar_path);
-    if (abs) fs.promises.unlink(abs).catch(() => { /* ignore */ });
-  }
+    const old = db.prepare('SELECT avatar_path FROM groups WHERE id = ?').get(id);
+    if (old?.avatar_path) {
+      const abs = absolutePathFor(old.avatar_path);
+      if (abs)
+        fs.promises.unlink(abs).catch(() => {
+          /* ignore */
+        });
+    }
 
-  const pubPath = publicPathFor(req.file.path);
-  db.prepare('UPDATE groups SET avatar_path = ?, updated_at = ? WHERE id = ?')
-    .run(pubPath, Date.now(), id);
+    const pubPath = publicPathFor(req.file.path);
+    db.prepare('UPDATE groups SET avatar_path = ?, updated_at = ? WHERE id = ?').run(
+      pubPath,
+      Date.now(),
+      id,
+    );
 
-  const full = toGroup(groupRow(id), membersDetailed(id));
-  emitToUsers(memberIds(id), 'group:update', full);
-  res.json({ group: full });
-});
+    const full = toGroup(groupRow(id), membersDetailed(id));
+    emitToUsers(memberIds(id), 'group:update', full);
+    res.json({ group: full });
+  },
+);
 
 router.delete('/:id/avatar', authRequired, (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
   // Owner и admin могут удалять аватар
-  const member = db.prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?').get(id, req.user.id);
+  const member = db
+    .prepare('SELECT role FROM group_members WHERE group_id = ? AND user_id = ?')
+    .get(id, req.user.id);
   if (!member || (member.role !== 'owner' && member.role !== 'admin')) {
     return res.status(403).json({ error: 'owner or admin only' });
   }
@@ -483,10 +537,15 @@ router.delete('/:id/avatar', authRequired, (req, res) => {
   if (!row) return res.status(404).json({ error: 'not found' });
   if (row.avatar_path) {
     const abs = absolutePathFor(row.avatar_path);
-    if (abs) fs.promises.unlink(abs).catch(() => { /* ignore */ });
+    if (abs)
+      fs.promises.unlink(abs).catch(() => {
+        /* ignore */
+      });
   }
-  db.prepare('UPDATE groups SET avatar_path = NULL, updated_at = ? WHERE id = ?')
-    .run(Date.now(), id);
+  db.prepare('UPDATE groups SET avatar_path = NULL, updated_at = ? WHERE id = ?').run(
+    Date.now(),
+    id,
+  );
   const full = toGroup(groupRow(id), membersDetailed(id));
   emitToUsers(memberIds(id), 'group:update', full);
   res.json({ group: full });
@@ -538,79 +597,99 @@ router.post('/:id/messages/text', authRequired, (req, res) => {
   res.json({ ok: true, message: msg });
 });
 
-router.post('/:id/messages/voice', authRequired, uploadVoice.single('voice'), sniff('audio'), (req, res) => {
-  const id = Number(req.params.id);
-  const durationMs = Number(req.body.durationMs) || null;
-  if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
-  if (!isMember(id, req.user.id)) return res.status(403).json({ error: 'not a member' });
-  if (!req.file) return res.status(400).json({ error: 'no file' });
+router.post(
+  '/:id/messages/voice',
+  authRequired,
+  uploadVoice.single('voice'),
+  sniff('audio'),
+  (req, res) => {
+    const id = Number(req.params.id);
+    const durationMs = Number(req.body.durationMs) || null;
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
+    if (!isMember(id, req.user.id)) return res.status(403).json({ error: 'not a member' });
+    if (!req.file) return res.status(400).json({ error: 'no file' });
 
-  const pubPath = publicPathFor(req.file.path);
-  const now = Date.now();
-  const info = db
-    .prepare(
-      `INSERT INTO messages (sender_id, group_id, content, created_at, kind, attachment_path, duration_ms)
+    const pubPath = publicPathFor(req.file.path);
+    const now = Date.now();
+    const info = db
+      .prepare(
+        `INSERT INTO messages (sender_id, group_id, content, created_at, kind, attachment_path, duration_ms)
        VALUES (?, ?, '', ?, 'voice', ?, ?)`,
-    )
-    .run(req.user.id, id, now, pubPath, durationMs);
-  db.prepare('UPDATE groups SET updated_at = ? WHERE id = ?').run(now, id);
+      )
+      .run(req.user.id, id, now, pubPath, durationMs);
+    db.prepare('UPDATE groups SET updated_at = ? WHERE id = ?').run(now, id);
 
-  const msg = rowToMessage(getMessage(info.lastInsertRowid));
-  emitToGroup(id, 'dm:new', msg);
-  res.json({ ok: true, message: msg });
-});
+    const msg = rowToMessage(getMessage(info.lastInsertRowid));
+    emitToGroup(id, 'dm:new', msg);
+    res.json({ ok: true, message: msg });
+  },
+);
 
-router.post('/:id/messages/file', authRequired, uploadAttachment.array('files', 10), sniff(), (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
-  if (!isMember(id, req.user.id)) return res.status(403).json({ error: 'not a member' });
-  const files = Array.isArray(req.files) ? req.files : (req.file ? [req.file] : []);
-  if (files.length === 0) return res.status(400).json({ error: 'no file' });
+router.post(
+  '/:id/messages/file',
+  authRequired,
+  uploadAttachment.array('files', 10),
+  sniff(),
+  (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
+    if (!isMember(id, req.user.id)) return res.status(403).json({ error: 'not a member' });
+    const files = Array.isArray(req.files) ? req.files : req.file ? [req.file] : [];
+    if (files.length === 0) return res.status(400).json({ error: 'no file' });
 
-  const caption = typeof req.body.content === 'string' ? req.body.content.trim().slice(0, 4000) : '';
-  const now = Date.now();
-  
-  // Первый файл идёт в основные колонки, остальные - в payload
-  const firstFile = files[0];
-  const pubPath = publicPathFor(firstFile.path);
-  const mime = firstFile.mimetype || 'application/octet-stream';
-  const kind = mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : 'file';
-  
-  let payload = null;
-  if (files.length > 1) {
-    const additionalAttachments = files.slice(1).map(f => {
-      const p = publicPathFor(f.path);
-      const m = f.mimetype || 'application/octet-stream';
-      const k = m.startsWith('image/') ? 'image' : m.startsWith('video/') ? 'video' : 'file';
-      return {
-        path: p,
-        name: f.originalname,
-        size: f.size,
-        mime: m,
-        kind: k,
-      };
-    });
-    payload = { additionalAttachments };
-  }
-  
-  const info = db
-    .prepare(
-      `INSERT INTO messages (
+    const caption =
+      typeof req.body.content === 'string' ? req.body.content.trim().slice(0, 4000) : '';
+    const now = Date.now();
+
+    // Первый файл идёт в основные колонки, остальные - в payload
+    const firstFile = files[0];
+    const pubPath = publicPathFor(firstFile.path);
+    const mime = firstFile.mimetype || 'application/octet-stream';
+    const kind = mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : 'file';
+
+    let payload = null;
+    if (files.length > 1) {
+      const additionalAttachments = files.slice(1).map((f) => {
+        const p = publicPathFor(f.path);
+        const m = f.mimetype || 'application/octet-stream';
+        const k = m.startsWith('image/') ? 'image' : m.startsWith('video/') ? 'video' : 'file';
+        return {
+          path: p,
+          name: f.originalname,
+          size: f.size,
+          mime: m,
+          kind: k,
+        };
+      });
+      payload = { additionalAttachments };
+    }
+
+    const info = db
+      .prepare(
+        `INSERT INTO messages (
          sender_id, group_id, content, created_at, kind,
          attachment_path, attachment_name, attachment_size, attachment_mime, payload
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      req.user.id, id, caption, now, kind,
-      pubPath, firstFile.originalname, firstFile.size, mime,
-      payload ? JSON.stringify(payload) : null,
-    );
-  db.prepare('UPDATE groups SET updated_at = ? WHERE id = ?').run(now, id);
+      )
+      .run(
+        req.user.id,
+        id,
+        caption,
+        now,
+        kind,
+        pubPath,
+        firstFile.originalname,
+        firstFile.size,
+        mime,
+        payload ? JSON.stringify(payload) : null,
+      );
+    db.prepare('UPDATE groups SET updated_at = ? WHERE id = ?').run(now, id);
 
-  const msg = rowToMessage(getMessage(info.lastInsertRowid));
-  emitToGroup(id, 'dm:new', msg);
-  res.json({ ok: true, message: msg });
-});
+    const msg = rowToMessage(getMessage(info.lastInsertRowid));
+    emitToGroup(id, 'dm:new', msg);
+    res.json({ ok: true, message: msg });
+  },
+);
 
 // --- Реакции на сообщения ---
 
@@ -622,32 +701,39 @@ router.post('/:id/messages/:msgId/reaction', authRequired, (req, res) => {
 
   if (!isMember(id, req.user.id)) return res.status(403).json({ error: 'not a member' });
 
-  const msg = db.prepare('SELECT id, sender_id, group_id FROM messages WHERE id = ? AND group_id = ?').get(msgId, id);
+  const msg = db
+    .prepare('SELECT id, sender_id, group_id FROM messages WHERE id = ? AND group_id = ?')
+    .get(msgId, id);
   if (!msg) return res.status(404).json({ error: 'message not found' });
-  if (msg.sender_id === req.user.id) return res.status(400).json({ error: 'cannot react to own message' });
+  if (msg.sender_id === req.user.id)
+    return res.status(400).json({ error: 'cannot react to own message' });
 
   // Проверяем, есть ли уже такая реакция от этого пользователя
-  const existing = db.prepare(
-    'SELECT id FROM message_reactions WHERE message_id = ? AND user_id = ? AND emoji = ?'
-  ).get(msgId, req.user.id, emoji);
+  const existing = db
+    .prepare('SELECT id FROM message_reactions WHERE message_id = ? AND user_id = ? AND emoji = ?')
+    .get(msgId, req.user.id, emoji);
 
   if (existing) {
     // Удаляем реакцию (toggle)
     db.prepare('DELETE FROM message_reactions WHERE id = ?').run(existing.id);
   } else {
     // Добавляем реакцию
-    db.prepare(
-      'INSERT INTO message_reactions (message_id, user_id, emoji) VALUES (?, ?, ?)'
-    ).run(msgId, req.user.id, emoji);
+    db.prepare('INSERT INTO message_reactions (message_id, user_id, emoji) VALUES (?, ?, ?)').run(
+      msgId,
+      req.user.id,
+      emoji,
+    );
   }
 
   // Получаем все реакции для этого сообщения
-  const reactions = db.prepare(
-    `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
-     FROM message_reactions WHERE message_id = ? GROUP BY emoji`
-  ).all(msgId);
+  const reactions = db
+    .prepare(
+      `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
+     FROM message_reactions WHERE message_id = ? GROUP BY emoji`,
+    )
+    .all(msgId);
 
-  const reactionsMap = reactions.map(r => ({
+  const reactionsMap = reactions.map((r) => ({
     emoji: r.emoji,
     count: r.count,
     users: r.users ? r.users.split(',').map(Number) : [],
@@ -665,12 +751,14 @@ router.get('/:id/messages/:msgId/reactions', authRequired, (req, res) => {
   const msg = db.prepare('SELECT id FROM messages WHERE id = ? AND group_id = ?').get(msgId, id);
   if (!msg) return res.status(404).json({ error: 'message not found' });
 
-  const reactions = db.prepare(
-    `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
-     FROM message_reactions WHERE message_id = ? GROUP BY emoji`
-  ).all(msgId);
+  const reactions = db
+    .prepare(
+      `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
+     FROM message_reactions WHERE message_id = ? GROUP BY emoji`,
+    )
+    .all(msgId);
 
-  const reactionsMap = reactions.map(r => ({
+  const reactionsMap = reactions.map((r) => ({
     emoji: r.emoji,
     count: r.count,
     users: r.users ? r.users.split(',').map(Number) : [],

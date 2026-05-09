@@ -1,6 +1,4 @@
-import {
-  useCallback, useEffect, useMemo, useRef, useState,
-} from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { useSpeakingDetector } from './useSpeakingDetector';
 import {
@@ -64,7 +62,9 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
 
   const [state, setState] = useState(initialSavedCall ? 'waiting' : 'idle');
   const [peer, setPeer] = useState(initialSavedCall?.peer || null);
-  const [withVideo, setWithVideo] = useState(initialSavedCall ? !!initialSavedCall.withVideo : false);
+  const [withVideo, setWithVideo] = useState(
+    initialSavedCall ? !!initialSavedCall.withVideo : false,
+  );
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
   // waitingUntil: сколько у нас осталось до того, как сервер сам
@@ -95,11 +95,18 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   const [sharingScreen, setSharingScreen] = useState(false);
 
   // Что пир сейчас шлёт — для UI на нашей стороне.
-  const [peerMedia, setPeerMedia] = useState({ mic: true, camera: false, screen: false, screenAudio: false });
+  const [peerMedia, setPeerMedia] = useState({
+    mic: true,
+    camera: false,
+    screen: false,
+    screenAudio: false,
+  });
 
   // state-ref для доступа из обработчиков сокета (closures).
   const stateRef = useRef(state);
-  useEffect(() => { stateRef.current = state; }, [state]);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   // pc и связанные
   const pcRef = useRef(null);
@@ -170,12 +177,8 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   // muted из устаревшего closure'а первого рендера.
   const getMyMediaState = () => ({
     mic: !!micTrackRef.current && !!micTrackRef.current.enabled,
-    camera:
-      !!cameraTrackRef.current &&
-      videoSenderRef.current?.track === cameraTrackRef.current,
-    screen:
-      !!screenTrackRef.current &&
-      videoSenderRef.current?.track === screenTrackRef.current,
+    camera: !!cameraTrackRef.current && videoSenderRef.current?.track === cameraTrackRef.current,
+    screen: !!screenTrackRef.current && videoSenderRef.current?.track === screenTrackRef.current,
     screenAudio: !!screenAudioTrackRef.current,
   });
 
@@ -208,7 +211,9 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
           pcRef.current.oniceconnectionstatechange = null;
           pcRef.current.close();
         }
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
       pcRef.current = null;
       iceQueueRef.current = [];
       audioSenderRef.current = null;
@@ -218,7 +223,14 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       pendingOfferRef.current = null;
 
       const ls = localStreamRef.current;
-      if (ls) ls.getTracks().forEach((t) => { try { t.stop(); } catch { /* */ } });
+      if (ls)
+        ls.getTracks().forEach((t) => {
+          try {
+            t.stop();
+          } catch {
+            /* */
+          }
+        });
       localStreamRef.current = null;
 
       // Pipeline сам остановит свои raw-треки и закроет AudioContext.
@@ -226,23 +238,38 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       // outputTrack.stop() — иначе выходной трек MediaStreamDestination
       // может остаться висеть.
       if (micPipelineRef.current) {
-        try { micPipelineRef.current.destroy(); } catch { /* */ }
+        try {
+          micPipelineRef.current.destroy();
+        } catch {
+          /* */
+        }
         micPipelineRef.current = null;
       }
       // Микшер mic+screen-audio (если демка со звуком была активна на
       // момент завершения звонка) — закрываем свой AudioContext и
       // outputTrack, чтобы не утекали ресурсы.
       if (micScreenMixerRef.current) {
-        try { micScreenMixerRef.current.destroy(); } catch { /* */ }
+        try {
+          micScreenMixerRef.current.destroy();
+        } catch {
+          /* */
+        }
         micScreenMixerRef.current = null;
       }
 
       for (const ref of [
-        cameraTrackRef, screenTrackRef, micTrackRef,
-        placeholderAudioRef, placeholderVideoRef,
+        cameraTrackRef,
+        screenTrackRef,
+        micTrackRef,
+        placeholderAudioRef,
+        placeholderVideoRef,
       ]) {
         if (ref.current) {
-          try { ref.current.stop(); } catch { /* */ }
+          try {
+            ref.current.stop();
+          } catch {
+            /* */
+          }
           ref.current = null;
         }
       }
@@ -271,32 +298,37 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   // (false). UI по этому флагу решает, какую кнопку показать:
   //   leaver          → зелёная «Подключиться» (rejoinAsCaller)
   //   оставшийся один → красная End (hangup → cleanup; сервер финалит)
-  const enterWaiting = useCallback((bySelf = false) => {
-    if (iceTimeoutRef.current) {
-      clearTimeout(iceTimeoutRef.current);
-      iceTimeoutRef.current = null;
-    }
-    try {
-      if (pcRef.current) {
-        pcRef.current.ontrack = null;
-        pcRef.current.onicecandidate = null;
-        pcRef.current.onconnectionstatechange = null;
-        pcRef.current.oniceconnectionstatechange = null;
-        pcRef.current.close();
+  const enterWaiting = useCallback(
+    (bySelf = false) => {
+      if (iceTimeoutRef.current) {
+        clearTimeout(iceTimeoutRef.current);
+        iceTimeoutRef.current = null;
       }
-    } catch { /* ignore */ }
-    pcRef.current = null;
-    iceQueueRef.current = [];
-    audioSenderRef.current = null;
-    videoSenderRef.current = null;
-    pendingOfferRef.current = null;
-    setRemoteStream(null);
-    setPeerMedia({ mic: false, camera: false, screen: false, screenAudio: false });
-    setWaitingUntil(Date.now() + WAIT_WINDOW_MS);
-    setSelfLeft(bySelf);
-    setState('waiting');
-    sounds?.playDisconnect?.();
-  }, [sounds]);
+      try {
+        if (pcRef.current) {
+          pcRef.current.ontrack = null;
+          pcRef.current.onicecandidate = null;
+          pcRef.current.onconnectionstatechange = null;
+          pcRef.current.oniceconnectionstatechange = null;
+          pcRef.current.close();
+        }
+      } catch {
+        /* ignore */
+      }
+      pcRef.current = null;
+      iceQueueRef.current = [];
+      audioSenderRef.current = null;
+      videoSenderRef.current = null;
+      pendingOfferRef.current = null;
+      setRemoteStream(null);
+      setPeerMedia({ mic: false, camera: false, screen: false, screenAudio: false });
+      setWaitingUntil(Date.now() + WAIT_WINDOW_MS);
+      setSelfLeft(bySelf);
+      setState('waiting');
+      sounds?.playDisconnect?.();
+    },
+    [sounds],
+  );
 
   // --- PeerConnection ----------------------------------------------------
   // Создание PeerConnection построено по классической схеме:
@@ -431,10 +463,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         }
         audioForSender = placeholderAudioRef.current;
       }
-      audioSenderRef.current = pc.addTrack(
-        audioForSender,
-        ls || new MediaStream([audioForSender]),
-      );
+      audioSenderRef.current = pc.addTrack(audioForSender, ls || new MediaStream([audioForSender]));
 
       let videoForSender = videoTrack;
       if (!videoForSender) {
@@ -443,13 +472,9 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         }
         videoForSender = placeholderVideoRef.current;
       }
-      videoSenderRef.current = pc.addTrack(
-        videoForSender,
-        ls || new MediaStream([videoForSender]),
-      );
+      videoSenderRef.current = pc.addTrack(videoForSender, ls || new MediaStream([videoForSender]));
 
       return pc;
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     },
     [emitMyMedia, socket, sounds],
   );
@@ -510,7 +535,9 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     if (!pipeline) return;
     try {
       pipeline.updateSettings(pickAudioFilterSettings(settings));
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }, [
     settings.inputVolume,
     settings.noiseSuppression,
@@ -611,10 +638,12 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         await pc.setLocalDescription(offer);
         socket.emit('rtc:offer', { to: targetUser.id, callId, sdp: pc.localDescription });
       } catch (e) {
-        toast?.error?.(prettyMediaError(
-          isRejoin ? 'Не удалось переподключиться' : 'Не удалось начать звонок',
-          e,
-        ));
+        toast?.error?.(
+          prettyMediaError(
+            isRejoin ? 'Не удалось переподключиться' : 'Не удалось начать звонок',
+            e,
+          ),
+        );
         hangup('start-failed');
       }
     },
@@ -681,7 +710,11 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         // Senders уже инициализированы и привязаны к трекам внутри
         // createPeerConnection. Доп. applyLocalTracks тут не нужен.
         for (const c of iceQueueRef.current) {
-          try { await pc.addIceCandidate(c); } catch { /* */ }
+          try {
+            await pc.addIceCandidate(c);
+          } catch {
+            /* */
+          }
         }
         iceQueueRef.current = [];
         const answer = await pc.createAnswer();
@@ -717,7 +750,8 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     setMuted(!nextEnabled);
     // Пип перед emitMyMedia — пользователь должен услышать фидбек
     // мгновенно, независимо от задержки сети.
-    if (nextEnabled) sounds?.playMicUnmute?.(); else sounds?.playMicMute?.();
+    if (nextEnabled) sounds?.playMicUnmute?.();
+    else sounds?.playMicMute?.();
     // emit отправим после setMuted
     setTimeout(emitMyMedia, 0);
   }, [emitMyMedia, sounds]);
@@ -733,7 +767,8 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       // мы сейчас замьютим; так что пользователь услышит их даже если
       // включается deafen. Это ожидаемое поведение: UI-пип — не «звук
       // собеседника», его глушить deafen'ом не надо.
-      if (next) sounds?.playDeafen?.(); else sounds?.playUndeafen?.();
+      if (next) sounds?.playDeafen?.();
+      else sounds?.playUndeafen?.();
       return next;
     });
   }, [sounds]);
@@ -760,7 +795,11 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     if (!placeholderVideoRef.current) {
       placeholderVideoRef.current = createPlaceholderVideoTrack();
     }
-    try { await videoSenderRef.current.replaceTrack(placeholderVideoRef.current); } catch { /* */ }
+    try {
+      await videoSenderRef.current.replaceTrack(placeholderVideoRef.current);
+    } catch {
+      /* */
+    }
   }, []);
 
   const toggleCamera = useCallback(async () => {
@@ -768,14 +807,22 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
 
     // Если сейчас стримим экран — сначала выключим его
     if (sharingScreen && screenTrackRef.current) {
-      try { screenTrackRef.current.stop(); } catch { /* */ }
+      try {
+        screenTrackRef.current.stop();
+      } catch {
+        /* */
+      }
       screenTrackRef.current = null;
       setSharingScreen(false);
     }
 
     if (cameraOn && cameraTrackRef.current) {
       // выключить камеру
-      try { cameraTrackRef.current.stop(); } catch { /* */ }
+      try {
+        cameraTrackRef.current.stop();
+      } catch {
+        /* */
+      }
       const s = localStreamRef.current;
       if (s) s.removeTrack(cameraTrackRef.current);
       cameraTrackRef.current = null;
@@ -817,167 +864,218 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       socket.emit('rtc:offer', { to: target.id, callId: cid, sdp: pc.localDescription });
-    } catch { /* */ }
+    } catch {
+      /* */
+    }
   }, [socket]);
 
-  const toggleScreenShare = useCallback(async (presetKey = '720p', includeAudio = false) => {
-    if (!pcRef.current || !videoSenderRef.current) return;
+  const toggleScreenShare = useCallback(
+    async (presetKey = '720p', includeAudio = false) => {
+      if (!pcRef.current || !videoSenderRef.current) return;
 
-    if (sharingScreen && screenTrackRef.current) {
-      // Выключаем шаринг экрана.
-      //
-      // Захватываем треки в локалы и обнуляем ref'ы ДО любых await: иначе
-      // .stop() ниже асинхронно фаерит ended на screenTrackRef.current,
-      // и пока мы yield-им внутри replaceTrack, наш собственный onended
-      // может пойти параллельно по тому же ref'у (двойная очистка → NPE
-      // на s.removeTrack(null)). Race-protection в onended построена на
-      // проверке screenTrackRef.current !== track — поэтому нулим сразу.
-      const screenVideoTrack = screenTrackRef.current;
-      const screenAudioLocal = screenAudioTrackRef.current;
-      const mixer = micScreenMixerRef.current;
-      screenTrackRef.current = null;
-      screenAudioTrackRef.current = null;
-      micScreenMixerRef.current = null;
+      if (sharingScreen && screenTrackRef.current) {
+        // Выключаем шаринг экрана.
+        //
+        // Захватываем треки в локалы и обнуляем ref'ы ДО любых await: иначе
+        // .stop() ниже асинхронно фаерит ended на screenTrackRef.current,
+        // и пока мы yield-им внутри replaceTrack, наш собственный onended
+        // может пойти параллельно по тому же ref'у (двойная очистка → NPE
+        // на s.removeTrack(null)). Race-protection в onended построена на
+        // проверке screenTrackRef.current !== track — поэтому нулим сразу.
+        const screenVideoTrack = screenTrackRef.current;
+        const screenAudioLocal = screenAudioTrackRef.current;
+        const mixer = micScreenMixerRef.current;
+        screenTrackRef.current = null;
+        screenAudioTrackRef.current = null;
+        micScreenMixerRef.current = null;
 
-      try { screenVideoTrack.stop(); } catch { /* */ }
-      if (screenAudioLocal) {
-        // Сначала возвращаем чистый мик на audio-sender, ПОТОМ останавливаем
-        // микшер. Иначе пир на 1-2 кадра услышит «никого» (sender держит
-        // остановленный mixer.outputTrack).
-        if (audioSenderRef.current && micTrackRef.current) {
-          try { await audioSenderRef.current.replaceTrack(micTrackRef.current); } catch { /* */ }
+        try {
+          screenVideoTrack.stop();
+        } catch {
+          /* */
         }
-        try { screenAudioLocal.stop(); } catch { /* */ }
-        if (mixer) {
-          try { mixer.destroy(); } catch { /* */ }
-        }
-      }
-      const s = localStreamRef.current;
-      if (s) {
-        try { s.removeTrack(screenVideoTrack); } catch { /* */ }
-      }
-      setSharingScreen(false);
-      if (cameraOn && cameraTrackRef.current) {
-        await videoSenderRef.current.replaceTrack(cameraTrackRef.current);
-      } else {
-        await turnOffVideoSender();
-      }
-      setLocal(new MediaStream(s ? s.getTracks() : []));
-      setTimeout(emitMyMedia, 0);
-      return;
-    }
-
-    try {
-      const display = await captureDisplay(presetKey, includeAudio);
-      const track = display.getVideoTracks()[0];
-      if (!track) return;
-      // Раньше тут был авто-setDeafened(true) при includeAudio — мол,
-      // «избежать эха». Это было ошибкой: deafened глушит ВХОДЯЩЕЕ
-      // аудио (см. <RemoteAudio> и mute=deafened), т.е. ты переставал
-      // слышать пира при старте демонстрации экрана со звуком. Эхо
-      // между screen-audio и нашим mic'ом и так не возникает, т.к.
-      // screen capture идёт ОТ системного аудио-выхода, а getUserMedia
-      // mic’у включает echoCancellation. Никаких deafen'ов автоматом.
-      screenTrackRef.current = track;
-
-      // Добавляем аудио трек из стрима экрана в локальный стрим и на audio sender
-      const audioTrack = display.getAudioTracks()[0];
-      const s = localStreamRef.current || new MediaStream();
-      // Убрать предыдущий видео (камера) из preview, чтобы было видно шаринг
-      if (cameraTrackRef.current && s.getTracks().includes(cameraTrackRef.current)) {
-        s.removeTrack(cameraTrackRef.current);
-      }
-      s.addTrack(track);
-      if (audioTrack) {
-        screenAudioTrackRef.current = audioTrack;
-        // Микшируем мик + screen-audio в один трек и ставим его на
-        // audio-sender. До этого фикса replaceTrack(audioSender, screenAudio)
-        // выкидывал голос с провода (см. createMicScreenMixer в
-        // audioProcessing.ts) — пир видел индикатор речи у себя
-        // (анализатор крутится на raw-mic), но не слышал ни слова.
-        if (audioSenderRef.current && micTrackRef.current) {
-          try {
-            // На всякий случай: если предыдущий микшер не успел убраться
-            // (быстрое off→on), снесём его перед созданием нового.
-            if (micScreenMixerRef.current) {
-              try { micScreenMixerRef.current.destroy(); } catch { /* */ }
-              micScreenMixerRef.current = null;
-            }
-            const mixer = createMicScreenMixer({
-              micTrack: micTrackRef.current,
-              screenAudioTrack: audioTrack,
-            });
-            micScreenMixerRef.current = mixer;
-            await audioSenderRef.current.replaceTrack(mixer.outputTrack);
-          } catch (e) {
-            console.error('Failed to attach mic+screen audio mixer:', e);
-            // Fallback: если что-то поломалось при сборке миксера, отдаём
-            // голый мик (пир не услышит звук стрима, но зато услышит нас).
+        if (screenAudioLocal) {
+          // Сначала возвращаем чистый мик на audio-sender, ПОТОМ останавливаем
+          // микшер. Иначе пир на 1-2 кадра услышит «никого» (sender держит
+          // остановленный mixer.outputTrack).
+          if (audioSenderRef.current && micTrackRef.current) {
             try {
               await audioSenderRef.current.replaceTrack(micTrackRef.current);
-            } catch { /* */ }
+            } catch {
+              /* */
+            }
+          }
+          try {
+            screenAudioLocal.stop();
+          } catch {
+            /* */
+          }
+          if (mixer) {
+            try {
+              mixer.destroy();
+            } catch {
+              /* */
+            }
           }
         }
-      }
-      setLocal(new MediaStream(s.getTracks()));
-
-      await videoSenderRef.current.replaceTrack(track);
-      // Поднять maxBitrate под выбранный пресет.
-      await applyVideoSenderQuality(videoSenderRef.current, presetKey);
-      // Renegotiate, чтобы пир получил свежий SDP с правильными
-      // codec/resolution параметрами и сразу — keyframe.
-      await renegotiate();
-      setSharingScreen(true);
-      setTimeout(emitMyMedia, 0);
-
-      // Системная остановка демонстрации (кнопка в OS overlay): зеркалим
-      // toggle-off, иначе остаются висеть screen-audio на audio sender'е
-      // (мик не возвращается → пира никто не слышит) и dead-track-и в
-      // localStreamRef.
-      screenTrackRef.current.onended = () => {
-        if (screenTrackRef.current !== track) return; // защита от гонок
-        if (screenAudioTrackRef.current) {
-          // Сначала возвращаем чистый мик на провод, потом сносим миксер
-          // и останавливаем screen-audio (порядок важен по той же причине,
-          // что и в ручном toggle-off — иначе короткая «тишина» у пира).
-          if (audioSenderRef.current && micTrackRef.current) {
-            audioSenderRef.current.replaceTrack(micTrackRef.current).catch(() => { /* */ });
+        const s = localStreamRef.current;
+        if (s) {
+          try {
+            s.removeTrack(screenVideoTrack);
+          } catch {
+            /* */
           }
-          if (micScreenMixerRef.current) {
-            try { micScreenMixerRef.current.destroy(); } catch { /* */ }
-            micScreenMixerRef.current = null;
-          }
-          try { screenAudioTrackRef.current.stop(); } catch { /* */ }
-          screenAudioTrackRef.current = null;
         }
-        const ls = localStreamRef.current;
-        if (ls) {
-          try { ls.removeTrack(track); } catch { /* */ }
-        }
-        screenTrackRef.current = null;
         setSharingScreen(false);
         if (cameraOn && cameraTrackRef.current) {
-          videoSenderRef.current.replaceTrack(cameraTrackRef.current).catch(() => { /* */ });
+          await videoSenderRef.current.replaceTrack(cameraTrackRef.current);
         } else {
-          turnOffVideoSender();
+          await turnOffVideoSender();
         }
-        setLocal(new MediaStream(ls ? ls.getTracks() : []));
+        setLocal(new MediaStream(s ? s.getTracks() : []));
         setTimeout(emitMyMedia, 0);
-      };
-    } catch (e) {
-      if (e?.name !== 'NotAllowedError' && e?.name !== 'AbortError') {
-        toast?.error?.(prettyMediaError('Не удалось начать демонстрацию', e));
+        return;
       }
-    }
-  }, [cameraOn, emitMyMedia, renegotiate, setLocal, sharingScreen, toast, turnOffVideoSender]);
+
+      try {
+        const display = await captureDisplay(presetKey, includeAudio);
+        const track = display.getVideoTracks()[0];
+        if (!track) return;
+        // Раньше тут был авто-setDeafened(true) при includeAudio — мол,
+        // «избежать эха». Это было ошибкой: deafened глушит ВХОДЯЩЕЕ
+        // аудио (см. <RemoteAudio> и mute=deafened), т.е. ты переставал
+        // слышать пира при старте демонстрации экрана со звуком. Эхо
+        // между screen-audio и нашим mic'ом и так не возникает, т.к.
+        // screen capture идёт ОТ системного аудио-выхода, а getUserMedia
+        // mic’у включает echoCancellation. Никаких deafen'ов автоматом.
+        screenTrackRef.current = track;
+
+        // Добавляем аудио трек из стрима экрана в локальный стрим и на audio sender
+        const audioTrack = display.getAudioTracks()[0];
+        const s = localStreamRef.current || new MediaStream();
+        // Убрать предыдущий видео (камера) из preview, чтобы было видно шаринг
+        if (cameraTrackRef.current && s.getTracks().includes(cameraTrackRef.current)) {
+          s.removeTrack(cameraTrackRef.current);
+        }
+        s.addTrack(track);
+        if (audioTrack) {
+          screenAudioTrackRef.current = audioTrack;
+          // Микшируем мик + screen-audio в один трек и ставим его на
+          // audio-sender. До этого фикса replaceTrack(audioSender, screenAudio)
+          // выкидывал голос с провода (см. createMicScreenMixer в
+          // audioProcessing.ts) — пир видел индикатор речи у себя
+          // (анализатор крутится на raw-mic), но не слышал ни слова.
+          if (audioSenderRef.current && micTrackRef.current) {
+            try {
+              // На всякий случай: если предыдущий микшер не успел убраться
+              // (быстрое off→on), снесём его перед созданием нового.
+              if (micScreenMixerRef.current) {
+                try {
+                  micScreenMixerRef.current.destroy();
+                } catch {
+                  /* */
+                }
+                micScreenMixerRef.current = null;
+              }
+              const mixer = createMicScreenMixer({
+                micTrack: micTrackRef.current,
+                screenAudioTrack: audioTrack,
+              });
+              micScreenMixerRef.current = mixer;
+              await audioSenderRef.current.replaceTrack(mixer.outputTrack);
+            } catch (e) {
+              console.error('Failed to attach mic+screen audio mixer:', e);
+              // Fallback: если что-то поломалось при сборке миксера, отдаём
+              // голый мик (пир не услышит звук стрима, но зато услышит нас).
+              try {
+                await audioSenderRef.current.replaceTrack(micTrackRef.current);
+              } catch {
+                /* */
+              }
+            }
+          }
+        }
+        setLocal(new MediaStream(s.getTracks()));
+
+        await videoSenderRef.current.replaceTrack(track);
+        // Поднять maxBitrate под выбранный пресет.
+        await applyVideoSenderQuality(videoSenderRef.current, presetKey);
+        // Renegotiate, чтобы пир получил свежий SDP с правильными
+        // codec/resolution параметрами и сразу — keyframe.
+        await renegotiate();
+        setSharingScreen(true);
+        setTimeout(emitMyMedia, 0);
+
+        // Системная остановка демонстрации (кнопка в OS overlay): зеркалим
+        // toggle-off, иначе остаются висеть screen-audio на audio sender'е
+        // (мик не возвращается → пира никто не слышит) и dead-track-и в
+        // localStreamRef.
+        screenTrackRef.current.onended = () => {
+          if (screenTrackRef.current !== track) return; // защита от гонок
+          if (screenAudioTrackRef.current) {
+            // Сначала возвращаем чистый мик на провод, потом сносим миксер
+            // и останавливаем screen-audio (порядок важен по той же причине,
+            // что и в ручном toggle-off — иначе короткая «тишина» у пира).
+            if (audioSenderRef.current && micTrackRef.current) {
+              audioSenderRef.current.replaceTrack(micTrackRef.current).catch(() => {
+                /* */
+              });
+            }
+            if (micScreenMixerRef.current) {
+              try {
+                micScreenMixerRef.current.destroy();
+              } catch {
+                /* */
+              }
+              micScreenMixerRef.current = null;
+            }
+            try {
+              screenAudioTrackRef.current.stop();
+            } catch {
+              /* */
+            }
+            screenAudioTrackRef.current = null;
+          }
+          const ls = localStreamRef.current;
+          if (ls) {
+            try {
+              ls.removeTrack(track);
+            } catch {
+              /* */
+            }
+          }
+          screenTrackRef.current = null;
+          setSharingScreen(false);
+          if (cameraOn && cameraTrackRef.current) {
+            videoSenderRef.current.replaceTrack(cameraTrackRef.current).catch(() => {
+              /* */
+            });
+          } else {
+            turnOffVideoSender();
+          }
+          setLocal(new MediaStream(ls ? ls.getTracks() : []));
+          setTimeout(emitMyMedia, 0);
+        };
+      } catch (e) {
+        if (e?.name !== 'NotAllowedError' && e?.name !== 'AbortError') {
+          toast?.error?.(prettyMediaError('Не удалось начать демонстрацию', e));
+        }
+      }
+    },
+    [cameraOn, emitMyMedia, renegotiate, setLocal, sharingScreen, toast, turnOffVideoSender],
+  );
 
   // --- Обработка сигналинга ---------------------------------------------
   useEffect(() => {
     if (!socket) return undefined;
 
     const onInvite = ({
-      from, fromUsername, fromDisplayName, fromAvatarPath,
-      callId, withVideo: wv,
+      from,
+      fromUsername,
+      fromDisplayName,
+      fromAvatarPath,
+      callId,
+      withVideo: wv,
     }) => {
       const curState = stateRef.current;
 
@@ -1036,16 +1134,28 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         // Safety-net: если по какой-то причине трек не привязан,
         // попробуем привязать сейчас (refs уже точно заполнены).
         if (audioSenderRef.current && !audioSenderRef.current.track && micTrackRef.current) {
-          try { await audioSenderRef.current.replaceTrack(micTrackRef.current); } catch { /* */ }
+          try {
+            await audioSenderRef.current.replaceTrack(micTrackRef.current);
+          } catch {
+            /* */
+          }
         }
         if (videoSenderRef.current && !videoSenderRef.current.track) {
           const v = screenTrackRef.current || cameraTrackRef.current || null;
           if (v) {
-            try { await videoSenderRef.current.replaceTrack(v); } catch { /* */ }
+            try {
+              await videoSenderRef.current.replaceTrack(v);
+            } catch {
+              /* */
+            }
           }
         }
         for (const c of iceQueueRef.current) {
-          try { await pcRef.current.addIceCandidate(c); } catch { /* */ }
+          try {
+            await pcRef.current.addIceCandidate(c);
+          } catch {
+            /* */
+          }
         }
         iceQueueRef.current = [];
         const answer = await pcRef.current.createAnswer();
@@ -1064,7 +1174,11 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         await pcRef.current.setRemoteDescription(sdp);
         setState((s) => (s === 'calling' ? 'connecting' : s));
         for (const c of iceQueueRef.current) {
-          try { await pcRef.current.addIceCandidate(c); } catch { /* */ }
+          try {
+            await pcRef.current.addIceCandidate(c);
+          } catch {
+            /* */
+          }
         }
         iceQueueRef.current = [];
       } catch (e) {
@@ -1079,7 +1193,11 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         iceQueueRef.current.push(candidate);
         return;
       }
-      try { await pcRef.current.addIceCandidate(candidate); } catch { /* */ }
+      try {
+        await pcRef.current.addIceCandidate(candidate);
+      } catch {
+        /* */
+      }
     };
 
     const onAccept = () => {
@@ -1089,8 +1207,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
 
     const onReject = ({ reason }) => {
       sounds?.stopOutgoing?.();
-      const msg =
-        reason === 'busy' ? 'Пользователь занят' : 'Звонок отклонён';
+      const msg = reason === 'busy' ? 'Пользователь занят' : 'Звонок отклонён';
       toast?.info?.(msg);
       cleanup(undefined);
     };
@@ -1248,7 +1365,9 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       } else if (state === 'idle') {
         sessionStorage.removeItem(ACTIVE_CALL_STORAGE_KEY);
       }
-    } catch { /* quota exceeded / disabled storage — игнор */ }
+    } catch {
+      /* quota exceeded / disabled storage — игнор */
+    }
   }, [state, peer, withVideo, selfLeft, initialSavedCall]);
 
   // Авто-rejoin после F5 удалён. Он пытался через 800мс дёрнуть
@@ -1280,7 +1399,9 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       const ctx = pipeline?.context;
       if (!ctx) return;
       if (ctx.state === 'suspended') {
-        ctx.resume().catch(() => { /* без user activation — попробуем позже */ });
+        ctx.resume().catch(() => {
+          /* без user activation — попробуем позже */
+        });
       }
     };
     const onVisibility = () => {
@@ -1327,8 +1448,10 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
 
 function prettyMediaError(prefix, e) {
   const name = e?.name || '';
-  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') return `${prefix}: устройство не найдено`;
-  if (name === 'NotAllowedError' || name === 'PermissionDeniedError') return `${prefix}: доступ запрещён`;
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError')
+    return `${prefix}: устройство не найдено`;
+  if (name === 'NotAllowedError' || name === 'PermissionDeniedError')
+    return `${prefix}: доступ запрещён`;
   if (name === 'NotReadableError') return `${prefix}: устройство занято другим приложением`;
   if (name === 'OverconstrainedError') return `${prefix}: устройство не поддерживает параметры`;
   return `${prefix}: ${e?.message || e || 'неизвестная ошибка'}`;

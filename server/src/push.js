@@ -53,10 +53,9 @@ function loadVapid() {
       const dir = path.dirname(VAPID_FILE);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(VAPID_FILE, JSON.stringify({ publicKey, privateKey, subject }, null, 2));
-      // eslint-disable-next-line no-console
+
       console.log(`[push] generated VAPID keys, saved to ${VAPID_FILE}`);
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.warn('[push] failed to generate VAPID keys:', e?.message || e);
       enabled = false;
       return;
@@ -67,7 +66,6 @@ function loadVapid() {
     webPush.setVapidDetails(subject, publicKey, privateKey);
     enabled = true;
   } catch (e) {
-    // eslint-disable-next-line no-console
     console.warn('[push] invalid VAPID config:', e?.message || e);
     enabled = false;
   }
@@ -88,7 +86,8 @@ export function saveSubscription({ userId, sub, ua }) {
   if (!sub || !sub.endpoint || !sub.keys?.p256dh || !sub.keys?.auth) {
     throw new Error('invalid subscription payload');
   }
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO push_subscriptions (endpoint, user_id, p256dh, auth, user_agent)
     VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(endpoint) DO UPDATE SET
@@ -96,13 +95,8 @@ export function saveSubscription({ userId, sub, ua }) {
       p256dh     = excluded.p256dh,
       auth       = excluded.auth,
       user_agent = excluded.user_agent
-  `).run(
-    sub.endpoint,
-    userId,
-    sub.keys.p256dh,
-    sub.keys.auth,
-    ua ? String(ua).slice(0, 256) : null,
-  );
+  `,
+  ).run(sub.endpoint, userId, sub.keys.p256dh, sub.keys.auth, ua ? String(ua).slice(0, 256) : null);
 }
 
 export function deleteSubscription(endpoint) {
@@ -132,26 +126,29 @@ export async function pushToUser(userId, payload) {
   const subs = getSubscriptionsForUser(userId);
   if (!subs.length) return;
   const body = JSON.stringify(payload);
-  await Promise.allSettled(subs.map(async (s) => {
-    const subscription = {
-      endpoint: s.endpoint,
-      keys: { p256dh: s.p256dh, auth: s.auth },
-    };
-    try {
-      await webPush.sendNotification(subscription, body, { TTL: 60 });
-      db.prepare('UPDATE push_subscriptions SET last_used = ? WHERE endpoint = ?')
-        .run(Date.now(), s.endpoint);
-    } catch (e) {
-      const status = e?.statusCode;
-      if (status === 404 || status === 410) {
-        // Подписка устарела — снимаем.
-        deleteSubscription(s.endpoint);
-      } else {
-        // eslint-disable-next-line no-console
-        console.warn('[push] send failed:', status || e?.message || e);
+  await Promise.allSettled(
+    subs.map(async (s) => {
+      const subscription = {
+        endpoint: s.endpoint,
+        keys: { p256dh: s.p256dh, auth: s.auth },
+      };
+      try {
+        await webPush.sendNotification(subscription, body, { TTL: 60 });
+        db.prepare('UPDATE push_subscriptions SET last_used = ? WHERE endpoint = ?').run(
+          Date.now(),
+          s.endpoint,
+        );
+      } catch (e) {
+        const status = e?.statusCode;
+        if (status === 404 || status === 410) {
+          // Подписка устарела — снимаем.
+          deleteSubscription(s.endpoint);
+        } else {
+          console.warn('[push] send failed:', status || e?.message || e);
+        }
       }
-    }
-  }));
+    }),
+  );
 }
 
 export function pushToUsers(userIds, payload) {

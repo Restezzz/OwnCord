@@ -8,12 +8,7 @@ import { modalVariants, overlayVariants, reducedVariants } from '../utils/motion
 
 const MEMBER_LIMIT = 10;
 
-export default function InviteMembersModal({
-  group,
-  users = [],
-  onClose,
-  onInvite,
-}) {
+export default function InviteMembersModal({ group, users = [], onClose, onInvite }) {
   const toast = useToast();
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [search, setSearch] = useState('');
@@ -26,8 +21,8 @@ export default function InviteMembersModal({
     if (!needle) return list;
     return list.filter(
       (u) =>
-        u.username.toLowerCase().includes(needle)
-        || (u.displayName || '').toLowerCase().includes(needle),
+        u.username.toLowerCase().includes(needle) ||
+        (u.displayName || '').toLowerCase().includes(needle),
     );
   }, [users, search, group.members]);
 
@@ -98,12 +93,22 @@ export default function InviteMembersModal({
                     sel ? 'bg-accent/20 border border-accent/40' : 'hover:bg-bg-2'
                   }`}
                 >
-                  <Avatar name={getDisplayName(u)} src={getAvatarUrl(u)} size={28} online={u.online} showStatus />
+                  <Avatar
+                    name={getDisplayName(u)}
+                    src={getAvatarUrl(u)}
+                    size={28}
+                    online={u.online}
+                    showStatus
+                  />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm text-slate-100 truncate">{getDisplayName(u)}</div>
                     <div className="text-xs text-slate-500 truncate">@{u.username}</div>
                   </div>
-                  {sel ? <UserMinus size={14} className="text-accent" /> : <UserPlus size={14} className="text-slate-500" />}
+                  {sel ? (
+                    <UserMinus size={14} className="text-accent" />
+                  ) : (
+                    <UserPlus size={14} className="text-slate-500" />
+                  )}
                 </button>
               );
             })}
@@ -116,14 +121,17 @@ export default function InviteMembersModal({
         </div>
 
         <footer className="flex items-center justify-between gap-2 p-4 border-t border-border bg-bg-0/40">
-          <div className="text-xs text-slate-500">
-            {selectedIds.size} выбрано
-          </div>
+          <div className="text-xs text-slate-500">{selectedIds.size} выбрано</div>
           <div className="flex items-center gap-2">
             <button onClick={onClose} disabled={busy} className="btn-ghost" type="button">
               Отмена
             </button>
-            <button onClick={submit} disabled={busy || selectedIds.size === 0} className="btn-primary" type="button">
+            <button
+              onClick={submit}
+              disabled={busy || selectedIds.size === 0}
+              className="btn-primary"
+              type="button"
+            >
               <Check size={14} />
               Добавить
             </button>

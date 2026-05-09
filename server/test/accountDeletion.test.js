@@ -10,9 +10,7 @@ beforeAll(() => {
 });
 
 async function register(username, password = 'secret123') {
-  const r = await request(app)
-    .post('/api/auth/register')
-    .send({ username, password });
+  const r = await request(app).post('/api/auth/register').send({ username, password });
   expect(r.status).toBe(200);
   return { token: r.body.token, user: r.body.user };
 }
@@ -53,9 +51,7 @@ describe('account deletion', () => {
     expect(row.avatar_path).toBeNull();
 
     // Токен больше не работает.
-    const me = await request(app)
-      .get('/api/me')
-      .set('Authorization', `Bearer ${token}`);
+    const me = await request(app).get('/api/me').set('Authorization', `Bearer ${token}`);
     expect(me.status).toBe(401);
 
     // Логин прежним паролем отклонён.
@@ -72,10 +68,12 @@ describe('account deletion', () => {
     // alice пишет bob'у через прямую запись в БД — REST для текстовых
     // сообщений идёт через socket, поэтому проще вставить через db.
     const now = Date.now();
-    const info = db.prepare(
-      `INSERT INTO messages (sender_id, receiver_id, content, created_at, kind)
+    const info = db
+      .prepare(
+        `INSERT INTO messages (sender_id, receiver_id, content, created_at, kind)
        VALUES (?, ?, 'hello', ?, 'text')`,
-    ).run(alice.user.id, bob.user.id, now);
+      )
+      .run(alice.user.id, bob.user.id, now);
 
     // alice удаляет аккаунт.
     const del = await request(app)
@@ -146,8 +144,9 @@ describe('account deletion', () => {
       .prepare('INSERT INTO groups (name, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?)')
       .run('solo', solo.user.id, now, now);
     const groupId = info.lastInsertRowid;
-    db.prepare(`INSERT INTO group_members (group_id, user_id, role, joined_at) VALUES (?, ?, 'owner', ?)`)
-      .run(groupId, solo.user.id, now);
+    db.prepare(
+      `INSERT INTO group_members (group_id, user_id, role, joined_at) VALUES (?, ?, 'owner', ?)`,
+    ).run(groupId, solo.user.id, now);
 
     const del = await request(app)
       .delete('/api/me')
@@ -205,9 +204,7 @@ describe('account deletion', () => {
       .set('Authorization', `Bearer ${a.token}`)
       .send({ password: 'secret123' });
 
-    const list = await request(app)
-      .get('/api/users')
-      .set('Authorization', `Bearer ${b.token}`);
+    const list = await request(app).get('/api/users').set('Authorization', `Bearer ${b.token}`);
     expect(list.status).toBe(200);
     // В общем списке удалённые с deleted=true; клиент сам их отфильтрует
     // для UI, а API отдаёт всё для рендера истории.

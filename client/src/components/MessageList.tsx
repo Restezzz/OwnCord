@@ -1,5 +1,16 @@
 import { memo } from 'react';
-import { Check, X, Heart, Zap, Trophy, Flame, ThumbsUp, ThumbsDown, Laugh, Smile } from 'lucide-react';
+import {
+  Check,
+  X,
+  Heart,
+  Zap,
+  Trophy,
+  Flame,
+  ThumbsUp,
+  ThumbsDown,
+  Laugh,
+  Smile,
+} from 'lucide-react';
 import Avatar from './Avatar';
 import VoicePlayer from './VoicePlayer';
 import CallMessage from './CallMessage';
@@ -66,12 +77,7 @@ function MessageList({
       lastSenderId = null;
     }
 
-    if (
-      !unreadShown
-      && firstUnreadId
-      && m.id === firstUnreadId
-      && m.senderId !== selfId
-    ) {
+    if (!unreadShown && firstUnreadId && m.id === firstUnreadId && m.senderId !== selfId) {
       out.push(
         <div key={`unread-${m.id}`} className="flex items-center gap-2 my-2 select-none">
           <div className="flex-1 h-px bg-red-500/60" />
@@ -86,17 +92,13 @@ function MessageList({
     }
 
     if (m.kind === 'call') {
-      out.push(
-        <CallMessage key={m.id} message={m} selfId={selfId} onRejoin={onRejoinCall} />,
-      );
+      out.push(<CallMessage key={m.id} message={m} selfId={selfId} onRejoin={onRejoinCall} />);
       lastSenderId = null;
       continue;
     }
 
     if (m.kind === 'system') {
-      out.push(
-        <SystemMessage key={m.id} message={m} sendersById={sendersById} />,
-      );
+      out.push(<SystemMessage key={m.id} message={m} sendersById={sendersById} />);
       lastSenderId = null;
       continue;
     }
@@ -117,13 +119,16 @@ function MessageList({
 
     const mine = m.senderId === selfId;
     const isEditing = editingId === m.id;
-    const isAttachment = (m.kind === 'image' || m.kind === 'video' || m.kind === 'file') && m.attachmentPath;
+    const isAttachment =
+      (m.kind === 'image' || m.kind === 'video' || m.kind === 'file') && m.attachmentPath;
     const sender = !mine && sendersById ? sendersById.get(m.senderId) : null;
     const showSenderHeader = isGroup && !mine && m.senderId !== lastSenderId;
 
     const senderName = sender
       ? getDisplayName(sender)
-      : (isGroup && !mine ? `Пользователь #${m.senderId}` : '');
+      : isGroup && !mine
+        ? `Пользователь #${m.senderId}`
+        : '';
 
     out.push(
       <div
@@ -138,26 +143,24 @@ function MessageList({
                 onClick={() => onShowGroupMemberProfile?.(m.senderId)}
                 title={senderName}
               >
-                <Avatar
-                  name={senderName || '?'}
-                  src={sender?.avatarPath || null}
-                  size={32}
-                />
+                <Avatar name={senderName || '?'} src={sender?.avatarPath || null} size={32} />
               </button>
             ) : null}
           </div>
         )}
         <div className={`max-w-[75%] ${showSenderHeader ? '' : ''}`}>
           {showSenderHeader && (
-            <div className="text-[11px] text-slate-400 mb-0.5 ml-1">
-              {senderName}
-            </div>
+            <div className="text-[11px] text-slate-400 mb-0.5 ml-1">{senderName}</div>
           )}
           <div
             className={`px-3 py-2 text-sm whitespace-pre-wrap break-words rounded-2xl
-              ${m.deleted
-                ? 'bg-bg-2 text-slate-500 italic'
-                : mine ? 'bg-accent text-white' : 'bg-bg-2 text-slate-100'}
+              ${
+                m.deleted
+                  ? 'bg-bg-2 text-slate-500 italic'
+                  : mine
+                    ? 'bg-accent text-white'
+                    : 'bg-bg-2 text-slate-100'
+              }
             `}
             title={new Date(m.createdAt).toLocaleString()}
             onContextMenu={(e) => onMessageContext(e, m)}
@@ -189,7 +192,9 @@ function MessageList({
               <>
                 {/* Реакции на сообщение */}
                 {m.reactions && m.reactions.length > 0 && (
-                  <div className={`flex flex-wrap gap-1.5 mt-1.5 ${mine ? 'justify-end' : 'justify-start'}`}>
+                  <div
+                    className={`flex flex-wrap gap-1.5 mt-1.5 ${mine ? 'justify-end' : 'justify-start'}`}
+                  >
                     {m.reactions.map((r) => {
                       const Icon = REACTION_ICONS[r.emoji];
                       const hasReacted = r.users.includes(selfId);

@@ -12,7 +12,10 @@ import rateLimit from 'express-rate-limit';
 // Также используется для socket.io CORS (см. attachSocket).
 function parseList(env) {
   if (!env) return null;
-  const list = env.split(',').map((s) => s.trim()).filter(Boolean);
+  const list = env
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   return list.length ? list : null;
 }
 
@@ -72,21 +75,21 @@ export function buildHelmet() {
   return helmet({
     contentSecurityPolicy: isProd()
       ? {
-        useDefaults: true,
-        directives: {
-          defaultSrc: ["'self'"],
-          scriptSrc: ["'self'"],
-          styleSrc: ["'self'", "'unsafe-inline'"],
-          imgSrc: ["'self'", 'data:', 'blob:'],
-          mediaSrc: ["'self'", 'blob:', 'data:'],
-          connectSrc: ["'self'", 'ws:', 'wss:'],
-          fontSrc: ["'self'", 'data:'],
-          objectSrc: ["'none'"],
-          frameAncestors: ["'none'"],
-          baseUri: ["'self'"],
-          formAction: ["'self'"],
-        },
-      }
+          useDefaults: true,
+          directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", 'data:', 'blob:'],
+            mediaSrc: ["'self'", 'blob:', 'data:'],
+            connectSrc: ["'self'", 'ws:', 'wss:'],
+            fontSrc: ["'self'", 'data:'],
+            objectSrc: ["'none'"],
+            frameAncestors: ["'none'"],
+            baseUri: ["'self'"],
+            formAction: ["'self'"],
+          },
+        }
       : false,
     // Отключаем COEP — иначе ломаются <video src="blob:…"> и кросс-оригин
     // ассеты вроде иконок.

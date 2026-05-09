@@ -1,8 +1,17 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
 import {
-  LogOut, Menu, Settings as SettingsIcon, User as UserIcon,
-  BellOff, Bell, Phone, Video, Pencil, Trash2, LogOut as LeaveIcon,
+  LogOut,
+  Menu,
+  Settings as SettingsIcon,
+  User as UserIcon,
+  BellOff,
+  Bell,
+  Phone,
+  Video,
+  Pencil,
+  Trash2,
+  LogOut as LeaveIcon,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useSettings } from '../context/SettingsContext';
@@ -103,20 +112,20 @@ export default function Home() {
   const token = auth.token;
 
   const [users, setUsers] = useState([]);
-  const [selected, setSelected] = useState(null);       // { kind: 'user'|'group', id }
+  const [selected, setSelected] = useState(null); // { kind: 'user'|'group', id }
   const [messagesByChat, setMessagesByChat] = useState({}); // chatKey -> msgs
   const [lastActivityByChat, setLastActivityByChat] = useState({}); // chatKey -> timestamp
   const [typingByChat, setTypingByChat] = useState({}); // chatKey -> { userId -> expiresAt }
-  const [unread, setUnread] = useState({});             // chatKey -> count
+  const [unread, setUnread] = useState({}); // chatKey -> count
   const [firstUnreadByChat, setFirstUnreadByChat] = useState({}); // chatKey -> messageId
-  const [pendingUnread, setPendingUnread] = useState({});   // chatKey -> count
+  const [pendingUnread, setPendingUnread] = useState({}); // chatKey -> count
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [profileId, setProfileId] = useState(null);     // ProfileModal
-  const [userMenu, setUserMenu] = useState(null);       // { user, x, y }
-  const [groupMenu, setGroupMenu] = useState(null);     // { group, x, y }
-  const [groupModal, setGroupModal] = useState(null);   // { mode: 'create'|'edit', groupId? }
+  const [profileId, setProfileId] = useState(null); // ProfileModal
+  const [userMenu, setUserMenu] = useState(null); // { user, x, y }
+  const [groupMenu, setGroupMenu] = useState(null); // { group, x, y }
+  const [groupModal, setGroupModal] = useState(null); // { mode: 'create'|'edit', groupId? }
   // Set<groupId> — в каких группах сейчас активный звонок (по событиям сервера).
   const [activeGroupCalls, setActiveGroupCalls] = useState(() => new Set());
 
@@ -148,10 +157,14 @@ export default function Home() {
   }, [selected, selectedGroup]);
 
   const selectedRef = useRef(selected);
-  useEffect(() => { selectedRef.current = selected; }, [selected]);
+  useEffect(() => {
+    selectedRef.current = selected;
+  }, [selected]);
 
   const mutesRef = useRef(mutes);
-  useEffect(() => { mutesRef.current = mutes; }, [mutes]);
+  useEffect(() => {
+    mutesRef.current = mutes;
+  }, [mutes]);
 
   const fetchedHistoryFor = useRef(new Set());
 
@@ -172,10 +185,17 @@ export default function Home() {
   // Загрузка списка пользователей
   useEffect(() => {
     let cancelled = false;
-    api.users(token)
-      .then(({ users: list }) => { if (!cancelled) setUsers(list); })
-      .catch(() => { /* silent */ });
-    return () => { cancelled = true; };
+    api
+      .users(token)
+      .then(({ users: list }) => {
+        if (!cancelled) setUsers(list);
+      })
+      .catch(() => {
+        /* silent */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [token]);
 
   // Presence + новые сообщения + правки/удаления + свой профиль
@@ -194,7 +214,10 @@ export default function Home() {
     };
 
     const onConnect = () => {
-      api.users(token).then(({ users: list }) => setUsers(list)).catch(() => {});
+      api
+        .users(token)
+        .then(({ users: list }) => setUsers(list))
+        .catch(() => {});
     };
 
     const onDm = (msg) => {
@@ -258,7 +281,7 @@ export default function Home() {
         const updated = { ...prev };
         for (const key of Object.keys(updated)) {
           const messages = updated[key];
-          const msgIndex = messages.findIndex(m => m.id === messageId);
+          const msgIndex = messages.findIndex((m) => m.id === messageId);
           if (msgIndex !== -1) {
             updated[key] = [
               ...messages.slice(0, msgIndex),
@@ -362,11 +385,13 @@ export default function Home() {
           setActiveGroupCalls((prev) => {
             const has = prev.has(g.id);
             if (ack.active && !has) {
-              const next = new Set(prev); next.add(g.id);
+              const next = new Set(prev);
+              next.add(g.id);
               return next;
             }
             if (!ack.active && has) {
-              const next = new Set(prev); next.delete(g.id);
+              const next = new Set(prev);
+              next.delete(g.id);
               return next;
             }
             return prev;
@@ -376,7 +401,9 @@ export default function Home() {
     };
     if (socket.connected) sync();
     socket.on('connect', sync);
-    return () => { socket.off('connect', sync); };
+    return () => {
+      socket.off('connect', sync);
+    };
   }, [socket, groups]);
 
   // Загрузка истории при выборе чата
@@ -386,73 +413,85 @@ export default function Home() {
     if (fetchedHistoryFor.current.has(key)) return;
     fetchedHistoryFor.current.add(key);
     setLoadingMessages(true);
-    const promise = selected.kind === 'group'
-      ? api.groupHistory(token, selected.id)
-      : api.history(token, selected.id);
+    const promise =
+      selected.kind === 'group'
+        ? api.groupHistory(token, selected.id)
+        : api.history(token, selected.id);
     promise
       .then(({ messages }) => {
         setMessagesByChat((prev) => ({ ...prev, [key]: messages }));
         setLastActivityByChat((prev) => setActivity(prev, key, latestCreatedAt(messages)));
       })
-      .catch(() => { fetchedHistoryFor.current.delete(key); })
+      .catch(() => {
+        fetchedHistoryFor.current.delete(key);
+      })
       .finally(() => setLoadingMessages(false));
   }, [selected, token]);
 
   // Вычисление id первого непрочитанного сообщения на основе count входящих.
   // Для групп "чужой" — любой sender, кроме self; для DM — peer.
-  const computeFirstUnread = useCallback((sel, count, msgs) => {
-    if (!count || count <= 0) return null;
-    let incoming;
-    if (sel.kind === 'group') {
-      incoming = (msgs || []).filter((m) => m.senderId !== selfUser.id);
-    } else {
-      incoming = (msgs || []).filter((m) => m.senderId === sel.id);
-    }
-    if (incoming.length === 0) return null;
-    const idx = Math.max(0, incoming.length - count);
-    return incoming[idx].id;
-  }, [selfUser.id]);
-
-  const selectChat = useCallback((sel) => {
-    const prevSel = selectedRef.current;
-    const prevKey = prevSel ? chatKey(prevSel) : null;
-    const newKey = chatKey(sel);
-    if (prevKey && prevKey !== newKey) {
-      setTypingByChat((prev) => removeTypingChat(prev, prevKey));
-    }
-    // Уходя из предыдущего чата — убираем разделитель "новые"
-    setFirstUnreadByChat((fu) => {
-      if (!prevKey || prevKey === newKey) return fu;
-      if (!fu[prevKey]) return fu;
-      const next = { ...fu };
-      delete next[prevKey];
-      return next;
-    });
-    setSelected(sel);
-    setSidebarOpen(false);
-
-    setUnread((prev) => {
-      const count = prev[newKey] || 0;
-      if (count > 0) {
-        const msgs = messagesByChat[newKey];
-        if (msgs && msgs.length > 0) {
-          const firstId = computeFirstUnread(sel, count, msgs);
-          if (firstId) {
-            setFirstUnreadByChat((fu) => ({ ...fu, [newKey]: firstId }));
-          }
-        } else {
-          setPendingUnread((pu) => ({ ...pu, [newKey]: count }));
-        }
+  const computeFirstUnread = useCallback(
+    (sel, count, msgs) => {
+      if (!count || count <= 0) return null;
+      let incoming;
+      if (sel.kind === 'group') {
+        incoming = (msgs || []).filter((m) => m.senderId !== selfUser.id);
+      } else {
+        incoming = (msgs || []).filter((m) => m.senderId === sel.id);
       }
-      if (!prev[newKey]) return prev;
-      const next = { ...prev };
-      delete next[newKey];
-      return next;
-    });
-  }, [computeFirstUnread, messagesByChat]);
+      if (incoming.length === 0) return null;
+      const idx = Math.max(0, incoming.length - count);
+      return incoming[idx].id;
+    },
+    [selfUser.id],
+  );
+
+  const selectChat = useCallback(
+    (sel) => {
+      const prevSel = selectedRef.current;
+      const prevKey = prevSel ? chatKey(prevSel) : null;
+      const newKey = chatKey(sel);
+      if (prevKey && prevKey !== newKey) {
+        setTypingByChat((prev) => removeTypingChat(prev, prevKey));
+      }
+      // Уходя из предыдущего чата — убираем разделитель "новые"
+      setFirstUnreadByChat((fu) => {
+        if (!prevKey || prevKey === newKey) return fu;
+        if (!fu[prevKey]) return fu;
+        const next = { ...fu };
+        delete next[prevKey];
+        return next;
+      });
+      setSelected(sel);
+      setSidebarOpen(false);
+
+      setUnread((prev) => {
+        const count = prev[newKey] || 0;
+        if (count > 0) {
+          const msgs = messagesByChat[newKey];
+          if (msgs && msgs.length > 0) {
+            const firstId = computeFirstUnread(sel, count, msgs);
+            if (firstId) {
+              setFirstUnreadByChat((fu) => ({ ...fu, [newKey]: firstId }));
+            }
+          } else {
+            setPendingUnread((pu) => ({ ...pu, [newKey]: count }));
+          }
+        }
+        if (!prev[newKey]) return prev;
+        const next = { ...prev };
+        delete next[newKey];
+        return next;
+      });
+    },
+    [computeFirstUnread, messagesByChat],
+  );
 
   const handleSelectUser = useCallback((u) => selectChat({ kind: 'user', id: u.id }), [selectChat]);
-  const handleSelectGroup = useCallback((g) => selectChat({ kind: 'group', id: g.id }), [selectChat]);
+  const handleSelectGroup = useCallback(
+    (g) => selectChat({ kind: 'group', id: g.id }),
+    [selectChat],
+  );
 
   // Открытие чата по клику на push-уведомление (см. utils/push.js).
   useEffect(() => {
@@ -498,9 +537,10 @@ export default function Home() {
     async (content) => {
       if (!socket || !selected) return;
       await new Promise((resolve) => {
-        const payload = selected.kind === 'group'
-          ? { groupId: selected.id, content }
-          : { to: selected.id, content };
+        const payload =
+          selected.kind === 'group'
+            ? { groupId: selected.id, content }
+            : { to: selected.id, content };
         socket.emit('dm:send', payload, (ack) => {
           if (ack && 'error' in ack) toast.error(`Не удалось отправить: ${ack.error}`);
           resolve(ack);
@@ -550,7 +590,10 @@ export default function Home() {
   );
 
   const handleSendFile = useCallback(
-    async (files: File | File[] | null, opts: { error?: string; limit?: number; caption?: string } = {}) => {
+    async (
+      files: File | File[] | null,
+      opts: { error?: string; limit?: number; caption?: string } = {},
+    ) => {
       if (!selected) return;
       if (!files) {
         if (opts.error === 'too-large') {
@@ -582,9 +625,7 @@ export default function Home() {
   const handleRejoinCall = useCallback(
     (_callId, message) => {
       if (!message) return;
-      const peerId = message.senderId === selfUser?.id
-        ? message.receiverId
-        : message.senderId;
+      const peerId = message.senderId === selfUser?.id ? message.receiverId : message.senderId;
       if (typeof peerId !== 'number') return;
       const peerUser = users.find((u) => u.id === peerId);
       if (!peerUser) {
@@ -643,13 +684,15 @@ export default function Home() {
     [call.state, groupCall, toast],
   );
 
-  const handleTypingChange = useCallback((typing) => {
-    if (!socket || !selected) return;
-    const payload = selected.kind === 'group'
-      ? { groupId: selected.id, typing }
-      : { to: selected.id, typing };
-    socket.emit('chat:typing', payload);
-  }, [socket, selected]);
+  const handleTypingChange = useCallback(
+    (typing) => {
+      if (!socket || !selected) return;
+      const payload =
+        selected.kind === 'group' ? { groupId: selected.id, typing } : { to: selected.id, typing };
+      socket.emit('chat:typing', payload);
+    },
+    [socket, selected],
+  );
 
   const onUserContextMenu = useCallback((e, user) => {
     setUserMenu({ user, x: e.clientX, y: e.clientY });
@@ -713,14 +756,16 @@ export default function Home() {
   // сейчас разговариваешь. Сам звонок при этом продолжается (audio/
   // video идут как обычно), просто UI прячется когда листаешь другие
   // чаты — и снова появляется при возвращении в нужный.
-  const callInThisChat = embeddedCallVisible
-    && selected?.kind === 'user'
-    && selectedUser
-    && call.peer?.id === selectedUser.id;
-  const groupCallInThisChat = embeddedGroupCallVisible
-    && selected?.kind === 'group'
-    && selectedGroup
-    && groupCall.group?.id === selectedGroup.id;
+  const callInThisChat =
+    embeddedCallVisible &&
+    selected?.kind === 'user' &&
+    selectedUser &&
+    call.peer?.id === selectedUser.id;
+  const groupCallInThisChat =
+    embeddedGroupCallVisible &&
+    selected?.kind === 'group' &&
+    selectedGroup &&
+    groupCall.group?.id === selectedGroup.id;
 
   const key = selected ? chatKey(selected) : null;
   const messages = (key && messagesByChat[key]) || [];
@@ -740,9 +785,10 @@ export default function Home() {
       .filter(([uid, expiresAt]) => Number(uid) !== selfUser.id && (expiresAt as number) > now)
       .map(([uid]) => {
         const id = Number(uid);
-        return usersById[id]
-          || selectedGroup?.members?.find((m) => m.id === id)
-          || { id, displayName: `#${id}` };
+        return (
+          usersById[id] ||
+          selectedGroup?.members?.find((m) => m.id === id) || { id, displayName: `#${id}` }
+        );
       })
       .filter((user) => !isDeletedUser(user));
   }, [key, selected, selectedGroup, selectedUser, selfUser.id, typingByChat, usersById]);
@@ -785,11 +831,7 @@ export default function Home() {
               <div className="text-xs text-success">в сети</div>
             </div>
           </button>
-          <button
-            className="btn-ghost"
-            onClick={() => setSettingsOpen(true)}
-            title="Настройки"
-          >
+          <button className="btn-ghost" onClick={() => setSettingsOpen(true)} title="Настройки">
             <SettingsIcon size={18} />
           </button>
           <button className="btn-ghost" onClick={logout} title="Выйти">
@@ -852,13 +894,9 @@ export default function Home() {
           onJoinGroupCall={handleStartGroupCall}
           onTypingChange={handleTypingChange}
           typingUsers={typingUsers}
-          groupCallActive={
-            selectedGroup ? activeGroupCalls.has(selectedGroup.id) : false
-          }
+          groupCallActive={selectedGroup ? activeGroupCalls.has(selectedGroup.id) : false}
           inGroupCall={
-            groupCall.state !== 'idle'
-            && selectedGroup
-            && groupCall.group?.id === selectedGroup.id
+            groupCall.state !== 'idle' && selectedGroup && groupCall.group?.id === selectedGroup.id
           }
           onBack={() => setSidebarOpen(true)}
           onShowProfile={(id) => setProfileId(id)}
@@ -868,11 +906,11 @@ export default function Home() {
           maxFileBytes={maxUploadBytes}
           usersById={usersById}
           callSlot={
-            callInThisChat
-              ? <CallView call={call} embedded selfUser={selfUser} />
-              : groupCallInThisChat
-                ? <GroupCallView call={groupCall} usersById={usersById} selfId={selfUser.id} embedded />
-                : null
+            callInThisChat ? (
+              <CallView call={call} embedded selfUser={selfUser} />
+            ) : groupCallInThisChat ? (
+              <GroupCallView call={groupCall} usersById={usersById} selfId={selfUser.id} embedded />
+            ) : null
           }
         />
       </main>
@@ -917,9 +955,8 @@ export default function Home() {
           onClose={() => setGroupMenu(null)}
           items={[
             {
-              label: groupMenu.group.ownerId === selfUser.id
-                ? 'Редактировать'
-                : 'Сведения о группе',
+              label:
+                groupMenu.group.ownerId === selfUser.id ? 'Редактировать' : 'Сведения о группе',
               icon: <Pencil size={14} />,
               onClick: () => openEditGroup(groupMenu.group.id),
             },
@@ -973,11 +1010,17 @@ export default function Home() {
               onClose={() => setProfileId(null)}
               onCallAudio={() => {
                 const u = users.find((x) => x.id === profileId);
-                if (u) { handleCallAudio(u); setProfileId(null); }
+                if (u) {
+                  handleCallAudio(u);
+                  setProfileId(null);
+                }
               }}
               onCallVideo={() => {
                 const u = users.find((x) => x.id === profileId);
-                if (u) { handleCallVideo(u); setProfileId(null); }
+                if (u) {
+                  handleCallVideo(u);
+                  setProfileId(null);
+                }
               }}
             />
           )}

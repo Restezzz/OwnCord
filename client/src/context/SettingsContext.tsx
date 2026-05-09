@@ -5,21 +5,21 @@ const SettingsContext = createContext(null);
 const STORAGE_KEY = 'owncord.settings';
 
 const DEFAULTS = {
-  inputDeviceId: 'default',    // микрофон
-  outputDeviceId: 'default',   // динамик (speaker)
-  inputVolume: 1.0,            // 0..1.5 (gain)
-  outputVolume: 1.0,           // 0..1
-  soundsEnabled: true,         // мастер-выключатель UI-звуков
+  inputDeviceId: 'default', // микрофон
+  outputDeviceId: 'default', // динамик (speaker)
+  inputVolume: 1.0, // 0..1.5 (gain)
+  outputVolume: 1.0, // 0..1
+  soundsEnabled: true, // мастер-выключатель UI-звуков
   // Гранулярные тумблеры — действуют только если soundsEnabled = true.
-  soundMessage: true,          // звук нового сообщения
-  soundIncoming: true,         // рингтон входящего звонка
-  soundOutgoing: true,         // гудки исходящего вызова
-  soundConnect: true,          // короткий "ап" при соединении
-  soundDisconnect: true,       // короткий "даун" при завершении
-  soundMicMute: true,          // пип при мьюте/размьюте микрофона
-  soundDeafen: true,           // пип при выкл/вкл звука собеседников
+  soundMessage: true, // звук нового сообщения
+  soundIncoming: true, // рингтон входящего звонка
+  soundOutgoing: true, // гудки исходящего вызова
+  soundConnect: true, // короткий "ап" при соединении
+  soundDisconnect: true, // короткий "даун" при завершении
+  soundMicMute: true, // пип при мьюте/размьюте микрофона
+  soundDeafen: true, // пип при выкл/вкл звука собеседников
   // Глобальная громкость UI-звуков (помимо outputVolume).
-  uiVolume: 0.8,               // 0..1
+  uiVolume: 0.8, // 0..1
   // Индивидуальные громкости сохраняются между звонками.
   // Ключ — userId, значение — проценты 0..100.
   userVolumes: {},
@@ -33,20 +33,20 @@ const DEFAULTS = {
   // отдельные ползунки; дропдаун показывает «(Пользовательский)», и при
   // следующем выборе пресета все значения перезапишутся.
   micFilterPreset: 'standard', // 'off' | 'standard' | 'aggressive' | 'custom'
-  noiseSuppression: true,      // включить шумовые ворота (gate)
-  noiseThreshold: -55,         // порог ворот в дБ (-100..0)
-  noiseGateHoldMs: 200,        // hangover после падения ниже порога, мс
-  noiseGateAttackMs: 10,       // плавное открытие, мс (анти-щелчок)
-  noiseGateReleaseMs: 80,      // плавное закрытие, мс
-  highPassFilter: true,        // вырезать низкочастотный гул (вентилятор и т.п.)
-  highPassFrequency: 100,      // частота среза HP, Гц (20..400)
-  compressorEnabled: true,     // компрессор: выравнивает пики и тихие места
-  compressorThreshold: -24,    // порог срабатывания, дБ (как в OBS)
-  compressorRatio: 4,          // степень сжатия (1 — без эффекта)
-  compressorAttack: 5,         // атака, мс
-  compressorRelease: 50,       // спад, мс
-  compressorKnee: 30,          // мягкий перегиб, дБ
-  makeupGainDb: 0,             // добавочное усиление после компрессора, дБ
+  noiseSuppression: true, // включить шумовые ворота (gate)
+  noiseThreshold: -55, // порог ворот в дБ (-100..0)
+  noiseGateHoldMs: 200, // hangover после падения ниже порога, мс
+  noiseGateAttackMs: 10, // плавное открытие, мс (анти-щелчок)
+  noiseGateReleaseMs: 80, // плавное закрытие, мс
+  highPassFilter: true, // вырезать низкочастотный гул (вентилятор и т.п.)
+  highPassFrequency: 100, // частота среза HP, Гц (20..400)
+  compressorEnabled: true, // компрессор: выравнивает пики и тихие места
+  compressorThreshold: -24, // порог срабатывания, дБ (как в OBS)
+  compressorRatio: 4, // степень сжатия (1 — без эффекта)
+  compressorAttack: 5, // атака, мс
+  compressorRelease: 50, // спад, мс
+  compressorKnee: 30, // мягкий перегиб, дБ
+  makeupGainDb: 0, // добавочное усиление после компрессора, дБ
   // RNNoise-шумодав. Включается только в пресете «Агрессивный»; тащит
   // ~150 КБ WASM (lazy-load при первом запуске пайплайна) и узел
   // AudioWorklet. Если что-то пойдёт не так с загрузкой — пайплайн
@@ -59,8 +59,8 @@ const DEFAULTS = {
   // строка Electron'а (https://electronjs.org/docs/latest/api/accelerator)
   // или null, если хоткей не назначен.
   keybinds: {
-    toggleMute: null,    // мьют микрофона / размьют
-    toggleDeafen: null,  // выкл / вкл звука собеседников
+    toggleMute: null, // мьют микрофона / размьют
+    toggleDeafen: null, // выкл / вкл звука собеседников
   },
 };
 
@@ -93,8 +93,11 @@ export function SettingsProvider({ children }) {
   const [settings, setSettings] = useState(() => load());
 
   useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(settings)); }
-    catch { /* ignore */ }
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+    } catch {
+      /* ignore */
+    }
   }, [settings]);
 
   const update = useCallback((patch) => {

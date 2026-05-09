@@ -93,7 +93,11 @@ export function forceLeaveAll(socketId, userId) {
     const callEnded = c.participants.size === 0;
     if (callEnded) calls.delete(groupId);
     out.push({
-      groupId, userLeft, callEnded, callId: c.callId, messageId: c.messageId,
+      groupId,
+      userLeft,
+      callEnded,
+      callId: c.callId,
+      messageId: c.messageId,
     });
   }
   return out;
@@ -106,4 +110,6 @@ export function attachMessageId(groupId, messageId) {
 }
 
 // Для тестов.
-export function _reset() { calls.clear(); }
+export function _reset() {
+  calls.clear();
+}

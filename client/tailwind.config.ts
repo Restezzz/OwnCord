@@ -27,14 +27,7 @@ export default {
         },
       },
       fontFamily: {
-        sans: [
-          'Inter',
-          'system-ui',
-          '-apple-system',
-          'Segoe UI',
-          'Roboto',
-          'sans-serif',
-        ],
+        sans: ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
       },
       boxShadow: {
         soft: '0 10px 40px -10px rgba(0,0,0,0.6)',

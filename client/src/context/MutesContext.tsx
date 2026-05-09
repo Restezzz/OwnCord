@@ -1,6 +1,4 @@
-import {
-  createContext, useCallback, useContext, useEffect, useMemo, useState,
-} from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { getSocket } from '../socket';
 import { useAuth } from './AuthContext';
@@ -26,10 +24,17 @@ export function MutesProvider({ children }) {
       return undefined;
     }
     let cancelled = false;
-    api.listMutes(token)
-      .then((r) => { if (!cancelled) setIds(new Set(r.ids || [])); })
-      .catch(() => { /* silent */ });
-    return () => { cancelled = true; };
+    api
+      .listMutes(token)
+      .then((r) => {
+        if (!cancelled) setIds(new Set(r.ids || []));
+      })
+      .catch(() => {
+        /* silent */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [token]);
 
   // Подписка на серверные апдейты по сокету.
@@ -63,31 +68,34 @@ export function MutesProvider({ children }) {
 
   const isMuted = useCallback((userId) => ids.has(userId), [ids]);
 
-  const toggle = useCallback(async (userId) => {
-    if (!token) return;
-    const wasMuted = ids.has(userId);
-    // Оптимистичное обновление
-    setIds((prev) => {
-      const next = new Set(prev);
-      if (wasMuted) next.delete(userId);
-      else next.add(userId);
-      return next;
-    });
-    try {
-      const res = wasMuted
-        ? await api.removeMute(token, userId)
-        : await api.addMute(token, userId);
-      if (Array.isArray(res?.ids)) setIds(new Set(res.ids));
-    } catch {
-      // откат
+  const toggle = useCallback(
+    async (userId) => {
+      if (!token) return;
+      const wasMuted = ids.has(userId);
+      // Оптимистичное обновление
       setIds((prev) => {
         const next = new Set(prev);
-        if (wasMuted) next.add(userId);
-        else next.delete(userId);
+        if (wasMuted) next.delete(userId);
+        else next.add(userId);
         return next;
       });
-    }
-  }, [ids, token]);
+      try {
+        const res = wasMuted
+          ? await api.removeMute(token, userId)
+          : await api.addMute(token, userId);
+        if (Array.isArray(res?.ids)) setIds(new Set(res.ids));
+      } catch {
+        // откат
+        setIds((prev) => {
+          const next = new Set(prev);
+          if (wasMuted) next.add(userId);
+          else next.delete(userId);
+          return next;
+        });
+      }
+    },
+    [ids, token],
+  );
 
   // Карта { id: true } для совместимости с компонентами, которым удобнее
   // быстрый булев lookup.
@@ -97,10 +105,7 @@ export function MutesProvider({ children }) {
     return m;
   }, [ids]);
 
-  const value = useMemo(
-    () => ({ mutes, ids, isMuted, toggle }),
-    [mutes, ids, isMuted, toggle],
-  );
+  const value = useMemo(() => ({ mutes, ids, isMuted, toggle }), [mutes, ids, isMuted, toggle]);
   return <MutesContext.Provider value={value}>{children}</MutesContext.Provider>;
 }
 

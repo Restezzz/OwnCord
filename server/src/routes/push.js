@@ -1,8 +1,6 @@
 import { Router } from 'express';
 import { authRequired } from '../auth.js';
-import {
-  pushEnabled, publicVapidKey, saveSubscription, deleteSubscription,
-} from '../push.js';
+import { pushEnabled, publicVapidKey, saveSubscription, deleteSubscription } from '../push.js';
 
 const router = Router();
 

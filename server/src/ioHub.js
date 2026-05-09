@@ -73,7 +73,15 @@ export function disconnectUserSockets(userId, reason = 'account-deleted') {
   for (const sid of [...room]) {
     const s = io.sockets.sockets.get(sid);
     if (!s) continue;
-    try { s.emit('account:deleted', { reason }); } catch { /* */ }
-    try { s.disconnect(true); } catch { /* */ }
+    try {
+      s.emit('account:deleted', { reason });
+    } catch {
+      /* */
+    }
+    try {
+      s.disconnect(true);
+    } catch {
+      /* */
+    }
   }
 }

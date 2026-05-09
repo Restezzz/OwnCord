@@ -26,7 +26,13 @@ export default function AttachmentMessage({ message, mine }) {
   const fileName = attachmentName || 'file';
   const additionalAttachments = payload?.additionalAttachments || [];
   const allAttachments = [
-    { kind, path: attachmentPath, name: attachmentName, size: attachmentSize, mime: attachmentMime },
+    {
+      kind,
+      path: attachmentPath,
+      name: attachmentName,
+      size: attachmentSize,
+      mime: attachmentMime,
+    },
     ...additionalAttachments,
   ];
 
@@ -54,12 +60,7 @@ function SingleAttachment({ attachment, mine, onZoom, isZoomed, onCloseZoom }) {
     return (
       <>
         <div className="group relative inline-block max-w-xs rounded-lg overflow-hidden">
-          <button
-            type="button"
-            className="block cursor-zoom-in"
-            onClick={onZoom}
-            title={fileName}
-          >
+          <button type="button" className="block cursor-zoom-in" onClick={onZoom} title={fileName}>
             <img
               src={path}
               alt={fileName}
@@ -75,11 +76,7 @@ function SingleAttachment({ attachment, mine, onZoom, isZoomed, onCloseZoom }) {
             onClick={onCloseZoom}
             role="dialog"
           >
-            <img
-              src={path}
-              alt={fileName}
-              className="max-h-[90vh] max-w-[95vw] object-contain"
-            />
+            <img src={path} alt={fileName} className="max-h-[90vh] max-w-[95vw] object-contain" />
             <div
               className="absolute top-4 right-4 flex items-center gap-2"
               onClick={(e) => e.stopPropagation()}
@@ -96,11 +93,7 @@ function SingleAttachment({ attachment, mine, onZoom, isZoomed, onCloseZoom }) {
   if (kind === 'video') {
     return (
       <div className="group relative inline-block max-w-xs rounded-lg overflow-hidden">
-        <video
-          src={path}
-          controls
-          className="block max-h-72 max-w-xs bg-black"
-        >
+        <video src={path} controls className="block max-h-72 max-w-xs bg-black">
           <track kind="captions" />
         </video>
         <MediaActions path={path} name={fileName} />
@@ -118,7 +111,8 @@ function SingleAttachment({ attachment, mine, onZoom, isZoomed, onCloseZoom }) {
         ${mine ? 'bg-white/10 hover:bg-white/20' : 'bg-bg-3 hover:bg-bg-2'}`}
       title={mime || ''}
     >
-      <span className={`grid place-items-center w-9 h-9 rounded-md shrink-0
+      <span
+        className={`grid place-items-center w-9 h-9 rounded-md shrink-0
         ${mine ? 'bg-white/15' : 'bg-bg-2'}`}
       >
         <FileIcon size={18} />

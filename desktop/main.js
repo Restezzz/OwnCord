@@ -70,7 +70,9 @@ function createWindow() {
   // случайно «застрял» в десктопе на http://google.com и т.п.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) {
-      shell.openExternal(url).catch(() => { /* ignore */ });
+      shell.openExternal(url).catch(() => {
+        /* ignore */
+      });
       return { action: 'deny' };
     }
     return { action: 'allow' };
@@ -113,7 +115,9 @@ function loadServerUrl() {
     console.error('Failed to load', url, e);
     // Падение загрузки — показываем тот же экран настроек, чтобы юзер
     // мог исправить URL без удаления конфига руками.
-    mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(setupHtml(`Не удалось открыть ${url}: ${e?.message || e}`))}`);
+    mainWindow.loadURL(
+      `data:text/html;charset=utf-8,${encodeURIComponent(setupHtml(`Не удалось открыть ${url}: ${e?.message || e}`))}`,
+    );
   });
 }
 
@@ -162,7 +166,10 @@ function setupHtml(error) {
 }
 
 function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  return String(s).replace(
+    /[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+  );
 }
 
 // --- IPC ---------------------------------------------------------

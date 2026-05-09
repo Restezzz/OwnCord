@@ -24,9 +24,10 @@ router.post('/:targetId', authRequired, (req, res) => {
   const peer = db.prepare('SELECT id FROM users WHERE id = ?').get(targetId);
   if (!peer) return res.status(404).json({ error: 'no such user' });
 
-  db.prepare(
-    'INSERT OR IGNORE INTO mutes (user_id, target_id) VALUES (?, ?)',
-  ).run(req.user.id, targetId);
+  db.prepare('INSERT OR IGNORE INTO mutes (user_id, target_id) VALUES (?, ?)').run(
+    req.user.id,
+    targetId,
+  );
 
   const ids = listMutedIds(req.user.id);
   emitToUser(req.user.id, 'mutes:update', { ids });
@@ -36,8 +37,7 @@ router.post('/:targetId', authRequired, (req, res) => {
 router.delete('/:targetId', authRequired, (req, res) => {
   const targetId = Number(req.params.targetId);
   if (!Number.isInteger(targetId)) return res.status(400).json({ error: 'bad target' });
-  db.prepare('DELETE FROM mutes WHERE user_id = ? AND target_id = ?')
-    .run(req.user.id, targetId);
+  db.prepare('DELETE FROM mutes WHERE user_id = ? AND target_id = ?').run(req.user.id, targetId);
   const ids = listMutedIds(req.user.id);
   emitToUser(req.user.id, 'mutes:update', { ids });
   res.json({ ids });

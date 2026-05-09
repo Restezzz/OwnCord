@@ -8,9 +8,7 @@ import { modalVariants, overlayVariants, reducedVariants } from '../utils/motion
 // кнопку «Демонстрация», после подтверждения вызывает onConfirm(presetKey, includeAudio)
 // и сразу закрывается — потом уже срабатывает системный диалог браузера
 // для выбора окна/экрана.
-export default function ScreenQualityModal({
-  open, defaultPreset = '720p', onConfirm, onClose,
-}) {
+export default function ScreenQualityModal({ open, defaultPreset = '720p', onConfirm, onClose }) {
   const [preset, setPreset] = useState(defaultPreset);
   const [includeAudio, setIncludeAudio] = useState(false);
   const reduce = useReducedMotion();
@@ -33,107 +31,107 @@ export default function ScreenQualityModal({
             variants={panelV}
             onClick={(e) => e.stopPropagation()}
           >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-          <div className="flex items-center gap-2">
-            <Monitor size={18} className="text-accent" />
-            <h2 className="text-base font-semibold">Качество демонстрации</h2>
-          </div>
-          <button
-            onClick={onClose}
-            className="btn-icon hover:bg-bg-2"
-            title="Закрыть"
-          >
-            <X size={18} />
-          </button>
-        </div>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+              <div className="flex items-center gap-2">
+                <Monitor size={18} className="text-accent" />
+                <h2 className="text-base font-semibold">Качество демонстрации</h2>
+              </div>
+              <button onClick={onClose} className="btn-icon hover:bg-bg-2" title="Закрыть">
+                <X size={18} />
+              </button>
+            </div>
 
-        <div className="p-5 space-y-2">
-          <p className="text-sm text-text-2 mb-3">
-            Выберите разрешение и битрейт. Чем выше — тем чётче картинка,
-            но и нагрузка на канал больше.
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            {SCREEN_PRESET_KEYS.map((key) => {
-              const p = SCREEN_PRESETS[key];
-              const active = preset === key;
-              return (
-                <button
-                  key={key}
-                  onClick={() => setPreset(key)}
-                  className={`text-left rounded-lg border px-3 py-2.5 transition-colors ${
-                    active
-                      ? 'border-accent bg-accent/10'
-                      : 'border-border bg-bg-2 hover:bg-bg-3'
-                  }`}
-                >
-                  <div className="font-medium text-sm">{p.label}</div>
-                  <div className="text-xs text-text-2 mt-0.5">
-                    до {Math.round(p.maxBitrate / 1_000_000)} Мбит/с
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-          <div className="mt-4 pt-4 border-t border-border">
-            <label className="flex items-center gap-3 cursor-pointer">
-              <div className="relative">
-                <input
-                  type="checkbox"
-                  checked={includeAudio}
-                  onChange={(e) => setIncludeAudio(e.target.checked)}
-                  className="sr-only"
-                />
-                <div className={`w-11 h-6 rounded-full transition-colors ${
-                  includeAudio ? 'bg-accent' : 'bg-bg-3'
-                }`}>
-                  <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${
-                    includeAudio ? 'left-6' : 'left-1'
-                  }`} />
-                </div>
+            <div className="p-5 space-y-2">
+              <p className="text-sm text-text-2 mb-3">
+                Выберите разрешение и битрейт. Чем выше — тем чётче картинка, но и нагрузка на канал
+                больше.
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {SCREEN_PRESET_KEYS.map((key) => {
+                  const p = SCREEN_PRESETS[key];
+                  const active = preset === key;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => setPreset(key)}
+                      className={`text-left rounded-lg border px-3 py-2.5 transition-colors ${
+                        active
+                          ? 'border-accent bg-accent/10'
+                          : 'border-border bg-bg-2 hover:bg-bg-3'
+                      }`}
+                    >
+                      <div className="font-medium text-sm">{p.label}</div>
+                      <div className="text-xs text-text-2 mt-0.5">
+                        до {Math.round(p.maxBitrate / 1_000_000)} Мбит/с
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
-              <div className="flex-1">
-                <div className="text-sm font-medium">Включить звук экрана</div>
-                <div className="text-xs text-text-2">
-                  Передавать системный звук (музыка, видео, игры)
-                </div>
-              </div>
-            </label>
-            {includeAudio && (
-              <div className="mt-3 flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-[11px] leading-relaxed text-amber-200/90">
-                <Info size={14} className="shrink-0 mt-0.5" />
-                <div className="space-y-1">
-                  <div>
-                    <strong className="text-amber-100">Чтобы передать звук только одного приложения</strong> —
-                    в системном окне выбора выберите вкладку браузера
-                    («<em>Chrome Tab</em>» / «<em>Вкладка</em>») и поставьте
-                    галочку «<em>Поделиться звуком вкладки</em>».
+              <div className="mt-4 pt-4 border-t border-border">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <div className="relative">
+                    <input
+                      type="checkbox"
+                      checked={includeAudio}
+                      onChange={(e) => setIncludeAudio(e.target.checked)}
+                      className="sr-only"
+                    />
+                    <div
+                      className={`w-11 h-6 rounded-full transition-colors ${
+                        includeAudio ? 'bg-accent' : 'bg-bg-3'
+                      }`}
+                    >
+                      <div
+                        className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${
+                          includeAudio ? 'left-6' : 'left-1'
+                        }`}
+                      />
+                    </div>
                   </div>
-                  <div>
-                    При выборе «Окно» или «Весь экран» Windows/Chrome отдают
-                    общий микшер — то есть звук <em>всех</em> приложений сразу
-                    (другой браузер на этом же ПК тоже попадёт в стрим).
-                    Это ограничение ОС, а не приложения.
+                  <div className="flex-1">
+                    <div className="text-sm font-medium">Включить звук экрана</div>
+                    <div className="text-xs text-text-2">
+                      Передавать системный звук (музыка, видео, игры)
+                    </div>
                   </div>
-                </div>
+                </label>
+                {includeAudio && (
+                  <div className="mt-3 flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-[11px] leading-relaxed text-amber-200/90">
+                    <Info size={14} className="shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <div>
+                        <strong className="text-amber-100">
+                          Чтобы передать звук только одного приложения
+                        </strong>{' '}
+                        — в системном окне выбора выберите вкладку браузера («<em>Chrome Tab</em>» /
+                        «<em>Вкладка</em>») и поставьте галочку «<em>Поделиться звуком вкладки</em>
+                        ».
+                      </div>
+                      <div>
+                        При выборе «Окно» или «Весь экран» Windows/Chrome отдают общий микшер — то
+                        есть звук <em>всех</em> приложений сразу (другой браузер на этом же ПК тоже
+                        попадёт в стрим). Это ограничение ОС, а не приложения.
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        </div>
+            </div>
 
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-border">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 rounded-lg hover:bg-bg-2 text-sm"
-          >
-            Отмена
-          </button>
-          <button
-            onClick={() => { onConfirm(preset, includeAudio); }}
-            className="px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover text-white text-sm font-medium"
-          >
-            Продолжить
-          </button>
-        </div>
+            <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-border">
+              <button onClick={onClose} className="px-4 py-2 rounded-lg hover:bg-bg-2 text-sm">
+                Отмена
+              </button>
+              <button
+                onClick={() => {
+                  onConfirm(preset, includeAudio);
+                }}
+                className="px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover text-white text-sm font-medium"
+              >
+                Продолжить
+              </button>
+            </div>
           </motion.div>
         </motion.div>
       )}

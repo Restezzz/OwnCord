@@ -50,6 +50,65 @@ server {
   proxy_send_timeout  3600s;
   send_timeout        3600s;
 
+  # =================================================================
+  # --- Security headers (defense-in-depth) -------------------------
+  # =================================================================
+  # Helmet (server/src/security.js) ставит основной набор заголовков
+  # для всех ответов от node. Здесь дублируем критичные на уровне
+  # nginx — это страховка на случай если node отдал 502, упал, или
+  # nginx раздаёт статику напрямую (не проксируя в node). Если
+  # помечать одинаковые заголовки в двух местах — браузер логически
+  # AND'ит их, побеждает более строгий вариант.
+  #
+  # ВАЖНО про nginx-наследование add_header: если внутри location
+  # есть СВОЙ add_header — он ПЕРЕБИВАЕТ все add_header родителя,
+  # а не дополняет. В блоках /uploads/ и /updates/ ниже нужно
+  # повторить только реально полезные для статики (X-Content-Type-
+  # Options, Cache-Control). CSP, X-Frame и т.п. на бинарных файлах
+  # никакой пользы не дают.
+
+  # HSTS: форсируем HTTPS на год + поддомены. Если у тебя есть
+  # HTTP-only поддомен (cdn., legacy. и т.п.) — убери includeSubDomains.
+  add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+  # Permissions-Policy: что разрешено вызывать через браузерные API.
+  # Helmet этот заголовок НЕ ставит. Для мессенджера нужны микро/
+  # камера/screen-share/clipboard, всё остальное (геолокация, USB,
+  # payment, гироскопы) явно запрещаем.
+  add_header Permissions-Policy "microphone=(self), camera=(self), display-capture=(self), clipboard-read=(self), clipboard-write=(self), geolocation=(), payment=(), usb=(), gyroscope=(), accelerometer=()" always;
+
+  # X-Frame-Options: DENY — нельзя загружать OwnCord в iframe (защита
+  # от clickjacking). Дублирует CSP frame-ancestors, но нужен для
+  # старых браузеров без CSP.
+  add_header X-Frame-Options "DENY" always;
+
+  # Referrer-Policy: при переходе по ссылке не отдавать полный URL
+  # внешнему сайту. strict-origin-when-cross-origin = same-origin
+  # видит всё, чужие сайты — только origin без пути и query.
+  add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+  # X-Content-Type-Options: запрет MIME-sniffing'а. helmet ставит
+  # это сам, дублируем.
+  add_header X-Content-Type-Options "nosniff" always;
+
+  # Content-Security-Policy: что страница может загружать/выполнять.
+  # Зеркало helmet'овского CSP (см. server/src/security.js).
+  #   - script-src 'self' — никаких inline-script'ов и eval.
+  #     Vite-production-bundle уже без них.
+  #   - style-src 'self' 'unsafe-inline' — Tailwind/motion инлайнят
+  #     стили через JS; без 'unsafe-inline' UI развалится.
+  #   - img-src/media-src 'self' data: blob: — аватары, голосовые,
+  #     записываемые локально превью.
+  #   - connect-src 'self' wss: ws: — same-origin WebSocket для
+  #     socket.io. ws: оставлен для случая reverse-proxy без TLS
+  #     внутри LAN.
+  #   - worker-src 'self' blob: — service worker для push.
+  #   - object-src 'none', frame-ancestors 'none' — никаких
+  #     <object>/<embed>/iframe.
+  #   - upgrade-insecure-requests — авто-апгрейд http://… → https://…
+  #     внутри страницы.
+  add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: data:; font-src 'self' data:; connect-src 'self' wss: ws:; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests" always;
+
   # Вариант А: nginx отдаёт фронт сам (быстрее, кешируется).
   # Если фронт собирается в client/dist и доступен по /var/www/owncord/dist,
   # раскомментируй блок ниже и закомментируй `proxy_pass` ниже для location /.

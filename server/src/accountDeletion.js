@@ -1,12 +1,8 @@
 import fs from 'node:fs';
 import db from './db.js';
 import { absolutePathFor } from './uploads.js';
-import {
-  finalize as finalizeCall, findActiveCallsForUser,
-} from './callRegistry.js';
-import {
-  emitToUser, emitToGroup, disconnectUserSockets, leaveUserFromGroup,
-} from './ioHub.js';
+import { finalize as finalizeCall, findActiveCallsForUser } from './callRegistry.js';
+import { emitToUser, emitToGroup, disconnectUserSockets, leaveUserFromGroup } from './ioHub.js';
 
 /**
  * Soft-delete пользователя: сохранить историю переписок (sender_id остаётся
@@ -24,9 +20,7 @@ import {
  * Возвращает `{ ok: true }` или `{ ok: false, error }`.
  */
 export function softDeleteUser(userId) {
-  const user = db
-    .prepare('SELECT id, avatar_path, deleted_at FROM users WHERE id = ?')
-    .get(userId);
+  const user = db.prepare('SELECT id, avatar_path, deleted_at FROM users WHERE id = ?').get(userId);
   if (!user) return { ok: false, error: 'no such user' };
   if (user.deleted_at) return { ok: false, error: 'already deleted' };
 
@@ -36,49 +30,72 @@ export function softDeleteUser(userId) {
   //    самому раннему вошедшему другому участнику; если других нет —
   //    группа удаляется (CASCADE снесёт group_members и messages).
   const memberships = db
-    .prepare(`SELECT gm.group_id, g.owner_id
+    .prepare(
+      `SELECT gm.group_id, g.owner_id
                 FROM group_members gm
                 JOIN groups g ON g.id = gm.group_id
-               WHERE gm.user_id = ?`)
+               WHERE gm.user_id = ?`,
+    )
     .all(userId);
 
   for (const m of memberships) {
     const groupId = m.group_id;
     if (m.owner_id === userId) {
       const heir = db
-        .prepare(`SELECT user_id FROM group_members
+        .prepare(
+          `SELECT user_id FROM group_members
                    WHERE group_id = ? AND user_id != ?
-                   ORDER BY joined_at ASC LIMIT 1`)
+                   ORDER BY joined_at ASC LIMIT 1`,
+        )
         .get(groupId, userId);
       if (heir) {
-        db.prepare('UPDATE groups SET owner_id = ?, updated_at = ? WHERE id = ?')
-          .run(heir.user_id, now, groupId);
-        db.prepare(`UPDATE group_members SET role = 'owner'
-                     WHERE group_id = ? AND user_id = ?`)
-          .run(groupId, heir.user_id);
-        db.prepare('DELETE FROM group_members WHERE group_id = ? AND user_id = ?')
-          .run(groupId, userId);
+        db.prepare('UPDATE groups SET owner_id = ?, updated_at = ? WHERE id = ?').run(
+          heir.user_id,
+          now,
+          groupId,
+        );
+        db.prepare(
+          `UPDATE group_members SET role = 'owner'
+                     WHERE group_id = ? AND user_id = ?`,
+        ).run(groupId, heir.user_id);
+        db.prepare('DELETE FROM group_members WHERE group_id = ? AND user_id = ?').run(
+          groupId,
+          userId,
+        );
         // Сообщаем оставшимся участникам.
         emitToGroup(groupId, 'group:owner-changed', { groupId, ownerId: heir.user_id });
         emitToGroup(groupId, 'group:member-removed', { groupId, userId });
-        try { leaveUserFromGroup(userId, groupId); } catch { /* */ }
+        try {
+          leaveUserFromGroup(userId, groupId);
+        } catch {
+          /* */
+        }
       } else {
         // Один в группе — удаляем целиком.
         db.prepare('DELETE FROM groups WHERE id = ?').run(groupId);
         emitToGroup(groupId, 'group:deleted', { groupId });
       }
     } else {
-      db.prepare('DELETE FROM group_members WHERE group_id = ? AND user_id = ?')
-        .run(groupId, userId);
+      db.prepare('DELETE FROM group_members WHERE group_id = ? AND user_id = ?').run(
+        groupId,
+        userId,
+      );
       emitToGroup(groupId, 'group:member-removed', { groupId, userId });
-      try { leaveUserFromGroup(userId, groupId); } catch { /* */ }
+      try {
+        leaveUserFromGroup(userId, groupId);
+      } catch {
+        /* */
+      }
     }
   }
 
   // 2. Удалить аватар-файл (запись в users.avatar_path позже занулим).
   if (user.avatar_path) {
     const abs = absolutePathFor(user.avatar_path);
-    if (abs) fs.promises.unlink(abs).catch(() => { /* */ });
+    if (abs)
+      fs.promises.unlink(abs).catch(() => {
+        /* */
+      });
   }
 
   // 3. Подписки Web Push, мьюты (в обе стороны), invite_codes (created_by уже SET NULL).
@@ -90,7 +107,9 @@ export function softDeleteUser(userId) {
     const peerId = c.callerId === userId ? c.calleeId : c.callerId;
     finalizeCall(c.callId, c.status === 'active' ? 'completed' : 'cancelled');
     emitToUser(peerId, 'call:end', {
-      callId: c.callId, from: userId, reason: 'peer-disconnected',
+      callId: c.callId,
+      from: userId,
+      reason: 'peer-disconnected',
     });
   }
   // Групповые звонки: forceLeaveAll отрабатывает при дисконнекте сокетов
@@ -98,7 +117,8 @@ export function softDeleteUser(userId) {
 
   // 5. Финальная запись в users — фиксируем удаление.
   //    password обнуляем спец-маркером, чтобы bcrypt.compare никогда не дал true.
-  db.prepare(`
+  db.prepare(
+    `
     UPDATE users
        SET deleted_at = ?,
            display_name = NULL,
@@ -106,10 +126,15 @@ export function softDeleteUser(userId) {
            hide_on_delete = 0,
            password = ''
      WHERE id = ?
-  `).run(now, userId);
+  `,
+  ).run(now, userId);
 
   // 6. Разрываем все сокет-соединения юзера — текущие вкладки разлогинятся.
-  try { disconnectUserSockets(userId, 'account-deleted'); } catch { /* */ }
+  try {
+    disconnectUserSockets(userId, 'account-deleted');
+  } catch {
+    /* */
+  }
 
   return { ok: true };
 }

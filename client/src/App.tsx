@@ -7,9 +7,7 @@ import { useAuth } from './context/AuthContext';
 function Guard({ children }) {
   const { auth, ready } = useAuth();
   if (!ready) {
-    return (
-      <div className="h-full w-full grid place-items-center text-slate-400">Загрузка…</div>
-    );
+    return <div className="h-full w-full grid place-items-center text-slate-400">Загрузка…</div>;
   }
   if (!auth) return <Navigate to="/login" replace />;
   return children;

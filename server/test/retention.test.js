@@ -22,9 +22,7 @@ afterAll(() => {
 });
 
 async function register(username, password = 'secret123') {
-  const r = await request(app)
-    .post('/api/auth/register')
-    .send({ username, password });
+  const r = await request(app).post('/api/auth/register').send({ username, password });
   expect(r.status).toBe(200);
   return { token: r.body.token, user: r.body.user };
 }
@@ -36,17 +34,21 @@ describe('history retention', () => {
 
     const now = Date.now();
     const twoDaysAgo = now - 2 * 24 * 60 * 60 * 1000; // старше окна
-    const anHourAgo = now - 60 * 60 * 1000;           // свежее
+    const anHourAgo = now - 60 * 60 * 1000; // свежее
 
-    const oldMsg = db.prepare(
-      `INSERT INTO messages (sender_id, receiver_id, content, created_at, kind)
+    const oldMsg = db
+      .prepare(
+        `INSERT INTO messages (sender_id, receiver_id, content, created_at, kind)
        VALUES (?, ?, 'old', ?, 'text')`,
-    ).run(a.user.id, b.user.id, twoDaysAgo);
+      )
+      .run(a.user.id, b.user.id, twoDaysAgo);
 
-    const newMsg = db.prepare(
-      `INSERT INTO messages (sender_id, receiver_id, content, created_at, kind)
+    const newMsg = db
+      .prepare(
+        `INSERT INTO messages (sender_id, receiver_id, content, created_at, kind)
        VALUES (?, ?, 'fresh', ?, 'text')`,
-    ).run(a.user.id, b.user.id, anHourAgo);
+      )
+      .run(a.user.id, b.user.id, anHourAgo);
 
     const r = runRetentionOnce();
     expect(r.deleted).toBeGreaterThanOrEqual(1);

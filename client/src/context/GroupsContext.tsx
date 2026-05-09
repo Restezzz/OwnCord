@@ -1,5 +1,11 @@
 import {
-  createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
 } from 'react';
 import { api } from '../api';
 import { useAuth } from './AuthContext';
@@ -44,7 +50,11 @@ export function GroupsProvider({ children }) {
   }, [token]);
 
   useEffect(() => {
-    if (!token) { setGroups([]); setReady(false); return; }
+    if (!token) {
+      setGroups([]);
+      setReady(false);
+      return;
+    }
     refresh();
   }, [token, refresh]);
 
@@ -92,67 +102,93 @@ export function GroupsProvider({ children }) {
     };
 
     tryAttach();
-    return () => { stopped = true; offFns.forEach((fn) => fn()); };
+    return () => {
+      stopped = true;
+      offFns.forEach((fn) => fn());
+    };
   }, [token, refresh]);
 
-  const getGroup = useCallback(
-    (id) => groups.find((g) => g.id === id) || null,
-    [groups],
+  const getGroup = useCallback((id) => groups.find((g) => g.id === id) || null, [groups]);
+
+  const createGroup = useCallback(
+    async (name, memberIds) => {
+      const { group } = await api.createGroup(token, name, memberIds);
+      setGroups((prev) => (prev.some((x) => x.id === group.id) ? prev : [group, ...prev]));
+      return group;
+    },
+    [token],
   );
 
-  const createGroup = useCallback(async (name, memberIds) => {
-    const { group } = await api.createGroup(token, name, memberIds);
-    setGroups((prev) => (prev.some((x) => x.id === group.id) ? prev : [group, ...prev]));
-    return group;
-  }, [token]);
+  const updateGroup = useCallback(
+    async (id, patch) => {
+      const { group } = await api.updateGroup(token, id, patch);
+      setGroups((prev) => prev.map((x) => (x.id === id ? group : x)));
+      return group;
+    },
+    [token],
+  );
 
-  const updateGroup = useCallback(async (id, patch) => {
-    const { group } = await api.updateGroup(token, id, patch);
-    setGroups((prev) => prev.map((x) => (x.id === id ? group : x)));
-    return group;
-  }, [token]);
+  const deleteGroup = useCallback(
+    async (id) => {
+      await api.deleteGroup(token, id);
+      setGroups((prev) => prev.filter((x) => x.id !== id));
+    },
+    [token],
+  );
 
-  const deleteGroup = useCallback(async (id) => {
-    await api.deleteGroup(token, id);
-    setGroups((prev) => prev.filter((x) => x.id !== id));
-  }, [token]);
-
-  const addMembers = useCallback(async (id, memberIds) => {
-    const { group } = await api.addGroupMembers(token, id, memberIds);
-    setGroups((prev) => prev.map((x) => (x.id === id ? group : x)));
-    return group;
-  }, [token]);
+  const addMembers = useCallback(
+    async (id, memberIds) => {
+      const { group } = await api.addGroupMembers(token, id, memberIds);
+      setGroups((prev) => prev.map((x) => (x.id === id ? group : x)));
+      return group;
+    },
+    [token],
+  );
 
   const myId = auth?.user?.id ?? null;
-  const removeMember = useCallback(async (id, userId) => {
-    await api.removeGroupMember(token, id, userId);
-    // сервер пришлёт group:update или group:delete — локально можно ничего не делать,
-    // но на всякий случай перечитаем группу, если это был кик.
-    if (userId !== myId) {
-      try {
-        const { group } = await api.getGroup(token, id);
-        setGroups((prev) => prev.map((x) => (x.id === id ? group : x)));
-      } catch { /* ignore */ }
-    }
-  }, [myId, token]);
+  const removeMember = useCallback(
+    async (id, userId) => {
+      await api.removeGroupMember(token, id, userId);
+      // сервер пришлёт group:update или group:delete — локально можно ничего не делать,
+      // но на всякий случай перечитаем группу, если это был кик.
+      if (userId !== myId) {
+        try {
+          const { group } = await api.getGroup(token, id);
+          setGroups((prev) => prev.map((x) => (x.id === id ? group : x)));
+        } catch {
+          /* ignore */
+        }
+      }
+    },
+    [myId, token],
+  );
 
-  const uploadAvatar = useCallback(async (id, file) => {
-    const { group } = await api.uploadGroupAvatar(token, id, file);
-    setGroups((prev) => prev.map((x) => (x.id === id ? group : x)));
-    return group;
-  }, [token]);
+  const uploadAvatar = useCallback(
+    async (id, file) => {
+      const { group } = await api.uploadGroupAvatar(token, id, file);
+      setGroups((prev) => prev.map((x) => (x.id === id ? group : x)));
+      return group;
+    },
+    [token],
+  );
 
-  const deleteAvatar = useCallback(async (id) => {
-    const { group } = await api.deleteGroupAvatar(token, id);
-    setGroups((prev) => prev.map((x) => (x.id === id ? group : x)));
-    return group;
-  }, [token]);
+  const deleteAvatar = useCallback(
+    async (id) => {
+      const { group } = await api.deleteGroupAvatar(token, id);
+      setGroups((prev) => prev.map((x) => (x.id === id ? group : x)));
+      return group;
+    },
+    [token],
+  );
 
-  const updateGroupMemberRole = useCallback(async (id, userId, role) => {
-    const { group } = await api.updateGroupMemberRole(token, id, userId, role);
-    setGroups((prev) => prev.map((x) => (x.id === id ? group : x)));
-    return group;
-  }, [token]);
+  const updateGroupMemberRole = useCallback(
+    async (id, userId, role) => {
+      const { group } = await api.updateGroupMemberRole(token, id, userId, role);
+      setGroups((prev) => prev.map((x) => (x.id === id ? group : x)));
+      return group;
+    },
+    [token],
+  );
 
   const value = useMemo(
     () => ({
@@ -169,8 +205,20 @@ export function GroupsProvider({ children }) {
       updateGroupMemberRole,
       refresh,
     }),
-    [groups, ready, getGroup, createGroup, updateGroup, deleteGroup, addMembers,
-      removeMember, uploadAvatar, deleteAvatar, updateGroupMemberRole, refresh],
+    [
+      groups,
+      ready,
+      getGroup,
+      createGroup,
+      updateGroup,
+      deleteGroup,
+      addMembers,
+      removeMember,
+      uploadAvatar,
+      deleteAvatar,
+      updateGroupMemberRole,
+      refresh,
+    ],
   );
 
   return <GroupsContext.Provider value={value}>{children}</GroupsContext.Provider>;

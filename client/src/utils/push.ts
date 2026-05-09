@@ -10,10 +10,10 @@ const SW_URL = '/sw.js';
 
 export function pushSupported() {
   return (
-    typeof window !== 'undefined'
-    && 'serviceWorker' in navigator
-    && 'PushManager' in window
-    && 'Notification' in window
+    typeof window !== 'undefined' &&
+    'serviceWorker' in navigator &&
+    'PushManager' in window &&
+    'Notification' in window
   );
 }
 
@@ -45,24 +45,30 @@ export function attachNotificationClickHandler() {
         });
         window.dispatchEvent(ev);
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   });
 }
 
 // Текущее состояние подписки (для UI).
 export async function getPushStatus(token) {
   if (!pushSupported()) return { supported: false };
-  const cfg: { enabled: boolean; publicKey?: string } = await api.pushConfig().catch(() => ({ enabled: false }));
+  const cfg: { enabled: boolean; publicKey?: string } = await api
+    .pushConfig()
+    .catch(() => ({ enabled: false }));
   if (!cfg.enabled || !cfg.publicKey) {
     return { supported: true, configured: false };
   }
-  let permission = Notification.permission;
+  const permission = Notification.permission;
   let subscribed = false;
   try {
     const reg = await ensureRegistration();
     const sub = await reg.pushManager.getSubscription();
     subscribed = !!sub;
-  } catch { /* */ }
+  } catch {
+    /* */
+  }
   return {
     supported: true,
     configured: true,
@@ -87,7 +93,11 @@ export async function enablePush(token) {
   // Если есть старая подписка с другим публичным ключом — снимаем.
   const existing = await reg.pushManager.getSubscription();
   if (existing) {
-    try { await existing.unsubscribe(); } catch { /* */ }
+    try {
+      await existing.unsubscribe();
+    } catch {
+      /* */
+    }
   }
   const sub = await reg.pushManager.subscribe({
     userVisibleOnly: true,
@@ -104,14 +114,22 @@ export async function disablePush(token) {
     const sub = await reg.pushManager.getSubscription();
     if (!sub) return;
     const endpoint = sub.endpoint;
-    try { await sub.unsubscribe(); } catch { /* */ }
-    await api.pushUnsubscribe(token, endpoint).catch(() => { /* */ });
-  } catch { /* */ }
+    try {
+      await sub.unsubscribe();
+    } catch {
+      /* */
+    }
+    await api.pushUnsubscribe(token, endpoint).catch(() => {
+      /* */
+    });
+  } catch {
+    /* */
+  }
 }
 
 // VAPID public key приходит как base64url без padding — приводим к Uint8Array.
 function urlBase64ToUint8Array(base64String) {
-  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
   const raw = atob(base64);
   const out = new Uint8Array(raw.length);

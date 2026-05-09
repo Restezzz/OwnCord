@@ -113,13 +113,17 @@ function setup(window, { app, ipcMain }) {
   // Стартовая проверка с небольшой задержкой — пусть UI прогрузится,
   // window-listener'ы навесятся, потом начинаем шуметь сетью.
   setTimeout(() => {
-    autoUpdater.checkForUpdates().catch(() => { /* свалимся в error-event */ });
+    autoUpdater.checkForUpdates().catch(() => {
+      /* свалимся в error-event */
+    });
   }, STARTUP_DELAY);
 
   // Периодическая проверка. clearInterval не нужен — процесс завершится
   // вместе с окном; node таймеры не держат event loop при app.quit().
   pollTimer = setInterval(() => {
-    autoUpdater.checkForUpdates().catch(() => { /* swallow */ });
+    autoUpdater.checkForUpdates().catch(() => {
+      /* swallow */
+    });
   }, SIX_HOURS);
 
   setupDone = true;

@@ -91,7 +91,11 @@ export default function VoiceRecorder({ onSend, onCancel, onError }) {
       stopped = true;
       if (tickRef.current) clearInterval(tickRef.current);
       if (recorderRef.current && recorderRef.current.state !== 'inactive') {
-        try { recorderRef.current.stop(); } catch { /* ignore */ }
+        try {
+          recorderRef.current.stop();
+        } catch {
+          /* ignore */
+        }
       }
       mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
       mediaStreamRef.current = null;
@@ -100,14 +104,24 @@ export default function VoiceRecorder({ onSend, onCancel, onError }) {
   }, []);
 
   // очистка blobUrl
-  useEffect(() => () => {
-    if (blobUrl) URL.revokeObjectURL(blobUrl);
-  }, [blobUrl]);
+  useEffect(
+    () => () => {
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    },
+    [blobUrl],
+  );
 
   const stop = () => {
-    if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; }
+    if (tickRef.current) {
+      clearInterval(tickRef.current);
+      tickRef.current = null;
+    }
     if (recorderRef.current && recorderRef.current.state !== 'inactive') {
-      try { recorderRef.current.stop(); } catch { /* ignore */ }
+      try {
+        recorderRef.current.stop();
+      } catch {
+        /* ignore */
+      }
     }
   };
 
@@ -116,7 +130,9 @@ export default function VoiceRecorder({ onSend, onCancel, onError }) {
     // если ещё идёт запись, просто отменяем и не переходим в preview
     if (phase === 'recording') {
       // дадим onstop сработать, но затем проигнорируем результат
-      setTimeout(() => { setBlob(null); }, 0);
+      setTimeout(() => {
+        setBlob(null);
+      }, 0);
     }
     onCancel?.();
   };
@@ -135,8 +151,13 @@ export default function VoiceRecorder({ onSend, onCancel, onError }) {
   const togglePlay = () => {
     const a = audioRef.current;
     if (!a) return;
-    if (a.paused) { a.play().catch(() => {}); setPlaying(true); }
-    else { a.pause(); setPlaying(false); }
+    if (a.paused) {
+      a.play().catch(() => {});
+      setPlaying(true);
+    } else {
+      a.pause();
+      setPlaying(false);
+    }
   };
 
   return (

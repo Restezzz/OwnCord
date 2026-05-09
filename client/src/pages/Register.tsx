@@ -24,10 +24,17 @@ export default function Register() {
   // Узнаём режим регистрации у сервера: открыта/закрыта, нужен ли код.
   useEffect(() => {
     let cancelled = false;
-    api.registrationInfo()
-      .then((r) => { if (!cancelled) setInfo(r); })
-      .catch(() => { /* серверу плохо — оставим дефолты */ });
-    return () => { cancelled = true; };
+    api
+      .registrationInfo()
+      .then((r) => {
+        if (!cancelled) setInfo(r);
+      })
+      .catch(() => {
+        /* серверу плохо — оставим дефолты */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const onSubmit = async (e) => {
@@ -43,12 +50,9 @@ export default function Register() {
     }
     setLoading(true);
     try {
-      await register(
-        username.trim(),
-        password,
-        invite.trim() || undefined,
-        { privacyConsent: consent },
-      );
+      await register(username.trim(), password, invite.trim() || undefined, {
+        privacyConsent: consent,
+      });
     } catch (err) {
       setError(err.message || 'Ошибка регистрации');
     } finally {
@@ -66,8 +70,8 @@ export default function Register() {
             </div>
             <h1 className="text-xl font-semibold">Регистрация закрыта</h1>
             <p className="text-slate-400 text-sm">
-              На этом сервере регистрация новых пользователей отключена.
-              Обратитесь к администратору.
+              На этом сервере регистрация новых пользователей отключена. Обратитесь к
+              администратору.
             </p>
           </div>
           <Link to="/login" className="btn-primary w-full inline-block text-center">
@@ -159,8 +163,8 @@ export default function Register() {
                 className="text-accent hover:underline"
               >
                 политикой обработки персональных данных
-              </a>
-              {' '}(152-ФЗ).
+              </a>{' '}
+              (152-ФЗ).
             </span>
           </label>
         )}

@@ -9,7 +9,7 @@ const users = [
 
 const groups = [
   { id: 10, name: 'Alpha', members: [{ id: 1 }, { id: 2 }] },
-  { id: 11, name: 'Beta',  members: [{ id: 1 }, { id: 2 }, { id: 3 }] },
+  { id: 11, name: 'Beta', members: [{ id: 1 }, { id: 2 }, { id: 3 }] },
 ];
 
 function expectTextBefore(container: HTMLElement, first: string, second: string) {
@@ -57,9 +57,7 @@ describe('UserList — групповой звонок индикатор', () =
   });
 
   it('устойчив к отсутствию пропса activeGroupCalls', () => {
-    render(
-      <UserList users={users} groups={groups} selfId={1} selected={null} />,
-    );
+    render(<UserList users={users} groups={groups} selfId={1} selected={null} />);
     // Не падает и не показывает индикатор.
     expect(screen.queryByText('Идёт звонок')).toBeNull();
   });

@@ -8,7 +8,13 @@ type AvatarProps = {
   showStatus?: boolean;
 };
 
-export default function Avatar({ name = '', src, size = 36, online, showStatus = false }: AvatarProps) {
+export default function Avatar({
+  name = '',
+  src,
+  size = 36,
+  online,
+  showStatus = false,
+}: AvatarProps) {
   const bg = colorFor(name);
   const fontSize = Math.round(size * 0.4);
   return (

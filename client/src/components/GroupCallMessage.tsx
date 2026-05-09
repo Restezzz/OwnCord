@@ -22,7 +22,8 @@ export default function GroupCallMessage({ message, sendersById, onJoin, isJoine
 
   const actor = nameOf(payload.startedBy);
   const time = new Date(message.createdAt).toLocaleTimeString([], {
-    hour: '2-digit', minute: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
   });
 
   let title;

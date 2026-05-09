@@ -17,7 +17,11 @@ describe('CallMessage', () => {
         message={{
           ...baseMsg,
           payload: {
-            callId: 'c1', withVideo: false, status: 'ended', outcome: 'completed', durationMs: 65000,
+            callId: 'c1',
+            withVideo: false,
+            status: 'ended',
+            outcome: 'completed',
+            durationMs: 65000,
           },
         }}
         selfId={1}
@@ -76,7 +80,10 @@ describe('CallMessage', () => {
         message={{
           ...baseMsg,
           payload: {
-            callId: 'c4', withVideo: false, status: 'ended', outcome: 'expired',
+            callId: 'c4',
+            withVideo: false,
+            status: 'ended',
+            outcome: 'expired',
           },
         }}
         selfId={1}

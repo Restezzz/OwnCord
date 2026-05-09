@@ -11,13 +11,15 @@ function resolveSecret() {
   if (v && v.length >= 16) return v;
   if (isProd) {
     throw new Error(
-      'JWT_SECRET is required in production (min 16 chars). '
-      + 'Generate one e.g. with `node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"` '
-      + 'and put it into server/.env',
+      'JWT_SECRET is required in production (min 16 chars). ' +
+        "Generate one e.g. with `node -e \"console.log(require('crypto').randomBytes(48).toString('hex'))\"` " +
+        'and put it into server/.env',
     );
   }
-  // eslint-disable-next-line no-console
-  console.warn('[auth] JWT_SECRET not set — using insecure dev fallback. DO NOT USE IN PRODUCTION.');
+
+  console.warn(
+    '[auth] JWT_SECRET not set — using insecure dev fallback. DO NOT USE IN PRODUCTION.',
+  );
   return 'dev-insecure-secret-change-me';
 }
 
@@ -57,9 +59,7 @@ export function authRequired(req, res, next) {
 
   // Аккаунт мог быть удалён уже после выдачи JWT — токен ещё валиден,
   // но дальнейшие запросы должны блокироваться.
-  const row = db
-    .prepare('SELECT deleted_at FROM users WHERE id = ?')
-    .get(payload.id);
+  const row = db.prepare('SELECT deleted_at FROM users WHERE id = ?').get(payload.id);
   if (!row || row.deleted_at) {
     return res.status(401).json({ error: 'account-deleted' });
   }

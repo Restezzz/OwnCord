@@ -59,14 +59,12 @@ async function main() {
   const icoBuffer = await pngToIco(pngBuffers);
   fs.writeFileSync(ICO_OUT, icoBuffer);
 
-  // eslint-disable-next-line no-console
   console.log(`[build-icon] ${path.relative(ROOT, PNG_OUT)} (${PNG_SIZE}×${PNG_SIZE})`);
-  // eslint-disable-next-line no-console
+
   console.log(`[build-icon] ${path.relative(ROOT, ICO_OUT)} (${ICO_SIZES.join(', ')})`);
 }
 
 main().catch((e) => {
-  // eslint-disable-next-line no-console
   console.error('[build-icon] failed:', e);
   process.exit(1);
 });
