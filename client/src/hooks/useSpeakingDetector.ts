@@ -20,17 +20,20 @@ import { useEffect, useMemo, useRef, useState } from 'react';
  *  - сэмплирование на rAF (~60 Гц), при свёрнутой вкладке браузер сам
  *    тормозит таймеры — нагрузка падает до нуля.
  */
-export function useSpeakingDetector(streamsByUserId: Record<number, MediaStream> = {}, {
-  // RMS на short-time domain. Ниже ~0.005 — фоновый шум комнаты.
-  // 0.012 ≈ -38 dBFS — нормальный голос на встроенном микрофоне.
-  threshold = 0.012,
-  // Сколько держать «говорит» после падения уровня — иначе моргает на
-  // паузах между словами и на согласных.
-  releaseMs = 250,
-  // Полностью выключить (idle/после ухода из звонка), чтобы не держать
-  // открытый AudioContext.
-  enabled = true,
-} = {}) {
+export function useSpeakingDetector(
+  streamsByUserId: Record<number, MediaStream> = {},
+  {
+    // RMS на short-time domain. Ниже ~0.005 — фоновый шум комнаты.
+    // 0.012 ≈ -38 dBFS — нормальный голос на встроенном микрофоне.
+    threshold = 0.012,
+    // Сколько держать «говорит» после падения уровня — иначе моргает на
+    // паузах между словами и на согласных.
+    releaseMs = 250,
+    // Полностью выключить (idle/после ухода из звонка), чтобы не держать
+    // открытый AudioContext.
+    enabled = true,
+  } = {},
+) {
   const [speaking, setSpeaking] = useState(() => new Set<number>());
 
   // Стабильная подпись по списку userId + id первого аудио-трека: если
@@ -53,7 +56,9 @@ export function useSpeakingDetector(streamsByUserId: Record<number, MediaStream>
   // Свежий streamsByUserId внутрь useEffect через ref — чтобы effect
   // зависел только от `sig`, а не от объекта, мутирующего на каждом ререндере.
   const streamsRef = useRef(streamsByUserId);
-  useEffect(() => { streamsRef.current = streamsByUserId; }, [streamsByUserId]);
+  useEffect(() => {
+    streamsRef.current = streamsByUserId;
+  }, [streamsByUserId]);
 
   useEffect(() => {
     if (!enabled || !sig) {
@@ -65,12 +70,15 @@ export function useSpeakingDetector(streamsByUserId: Record<number, MediaStream>
 
     const ctx = new Ctx();
     // userId -> { source, analyser, buffer, lastSpokeTs }
-    const nodes = new Map<number, {
-      source: MediaStreamAudioSourceNode;
-      analyser: AnalyserNode;
-      buffer: Float32Array<ArrayBufferLike>;
-      lastSpokeTs: number;
-    }>();
+    const nodes = new Map<
+      number,
+      {
+        source: MediaStreamAudioSourceNode;
+        analyser: AnalyserNode;
+        buffer: Float32Array<ArrayBufferLike>;
+        lastSpokeTs: number;
+      }
+    >();
 
     const current = streamsRef.current || {};
     for (const [uidStr, stream] of Object.entries(current)) {
@@ -93,7 +101,9 @@ export function useSpeakingDetector(streamsByUserId: Record<number, MediaStream>
           buffer: new Float32Array(analyser.fftSize),
           lastSpokeTs: 0,
         });
-      } catch { /* недоступный stream — пропускаем */ }
+      } catch {
+        /* недоступный stream — пропускаем */
+      }
     }
 
     let rafId = 0;
@@ -116,9 +126,15 @@ export function useSpeakingDetector(streamsByUserId: Record<number, MediaStream>
         if (now - node.lastSpokeTs <= releaseMs) next.add(uid);
       }
       setSpeaking((prev) => {
-        if (prev.size !== next.size) { changed = true; return next; }
+        if (prev.size !== next.size) {
+          changed = true;
+          return next;
+        }
         for (const id of prev) {
-          if (!next.has(id)) { changed = true; return next; }
+          if (!next.has(id)) {
+            changed = true;
+            return next;
+          }
         }
         return changed ? next : prev;
       });
@@ -130,10 +146,20 @@ export function useSpeakingDetector(streamsByUserId: Record<number, MediaStream>
       cancelled = true;
       cancelAnimationFrame(rafId);
       for (const node of nodes.values()) {
-        try { node.source.disconnect(); } catch { /* */ }
-        try { node.analyser.disconnect(); } catch { /* */ }
+        try {
+          node.source.disconnect();
+        } catch {
+          /* */
+        }
+        try {
+          node.analyser.disconnect();
+        } catch {
+          /* */
+        }
       }
-      ctx.close().catch(() => { /* */ });
+      ctx.close().catch(() => {
+        /* */
+      });
     };
   }, [sig, threshold, releaseMs, enabled]);
 

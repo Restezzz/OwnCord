@@ -14,9 +14,7 @@ export function consumeCode(rawCode) {
   const code = String(rawCode || '').trim();
   if (!code) return { ok: false, reason: 'not_found' };
 
-  const row = db
-    .prepare('SELECT * FROM invite_codes WHERE code = ?')
-    .get(code);
+  const row = db.prepare('SELECT * FROM invite_codes WHERE code = ?').get(code);
   if (!row) return { ok: false, reason: 'not_found' };
   if (row.revoked_at) return { ok: false, reason: 'revoked' };
   if (row.expires_at && row.expires_at <= Date.now()) {
@@ -27,14 +25,18 @@ export function consumeCode(rawCode) {
   }
 
   // Атомарный инкремент с защитой от гонок.
-  const upd = db.prepare(`
+  const upd = db
+    .prepare(
+      `
     UPDATE invite_codes
        SET uses_count = uses_count + 1
      WHERE code = ?
        AND (max_uses IS NULL OR uses_count < max_uses)
        AND (revoked_at IS NULL)
        AND (expires_at IS NULL OR expires_at > ?)
-  `).run(code, Date.now());
+  `,
+    )
+    .run(code, Date.now());
 
   if (upd.changes === 0) {
     // Кто-то успел списать последнее использование между SELECT и UPDATE.
@@ -45,26 +47,28 @@ export function consumeCode(rawCode) {
 
 export function listCodes() {
   return db
-    .prepare(`
+    .prepare(
+      `
       SELECT c.code, c.note, c.created_by, c.created_at, c.max_uses,
              c.uses_count, c.expires_at, c.revoked_at,
              u.username AS created_by_username
         FROM invite_codes c
         LEFT JOIN users u ON u.id = c.created_by
        ORDER BY c.created_at DESC
-    `)
+    `,
+    )
     .all()
     .map(serializeRow);
 }
 
-export function createCode({
-  createdBy, note, maxUses, expiresAt, code,
-}) {
+export function createCode({ createdBy, note, maxUses, expiresAt, code }) {
   const finalCode = (code && String(code).trim()) || generateCode();
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO invite_codes (code, note, created_by, max_uses, expires_at)
     VALUES (?, ?, ?, ?, ?)
-  `).run(
+  `,
+  ).run(
     finalCode,
     note ? String(note).slice(0, 200) : null,
     createdBy || null,
@@ -72,14 +76,16 @@ export function createCode({
     expiresAt == null ? null : Number(expiresAt),
   );
   const row = db
-    .prepare(`
+    .prepare(
+      `
       SELECT c.code, c.note, c.created_by, c.created_at, c.max_uses,
              c.uses_count, c.expires_at, c.revoked_at,
              u.username AS created_by_username
         FROM invite_codes c
         LEFT JOIN users u ON u.id = c.created_by
        WHERE c.code = ?
-    `)
+    `,
+    )
     .get(finalCode);
   return serializeRow(row);
 }
@@ -94,9 +100,7 @@ export function revokeCode(rawCode) {
 
 function serializeRow(row) {
   if (!row) return null;
-  const remaining = row.max_uses == null
-    ? null
-    : Math.max(0, row.max_uses - row.uses_count);
+  const remaining = row.max_uses == null ? null : Math.max(0, row.max_uses - row.uses_count);
   return {
     code: row.code,
     note: row.note,
@@ -109,8 +113,8 @@ function serializeRow(row) {
     expiresAt: row.expires_at,
     revokedAt: row.revoked_at,
     active:
-      !row.revoked_at
-      && (row.expires_at == null || row.expires_at > Date.now())
-      && (row.max_uses == null || row.uses_count < row.max_uses),
+      !row.revoked_at &&
+      (row.expires_at == null || row.expires_at > Date.now()) &&
+      (row.max_uses == null || row.uses_count < row.max_uses),
   };
 }

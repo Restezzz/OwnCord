@@ -84,8 +84,8 @@ export function ToastProvider({ children }) {
                   t.type === 'error'
                     ? 'bg-danger/90 border-red-700 text-white'
                     : t.type === 'success'
-                    ? 'bg-success/90 border-green-700 text-white'
-                    : 'bg-bg-2/95 border-border text-slate-100'
+                      ? 'bg-success/90 border-green-700 text-white'
+                      : 'bg-bg-2/95 border-border text-slate-100'
                 }`}
               onMouseEnter={() => onMouseEnter(t.id)}
               onMouseLeave={() => onMouseLeave(t.id, t.ttl)}

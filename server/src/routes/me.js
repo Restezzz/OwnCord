@@ -10,7 +10,7 @@ import { softDeleteUser } from '../accountDeletion.js';
 
 const router = Router();
 
-const DISPLAY_RE = /^[\p{L}\p{N}\p{M} _.\-]{1,32}$/u;
+const DISPLAY_RE = /^[\p{L}\p{N}\p{M} _.-]{1,32}$/u;
 
 function readUser(id) {
   const row = db
@@ -47,7 +47,9 @@ router.patch('/', authRequired, (req, res) => {
     } else if (typeof displayName === 'string') {
       const trimmed = displayName.trim();
       if (!DISPLAY_RE.test(trimmed)) {
-        return res.status(400).json({ error: 'displayName must be 1–32 chars (letters, digits, spaces, _ . -)' });
+        return res
+          .status(400)
+          .json({ error: 'displayName must be 1–32 chars (letters, digits, spaces, _ . -)' });
       }
       db.prepare('UPDATE users SET display_name = ? WHERE id = ?').run(trimmed, req.user.id);
     } else {
@@ -59,8 +61,10 @@ router.patch('/', authRequired, (req, res) => {
     if (typeof hideOnDelete !== 'boolean') {
       return res.status(400).json({ error: 'bad hideOnDelete' });
     }
-    db.prepare('UPDATE users SET hide_on_delete = ? WHERE id = ?')
-      .run(hideOnDelete ? 1 : 0, req.user.id);
+    db.prepare('UPDATE users SET hide_on_delete = ? WHERE id = ?').run(
+      hideOnDelete ? 1 : 0,
+      req.user.id,
+    );
   }
 
   const user = readUser(req.user.id);
@@ -75,7 +79,10 @@ router.post('/avatar', authRequired, uploadAvatar.single('avatar'), sniff('image
   const old = db.prepare('SELECT avatar_path FROM users WHERE id = ?').get(req.user.id);
   if (old?.avatar_path) {
     const abs = absolutePathFor(old.avatar_path);
-    if (abs) fs.promises.unlink(abs).catch(() => { /* ignore */ });
+    if (abs)
+      fs.promises.unlink(abs).catch(() => {
+        /* ignore */
+      });
   }
 
   const pubPath = publicPathFor(req.file.path);
@@ -101,9 +108,7 @@ router.post('/password', authRequired, async (req, res) => {
   if (newPassword === currentPassword) {
     return res.status(400).json({ error: 'new password must differ from the current one' });
   }
-  const row = db
-    .prepare('SELECT password FROM users WHERE id = ?')
-    .get(req.user.id);
+  const row = db.prepare('SELECT password FROM users WHERE id = ?').get(req.user.id);
   if (!row) return res.status(404).json({ error: 'not found' });
   const ok = await bcrypt.compare(currentPassword, row.password || '');
   if (!ok) return res.status(403).json({ error: 'wrong password' });
@@ -123,9 +128,7 @@ router.delete('/', authRequired, async (req, res) => {
   if (typeof password !== 'string' || !password) {
     return res.status(400).json({ error: 'password required' });
   }
-  const row = db
-    .prepare('SELECT password FROM users WHERE id = ?')
-    .get(req.user.id);
+  const row = db.prepare('SELECT password FROM users WHERE id = ?').get(req.user.id);
   if (!row) return res.status(404).json({ error: 'not found' });
 
   const ok = await bcrypt.compare(password, row.password || '');
@@ -185,11 +188,7 @@ router.get('/data-export', authRequired, (req, res) => {
     )
     .all(uid);
 
-  const mutes = db
-    .prepare(
-      `SELECT target_id, created_at FROM mutes WHERE user_id = ?`,
-    )
-    .all(uid);
+  const mutes = db.prepare(`SELECT target_id, created_at FROM mutes WHERE user_id = ?`).all(uid);
 
   const exportedAt = Date.now();
   res.setHeader(
@@ -220,7 +219,10 @@ router.delete('/avatar', authRequired, (req, res) => {
   const old = db.prepare('SELECT avatar_path FROM users WHERE id = ?').get(req.user.id);
   if (old?.avatar_path) {
     const abs = absolutePathFor(old.avatar_path);
-    if (abs) fs.promises.unlink(abs).catch(() => { /* ignore */ });
+    if (abs)
+      fs.promises.unlink(abs).catch(() => {
+        /* ignore */
+      });
   }
   db.prepare('UPDATE users SET avatar_path = NULL WHERE id = ?').run(req.user.id);
   const user = readUser(req.user.id);

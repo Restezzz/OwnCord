@@ -20,9 +20,7 @@ beforeAll(async () => {
 
 describe('mutes', () => {
   it('list initially empty', async () => {
-    const res = await request(app)
-      .get('/api/mutes')
-      .set('Authorization', `Bearer ${aliceToken}`);
+    const res = await request(app).get('/api/mutes').set('Authorization', `Bearer ${aliceToken}`);
     expect(res.status).toBe(200);
     expect(res.body.ids).toEqual([]);
   });
@@ -34,9 +32,7 @@ describe('mutes', () => {
     expect(add.status).toBe(200);
     expect(add.body.ids).toContain(bobId);
 
-    const list = await request(app)
-      .get('/api/mutes')
-      .set('Authorization', `Bearer ${aliceToken}`);
+    const list = await request(app).get('/api/mutes').set('Authorization', `Bearer ${aliceToken}`);
     expect(list.body.ids).toContain(bobId);
 
     const del = await request(app)
@@ -47,9 +43,7 @@ describe('mutes', () => {
   });
 
   it('rejects muting yourself', async () => {
-    const me = await request(app)
-      .get('/api/me')
-      .set('Authorization', `Bearer ${aliceToken}`);
+    const me = await request(app).get('/api/me').set('Authorization', `Bearer ${aliceToken}`);
     const res = await request(app)
       .post(`/api/mutes/${me.body.user.id}`)
       .set('Authorization', `Bearer ${aliceToken}`);

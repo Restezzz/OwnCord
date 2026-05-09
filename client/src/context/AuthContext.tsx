@@ -68,14 +68,26 @@ export function AuthProvider({ children }) {
         // Покажем toast до того как разлогинимся — после отключения сокета
         // и обнуления auth дерево перерисуется, но ToastProvider живёт
         // выше AuthProvider, так что уведомление не пропадёт.
-        try { toast?.info?.('Аккаунт удалён', { ttl: 8000 }); } catch { /* */ }
+        try {
+          toast?.info?.('Аккаунт удалён', { ttl: 8000 });
+        } catch {
+          /* */
+        }
         setAuth(null);
         writeStored(null);
-        try { disconnectSocket(); } catch { /* */ }
+        try {
+          disconnectSocket();
+        } catch {
+          /* */
+        }
       };
       sock.on?.('account:deleted', onDeleted);
       return () => {
-        try { sock.off?.('account:deleted', onDeleted); } catch { /* */ }
+        try {
+          sock.off?.('account:deleted', onDeleted);
+        } catch {
+          /* */
+        }
       };
     }
     disconnectSocket();
@@ -115,7 +127,9 @@ export function AuthProvider({ children }) {
           reason === 'account-deleted' ? 'Аккаунт удалён' : 'Сессия истекла, войдите снова',
           { ttl: 6000 },
         );
-      } catch { /* */ }
+      } catch {
+        /* */
+      }
       logout();
     });
     return () => setAuthExpiredHandler(null);

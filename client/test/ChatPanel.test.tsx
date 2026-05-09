@@ -54,12 +54,7 @@ describe('ChatPanel', () => {
   it('reports file-too-large through onSendFile callback', () => {
     const onSendFile = vi.fn();
     const { container } = render(
-      <ChatPanel
-        {...baseProps}
-        peer={peer}
-        onSendFile={onSendFile}
-        maxFileBytes={4}
-      />,
+      <ChatPanel {...baseProps} peer={peer} onSendFile={onSendFile} maxFileBytes={4} />,
     );
 
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
@@ -71,13 +66,7 @@ describe('ChatPanel', () => {
 
   it('reports typing start and stop from the message box', () => {
     const onTypingChange = vi.fn();
-    render(
-      <ChatPanel
-        {...baseProps}
-        peer={peer}
-        onTypingChange={onTypingChange}
-      />,
-    );
+    render(<ChatPanel {...baseProps} peer={peer} onTypingChange={onTypingChange} />);
 
     const textarea = screen.getByPlaceholderText(/Сообщение для/i);
     fireEvent.change(textarea, { target: { value: 'п' } });
@@ -91,12 +80,7 @@ describe('ChatPanel', () => {
     const onTypingChange = vi.fn();
     const onSend = vi.fn();
     render(
-      <ChatPanel
-        {...baseProps}
-        peer={peer}
-        onSend={onSend}
-        onTypingChange={onTypingChange}
-      />,
+      <ChatPanel {...baseProps} peer={peer} onSend={onSend} onTypingChange={onTypingChange} />,
     );
 
     fireEvent.change(screen.getByPlaceholderText(/Сообщение для/i), {
@@ -113,11 +97,7 @@ describe('ChatPanel', () => {
   it('stops typing when switching chats', () => {
     const onTypingChange = vi.fn();
     const { rerender } = render(
-      <ChatPanel
-        {...baseProps}
-        peer={peer}
-        onTypingChange={onTypingChange}
-      />,
+      <ChatPanel {...baseProps} peer={peer} onTypingChange={onTypingChange} />,
     );
 
     fireEvent.change(screen.getByPlaceholderText(/Сообщение для/i), {
@@ -136,13 +116,7 @@ describe('ChatPanel', () => {
 
   it('stops typing when starting voice recording', () => {
     const onTypingChange = vi.fn();
-    render(
-      <ChatPanel
-        {...baseProps}
-        peer={peer}
-        onTypingChange={onTypingChange}
-      />,
-    );
+    render(<ChatPanel {...baseProps} peer={peer} onTypingChange={onTypingChange} />);
 
     fireEvent.change(screen.getByPlaceholderText(/Сообщение для/i), {
       target: { value: 'voice next' },
@@ -153,13 +127,7 @@ describe('ChatPanel', () => {
   });
 
   it('shows typing status in direct chat header', () => {
-    render(
-      <ChatPanel
-        {...baseProps}
-        peer={peer}
-        typingUsers={[peer]}
-      />,
-    );
+    render(<ChatPanel {...baseProps} peer={peer} typingUsers={[peer]} />);
 
     expect(screen.getByText('печатает…')).toBeInTheDocument();
   });

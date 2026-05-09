@@ -14,13 +14,18 @@ export function ConfigProvider({ children }) {
 
   useEffect(() => {
     let cancelled = false;
-    api.config()
+    api
+      .config()
       .then((r) => {
         if (cancelled || !r) return;
         setCfg({ ...DEFAULTS, ...r });
       })
-      .catch(() => { /* используем дефолты */ });
-    return () => { cancelled = true; };
+      .catch(() => {
+        /* используем дефолты */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return <ConfigContext.Provider value={cfg}>{children}</ConfigContext.Provider>;

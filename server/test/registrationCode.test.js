@@ -1,6 +1,4 @@
-import {
-  describe, it, expect, afterEach, beforeAll,
-} from 'vitest';
+import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import request from 'supertest';
 import { buildTestApp } from './appFactory.js';
 

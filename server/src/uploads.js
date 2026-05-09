@@ -25,27 +25,100 @@ export const UPLOADS_DIR = path.resolve(__dirname, '..', 'uploads');
 // отдаёт данные: jpeg/png/gif/webp, webm/ogg/mp4/m4a/wav/mp3, pdf, zip,
 // и плоский «бинарь» (.bin) для всего остального.
 const MAGIC = [
-  { ext: '.jpg',  mime: 'image/jpeg', test: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
-  { ext: '.png',  mime: 'image/png',  test: (b) => b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
-  { ext: '.gif',  mime: 'image/gif',  test: (b) => b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 },
-  { ext: '.webp', mime: 'image/webp', test: (b) => b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50 },
-  { ext: '.bmp',  mime: 'image/bmp',  test: (b) => b[0] === 0x42 && b[1] === 0x4d },
+  { ext: '.jpg', mime: 'image/jpeg', test: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+  {
+    ext: '.png',
+    mime: 'image/png',
+    test: (b) => b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47,
+  },
+  { ext: '.gif', mime: 'image/gif', test: (b) => b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 },
+  {
+    ext: '.webp',
+    mime: 'image/webp',
+    test: (b) =>
+      b[0] === 0x52 &&
+      b[1] === 0x49 &&
+      b[2] === 0x46 &&
+      b[3] === 0x46 &&
+      b[8] === 0x57 &&
+      b[9] === 0x45 &&
+      b[10] === 0x42 &&
+      b[11] === 0x50,
+  },
+  { ext: '.bmp', mime: 'image/bmp', test: (b) => b[0] === 0x42 && b[1] === 0x4d },
   // EBML container — webm и обычный mkv. Различить можно по DocType, но
   // для нас оба разрешены как видео/аудио.
-  { ext: '.webm', mime: 'video/webm', test: (b) => b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3 },
-  { ext: '.ogg',  mime: 'audio/ogg',  test: (b) => b[0] === 0x4f && b[1] === 0x67 && b[2] === 0x67 && b[3] === 0x53 },
-  { ext: '.wav',  mime: 'audio/wav',  test: (b) => b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x41 && b[10] === 0x56 && b[11] === 0x45 },
-  { ext: '.flac', mime: 'audio/flac', test: (b) => b[0] === 0x66 && b[1] === 0x4c && b[2] === 0x61 && b[3] === 0x43 },
+  {
+    ext: '.webm',
+    mime: 'video/webm',
+    test: (b) => b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3,
+  },
+  {
+    ext: '.ogg',
+    mime: 'audio/ogg',
+    test: (b) => b[0] === 0x4f && b[1] === 0x67 && b[2] === 0x67 && b[3] === 0x53,
+  },
+  {
+    ext: '.wav',
+    mime: 'audio/wav',
+    test: (b) =>
+      b[0] === 0x52 &&
+      b[1] === 0x49 &&
+      b[2] === 0x46 &&
+      b[3] === 0x46 &&
+      b[8] === 0x57 &&
+      b[9] === 0x41 &&
+      b[10] === 0x56 &&
+      b[11] === 0x45,
+  },
+  {
+    ext: '.flac',
+    mime: 'audio/flac',
+    test: (b) => b[0] === 0x66 && b[1] === 0x4c && b[2] === 0x61 && b[3] === 0x43,
+  },
   // mp3: либо ID3 в начале, либо frame-sync 0xFFEx.
-  { ext: '.mp3',  mime: 'audio/mpeg', test: (b) => (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0) },
+  {
+    ext: '.mp3',
+    mime: 'audio/mpeg',
+    test: (b) =>
+      (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) ||
+      (b[0] === 0xff && (b[1] & 0xe0) === 0xe0),
+  },
   // ISO BMFF (mp4/m4a/mov) — на 4..7 байтах "ftyp".
-  { ext: '.mp4',  mime: 'video/mp4',  test: (b) => b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70 },
-  { ext: '.pdf',  mime: 'application/pdf', test: (b) => b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46 },
+  {
+    ext: '.mp4',
+    mime: 'video/mp4',
+    test: (b) => b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70,
+  },
+  {
+    ext: '.pdf',
+    mime: 'application/pdf',
+    test: (b) => b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46,
+  },
   // ZIP-семейство (включая docx/xlsx/odf/jar) — оба общеупотребимых signature.
-  { ext: '.zip',  mime: 'application/zip', test: (b) => b[0] === 0x50 && b[1] === 0x4b && (b[2] === 0x03 || b[2] === 0x05 || b[2] === 0x07) },
-  { ext: '.7z',   mime: 'application/x-7z-compressed', test: (b) => b[0] === 0x37 && b[1] === 0x7a && b[2] === 0xbc && b[3] === 0xaf && b[4] === 0x27 && b[5] === 0x1c },
-  { ext: '.rar',  mime: 'application/vnd.rar', test: (b) => b[0] === 0x52 && b[1] === 0x61 && b[2] === 0x72 && b[3] === 0x21 },
-  { ext: '.gz',   mime: 'application/gzip', test: (b) => b[0] === 0x1f && b[1] === 0x8b },
+  {
+    ext: '.zip',
+    mime: 'application/zip',
+    test: (b) =>
+      b[0] === 0x50 && b[1] === 0x4b && (b[2] === 0x03 || b[2] === 0x05 || b[2] === 0x07),
+  },
+  {
+    ext: '.7z',
+    mime: 'application/x-7z-compressed',
+    test: (b) =>
+      b[0] === 0x37 &&
+      b[1] === 0x7a &&
+      b[2] === 0xbc &&
+      b[3] === 0xaf &&
+      b[4] === 0x27 &&
+      b[5] === 0x1c,
+  },
+  {
+    ext: '.rar',
+    mime: 'application/vnd.rar',
+    test: (b) => b[0] === 0x52 && b[1] === 0x61 && b[2] === 0x72 && b[3] === 0x21,
+  },
+  { ext: '.gz', mime: 'application/gzip', test: (b) => b[0] === 0x1f && b[1] === 0x8b },
 ];
 
 function sniffFile(absPath) {
@@ -58,13 +131,20 @@ function sniffFile(absPath) {
     for (const m of MAGIC) {
       try {
         if (m.test(buf)) return m;
-      } catch { /* slice past EOF — пропускаем */ }
+      } catch {
+        /* slice past EOF — пропускаем */
+      }
     }
     return null;
   } catch {
     return null;
   } finally {
-    if (fd != null) try { fs.closeSync(fd); } catch { /* */ }
+    if (fd != null)
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* */
+      }
   }
 }
 
@@ -79,7 +159,11 @@ export function normalizeUpload(file, requireGroup = null) {
   const sniff = sniffFile(file.path);
   if (requireGroup === 'image') {
     if (!sniff || !sniff.mime.startsWith('image/')) {
-      try { fs.unlinkSync(file.path); } catch { /* */ }
+      try {
+        fs.unlinkSync(file.path);
+      } catch {
+        /* */
+      }
       const e = new Error('expected image file');
       e.status = 400;
       throw e;
@@ -90,11 +174,17 @@ export function normalizeUpload(file, requireGroup = null) {
     // (браузеры пишут MediaRecorder в video/webm, даже если кодек только
     // звуковой — реальный mime из заголовка может быть «audio/webm» или
     // «video/webm», обе ветки принимаем).
-    const ok = sniff && (sniff.mime.startsWith('audio/')
-      || sniff.mime === 'video/webm'
-      || sniff.mime === 'application/ogg');
+    const ok =
+      sniff &&
+      (sniff.mime.startsWith('audio/') ||
+        sniff.mime === 'video/webm' ||
+        sniff.mime === 'application/ogg');
     if (!ok) {
-      try { fs.unlinkSync(file.path); } catch { /* */ }
+      try {
+        fs.unlinkSync(file.path);
+      } catch {
+        /* */
+      }
       const e = new Error('expected audio file');
       e.status = 400;
       throw e;
@@ -111,7 +201,9 @@ export function normalizeUpload(file, requireGroup = null) {
         fs.renameSync(file.path, newAbs);
         file.path = newAbs;
         file.filename = path.basename(newAbs);
-      } catch { /* fail-soft */ }
+      } catch {
+        /* fail-soft */
+      }
     }
     file.mimetype = sniff.mime;
   } else {
@@ -126,7 +218,9 @@ export function normalizeUpload(file, requireGroup = null) {
         fs.renameSync(file.path, newAbs);
         file.path = newAbs;
         file.filename = path.basename(newAbs);
-      } catch { /* */ }
+      } catch {
+        /* */
+      }
     }
     file.mimetype = 'application/octet-stream';
   }

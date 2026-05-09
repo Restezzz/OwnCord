@@ -41,9 +41,7 @@ export function runRetentionOnce() {
   for (let i = 0; i < ids.length; i += CHUNK) {
     const chunk = ids.slice(i, i + CHUNK);
     const placeholders = chunk.map(() => '?').join(',');
-    const info = db
-      .prepare(`DELETE FROM messages WHERE id IN (${placeholders})`)
-      .run(...chunk);
+    const info = db.prepare(`DELETE FROM messages WHERE id IN (${placeholders})`).run(...chunk);
     removed += info.changes;
   }
 
@@ -52,7 +50,9 @@ export function runRetentionOnce() {
     if (!r.attachment_path) continue;
     const abs = absolutePathFor(r.attachment_path);
     if (!abs) continue;
-    fs.promises.unlink(abs).catch(() => { /* ignore */ });
+    fs.promises.unlink(abs).catch(() => {
+      /* ignore */
+    });
   }
 
   return { deleted: removed, days };
@@ -66,11 +66,11 @@ export function startRetention() {
   try {
     const r = runRetentionOnce();
     if (r.deleted) {
-      // eslint-disable-next-line no-console
-      console.log(`[retention] startup sweep: removed ${r.deleted} messages older than ${r.days} days`);
+      console.log(
+        `[retention] startup sweep: removed ${r.deleted} messages older than ${r.days} days`,
+      );
     }
   } catch (e) {
-    // eslint-disable-next-line no-console
     console.warn('[retention] startup sweep failed:', e?.message || e);
   }
   if (timer) return;
@@ -78,11 +78,9 @@ export function startRetention() {
     try {
       const r = runRetentionOnce();
       if (r.deleted) {
-        // eslint-disable-next-line no-console
         console.log(`[retention] removed ${r.deleted} messages older than ${r.days} days`);
       }
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.warn('[retention] sweep failed:', e?.message || e);
     }
   }, TICK_MS);

@@ -13,12 +13,11 @@ import muteRoutes from './routes/mutes.js';
 import groupRoutes from './routes/groups.js';
 import inviteRoutes from './routes/invites.js';
 import pushRoutes from './routes/push.js';
+import healthRoutes from './routes/health.js';
 import { attachSocket } from './socket.js';
 import { UPLOADS_DIR, MAX_UPLOAD_BYTES } from './uploads.js';
 import { startRetention } from './retention.js';
-import {
-  buildCorsOptions, buildHelmet, apiLimiter, authLimiter, isProd,
-} from './security.js';
+import { buildCorsOptions, buildHelmet, apiLimiter, authLimiter, isProd } from './security.js';
 import { privacyConfig, privacyHtml } from './privacy.js';
 import cors from 'cors';
 import db from './db.js';
@@ -33,14 +32,23 @@ app.set('trust proxy', 1);
 app.use(buildHelmet());
 app.use(cors(buildCorsOptions()));
 app.use(express.json({ limit: '1mb' }));
+
+// /api/health — настоящие проверки (БД + uploads + диск). См. routes/health.js.
+// Регистрируем ДО apiLimiter, чтобы мониторинг (UptimeRobot и т.п.) мог
+// пинговать его раз в минуту без риска получить 429.
+app.use('/api/health', healthRoutes);
+
 // Глобальный мягкий rate-limit на /api/* как защита от случайных циклов.
 app.use('/api', apiLimiter());
 
 // Статика для загруженных файлов (аватары, голосовые).
-app.use('/uploads', express.static(UPLOADS_DIR, {
-  maxAge: '7d',
-  setHeaders: (res) => res.setHeader('Cache-Control', 'public, max-age=604800'),
-}));
+app.use(
+  '/uploads',
+  express.static(UPLOADS_DIR, {
+    maxAge: '7d',
+    setHeaders: (res) => res.setHeader('Cache-Control', 'public, max-age=604800'),
+  }),
+);
 
 // Отдаём ICE-серверы клиенту, чтобы секреты TURN не хранились во фронте.
 app.get('/api/ice', (_req, res) => {
@@ -66,8 +74,6 @@ app.use('/api/groups', groupRoutes);
 app.use('/api/invites', inviteRoutes);
 app.use('/api/push', pushRoutes);
 
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
-
 // Публичный конфиг клиента (лимиты, фичи).
 app.get('/api/config', (_req, res) => {
   const pc = privacyConfig();
@@ -90,13 +96,16 @@ app.get('/api/config', (_req, res) => {
 // `/privacy` в nginx — он перехватит запрос до проксирования на node.
 app.get('/privacy', (_req, res) => {
   const html = privacyHtml();
-  if (!html) return res.status(404).type('text/plain').send('privacy policy is not configured on this server');
+  if (!html)
+    return res
+      .status(404)
+      .type('text/plain')
+      .send('privacy policy is not configured on this server');
   res.type('text/html; charset=utf-8').send(html);
 });
 
 // Глобальный обработчик ошибок (multer/прочее) — возвращает JSON вместо HTML.
 app.use((err, _req, res, _next) => {
-  // eslint-disable-next-line no-console
   console.error('[api-error]', err?.message || err);
   const status = err?.status || err?.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
   res.status(status).json({ error: err?.message || 'bad request' });
@@ -116,7 +125,6 @@ const io = attachSocket(server);
 
 const PORT = Number(process.env.PORT || 3001);
 server.listen(PORT, () => {
-  // eslint-disable-next-line no-console
   console.log(`[owncord] listening on http://localhost:${PORT}`);
 });
 
@@ -131,11 +139,10 @@ let shuttingDown = false;
 function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
-  // eslint-disable-next-line no-console
+
   console.log(`[owncord] ${signal} received, shutting down…`);
   // Принудительно отвалим клиентов через 8 сек, если кто-то завис на запросе.
   const killTimer = setTimeout(() => {
-    // eslint-disable-next-line no-console
     console.warn('[owncord] forced exit after timeout');
     process.exit(1);
   }, 8000);
@@ -144,7 +151,11 @@ function shutdown(signal) {
     new Promise((resolve) => io.close(() => resolve())),
     new Promise((resolve) => server.close(() => resolve())),
   ]).finally(() => {
-    try { db.close(); } catch { /* */ }
+    try {
+      db.close();
+    } catch {
+      /* */
+    }
     clearTimeout(killTimer);
     process.exit(0);
   });

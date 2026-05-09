@@ -77,9 +77,7 @@ function inline(input, keyPrefix = 'i') {
       if (end !== -1) {
         flush();
         parts.push(
-          <del key={k()}>
-            {inline(input.slice(i + 2, end), `${keyPrefix}s${counter}`)}
-          </del>,
+          <del key={k()}>{inline(input.slice(i + 2, end), `${keyPrefix}s${counter}`)}</del>,
         );
         i = end + 2;
         continue;
@@ -90,7 +88,7 @@ function inline(input, keyPrefix = 'i') {
     if ((ch === '*' || ch === '_') && input[i + 1] !== ch) {
       // не считаем italic'ом, если перед ним нет границы слова
       const prev = input[i - 1];
-      const isBoundary = !prev || /[\s({\[.,!?]/.test(prev);
+      const isBoundary = !prev || /[\s({[.,!?]/.test(prev);
       if (isBoundary) {
         const end = input.indexOf(ch, i + 1);
         if (end !== -1 && end > i + 1) {
@@ -213,10 +211,7 @@ export function renderMarkdown(text) {
         i++;
       }
       out.push(
-        <blockquote
-          key={k()}
-          className="my-1 pl-3 border-l-2 border-white/30 text-white/80"
-        >
+        <blockquote key={k()} className="my-1 pl-3 border-l-2 border-white/30 text-white/80">
           {inline(buf.join('\n'), k())}
         </blockquote>,
       );
@@ -264,12 +259,12 @@ export function renderMarkdown(text) {
     }
     const paraLines = [];
     while (
-      i < lines.length
-      && lines[i].trim() !== ''
-      && !lines[i].startsWith('```')
-      && !/^>\s?/.test(lines[i])
-      && !/^[-*]\s+/.test(lines[i])
-      && !/^\d+\.\s+/.test(lines[i])
+      i < lines.length &&
+      lines[i].trim() !== '' &&
+      !lines[i].startsWith('```') &&
+      !/^>\s?/.test(lines[i]) &&
+      !/^[-*]\s+/.test(lines[i]) &&
+      !/^\d+\.\s+/.test(lines[i])
     ) {
       paraLines.push(lines[i]);
       i++;

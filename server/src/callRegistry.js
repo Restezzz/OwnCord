@@ -43,12 +43,19 @@ function makeCall({ callId, callerId, calleeId, withVideo, messageId }) {
 }
 
 function clearTimer(c, key) {
-  if (c[key]) { clearTimeout(c[key]); c[key] = null; }
+  if (c[key]) {
+    clearTimeout(c[key]);
+    c[key] = null;
+  }
 }
 
-function nowTs() { return Date.now(); }
+function nowTs() {
+  return Date.now();
+}
 
-function pairOf(c) { return [c.callerId, c.calleeId]; }
+function pairOf(c) {
+  return [c.callerId, c.calleeId];
+}
 
 function getMessage(id) {
   return db.prepare('SELECT * FROM messages WHERE id = ?').get(id);
@@ -58,7 +65,11 @@ function emitMessageUpdate(messageId) {
   const row = getMessage(messageId);
   if (!row) return;
   let payload = null;
-  try { payload = row.payload ? JSON.parse(row.payload) : null; } catch { /* ignore */ }
+  try {
+    payload = row.payload ? JSON.parse(row.payload) : null;
+  } catch {
+    /* ignore */
+  }
   const msg = {
     id: row.id,
     senderId: row.sender_id,
@@ -79,8 +90,10 @@ function emitMessageUpdate(messageId) {
 }
 
 function writePayload(messageId, payload) {
-  db.prepare('UPDATE messages SET payload = ? WHERE id = ?')
-    .run(JSON.stringify(payload), messageId);
+  db.prepare('UPDATE messages SET payload = ? WHERE id = ?').run(
+    JSON.stringify(payload),
+    messageId,
+  );
 }
 
 function insertCallMessage({ callerId, calleeId, withVideo, callId }) {
@@ -120,9 +133,7 @@ function insertCallMessage({ callerId, calleeId, withVideo, callId }) {
 }
 
 function isMuted(by, target) {
-  const row = db
-    .prepare('SELECT 1 FROM mutes WHERE user_id = ? AND target_id = ?')
-    .get(by, target);
+  const row = db.prepare('SELECT 1 FROM mutes WHERE user_id = ? AND target_id = ?').get(by, target);
   return !!row;
 }
 
@@ -132,7 +143,11 @@ export function registerInvite({ callId, callerId, calleeId, withVideo }) {
 
   const sysMsg = insertCallMessage({ callerId, calleeId, withVideo, callId });
   const c = makeCall({
-    callId, callerId, calleeId, withVideo, messageId: sysMsg.id,
+    callId,
+    callerId,
+    calleeId,
+    withVideo,
+    messageId: sysMsg.id,
   });
   calls.set(callId, c);
 
@@ -300,10 +315,7 @@ export function rebindForRejoin(oldCallId, newCallId, withVideo, newCallerId) {
   // c.calleeId !== me.id (см. socket.js → call:accept), и реджойн
   // оставался в pending до 30 сек, после чего finalize'ился как
   // 'missed' — в чате появлялась плашка «конец звонка».
-  if (
-    typeof newCallerId === 'number'
-    && newCallerId === c.calleeId
-  ) {
+  if (typeof newCallerId === 'number' && newCallerId === c.calleeId) {
     const tmp = c.callerId;
     c.callerId = c.calleeId;
     c.calleeId = tmp;

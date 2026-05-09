@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  joinGroupCall, leaveGroupCall, getCall, forceLeaveAll, _reset,
+  joinGroupCall,
+  leaveGroupCall,
+  getCall,
+  forceLeaveAll,
+  _reset,
 } from '../src/groupCallRegistry.js';
 
 beforeEach(() => _reset());

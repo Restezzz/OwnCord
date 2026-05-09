@@ -1,9 +1,7 @@
 import { Router } from 'express';
 import { authRequired } from '../auth.js';
 import { adminRequired } from '../admin.js';
-import {
-  listCodes, createCode, revokeCode,
-} from '../invites.js';
+import { listCodes, createCode, revokeCode } from '../invites.js';
 
 const router = Router();
 

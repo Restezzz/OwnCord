@@ -4,12 +4,21 @@ import { verifyToken } from './auth.js';
 import { addUserSocket, removeUserSocket, getOnlineUserIds } from './presence.js';
 import { setIO } from './ioHub.js';
 import {
-  registerInvite, markActive, markWaiting, finalize, getCall,
-  findActiveCallsBetween, findActiveCallsForUser, rebindForRejoin,
+  registerInvite,
+  markActive,
+  markWaiting,
+  finalize,
+  getCall,
+  findActiveCallsBetween,
+  findActiveCallsForUser,
+  rebindForRejoin,
 } from './callRegistry.js';
 import {
-  joinGroupCall, leaveGroupCall, getCall as getGroupCall,
-  forceLeaveAll as forceLeaveAllGroupCalls, attachMessageId as attachGroupCallMessageId,
+  joinGroupCall,
+  leaveGroupCall,
+  getCall as getGroupCall,
+  forceLeaveAll as forceLeaveAllGroupCalls,
+  attachMessageId as attachGroupCallMessageId,
 } from './groupCallRegistry.js';
 import { pushToUser, pushToUsers } from './push.js';
 import { buildSocketCorsOptions } from './security.js';
@@ -34,11 +43,18 @@ export function attachSocket(httpServer) {
     if (!sockets.has(callId)) sockets.set(callId, { caller: null, callee: null });
     sockets.get(callId)[role] = socketId;
   }
-  function dropSockets(callId) { sockets.delete(callId); }
+  function dropSockets(callId) {
+    sockets.delete(callId);
+  }
 
   // Быстрая сборка текстового сообщения в формате, которого ждёт клиент.
   function makeTextMessage({
-    id, senderId, receiverId = null, groupId = null, content, createdAt,
+    id,
+    senderId,
+    receiverId = null,
+    groupId = null,
+    content,
+    createdAt,
   }) {
     return {
       id,
@@ -114,11 +130,16 @@ export function attachSocket(httpServer) {
     const row = db.prepare('SELECT payload FROM messages WHERE id = ?').get(messageId);
     if (!row) return;
     let payload = {};
-    try { payload = JSON.parse(row.payload || '{}'); } catch { /* */ }
+    try {
+      payload = JSON.parse(row.payload || '{}');
+    } catch {
+      /* */
+    }
     payload.status = 'ended';
     payload.endedAt = Date.now();
     db.prepare('UPDATE messages SET payload = ? WHERE id = ?').run(
-      JSON.stringify(payload), messageId,
+      JSON.stringify(payload),
+      messageId,
     );
     const fresh = db
       .prepare(
@@ -205,7 +226,9 @@ export function attachSocket(httpServer) {
           fromAvatarPath: callerRow.avatar_path || null,
         });
       }
-    } catch { /* лучше тихо проглотить, чем сорвать handshake */ }
+    } catch {
+      /* лучше тихо проглотить, чем сорвать handshake */
+    }
 
     // --- Direct/group сообщения ---------------------------------------------
     // to — peer-id (DM) ИЛИ groupId — один из двух должен быть указан.
@@ -277,9 +300,7 @@ export function attachSocket(httpServer) {
         io.to(groupRoomOf(groupId)).emit('dm:new', msg);
 
         // Web Push всем участникам группы, кроме отправителя.
-        const groupRow = db
-          .prepare('SELECT name FROM groups WHERE id = ?')
-          .get(groupId);
+        const groupRow = db.prepare('SELECT name FROM groups WHERE id = ?').get(groupId);
         const memberIds = db
           .prepare('SELECT user_id FROM group_members WHERE group_id = ? AND user_id != ?')
           .all(groupId, me.id)
@@ -327,7 +348,9 @@ export function attachSocket(httpServer) {
         body: trimmed.slice(0, 140),
         tag: `dm:${me.id}`,
         url: `/?dm=${me.id}`,
-      }).catch(() => { /* logged inside */ });
+      }).catch(() => {
+        /* logged inside */
+      });
     });
 
     // --- WebRTC сигналинг ---------------------------------------------------
@@ -403,7 +426,10 @@ export function attachSocket(httpServer) {
           dropSockets(c.callId);
         }
         result = registerInvite({
-          callId, callerId: me.id, calleeId: to, withVideo: !!withVideo,
+          callId,
+          callerId: me.id,
+          calleeId: to,
+          withVideo: !!withVideo,
         });
         if (!result) return; // дубликат
       }
@@ -522,9 +548,9 @@ export function attachSocket(httpServer) {
     // (или эквивалентный rejoinAsCaller из waiting), а сервер автоматически
     // финализирует «висящие» звонки между той же парой при новом invite.
 
-    socket.on('rtc:offer', forward('rtc:offer'));     // { to, callId, sdp }
-    socket.on('rtc:answer', forward('rtc:answer'));   // { to, callId, sdp }
-    socket.on('rtc:ice', forward('rtc:ice'));         // { to, callId, candidate }
+    socket.on('rtc:offer', forward('rtc:offer')); // { to, callId, sdp }
+    socket.on('rtc:answer', forward('rtc:answer')); // { to, callId, sdp }
+    socket.on('rtc:ice', forward('rtc:ice')); // { to, callId, candidate }
     socket.on('media:state', forward('media:state')); // { to, callId, state }
 
     // Групповая mesh-широковещалка media-state: один emit от участника
@@ -562,7 +588,10 @@ export function attachSocket(httpServer) {
       if (!isMember) return ack?.({ error: 'not a member' });
 
       const { call, created, alreadyIn, peers } = joinGroupCall({
-        groupId, userId: me.id, socketId: socket.id, withVideo: !!withVideo,
+        groupId,
+        userId: me.id,
+        socketId: socket.id,
+        withVideo: !!withVideo,
       });
       // Привяжем сокет к комнате звонка.
       const callRoom = `groupcall:${groupId}`;
@@ -571,20 +600,20 @@ export function attachSocket(httpServer) {
       // Уведомляем группу, что звонок активен (или только что стартовал).
       if (created) {
         io.to(groupRoomOf(groupId)).emit('groupcall:active', {
-          groupId, callId: call.callId, startedBy: me.id, withVideo: call.withVideo, startedAt: call.startedAt,
+          groupId,
+          callId: call.callId,
+          startedBy: me.id,
+          withVideo: call.withVideo,
+          startedAt: call.startedAt,
         });
         // Системное сообщение в чате — «X начал(а) групповой звонок» с
         // payload.status='active'. Кнопка «Подключиться» в UI работает,
         // пока звонок активен. Привязываем messageId к звонку для апдейта.
-        const sysMsg = insertGroupCallSystemMsg(
-          groupId, me.id, call.callId, call.withVideo,
-        );
+        const sysMsg = insertGroupCallSystemMsg(groupId, me.id, call.callId, call.withVideo);
         attachGroupCallMessageId(groupId, sysMsg.id);
 
         // Web Push всем остальным участникам группы.
-        const groupRow = db
-          .prepare('SELECT name FROM groups WHERE id = ?')
-          .get(groupId);
+        const groupRow = db.prepare('SELECT name FROM groups WHERE id = ?').get(groupId);
         const otherIds = db
           .prepare('SELECT user_id FROM group_members WHERE group_id = ? AND user_id != ?')
           .all(groupId, me.id)
@@ -604,7 +633,9 @@ export function attachSocket(httpServer) {
       // Уведомляем уже присутствующих, что пришёл новый пир.
       if (!alreadyIn) {
         socket.to(callRoom).emit('groupcall:peer-joined', {
-          groupId, callId: call.callId, userId: me.id,
+          groupId,
+          callId: call.callId,
+          userId: me.id,
         });
       }
 
@@ -622,25 +653,30 @@ export function attachSocket(httpServer) {
       if (typeof groupId !== 'number') return ack?.({ error: 'bad groupId' });
       const prev = getGroupCall(groupId);
       const { call, userLeft, callEnded } = leaveGroupCall({
-        groupId, userId: me.id, socketId: socket.id,
+        groupId,
+        userId: me.id,
+        socketId: socket.id,
       });
       const callRoom = `groupcall:${groupId}`;
       socket.leave(callRoom);
 
       if (userLeft && prev) {
         io.to(callRoom).emit('groupcall:peer-left', {
-          groupId, callId: prev.callId, userId: me.id,
+          groupId,
+          callId: prev.callId,
+          userId: me.id,
         });
       }
       if (callEnded && prev) {
         io.to(groupRoomOf(groupId)).emit('groupcall:ended', {
-          groupId, callId: prev.callId,
+          groupId,
+          callId: prev.callId,
         });
         // Закрываем системное сообщение — кнопка «Подключиться» уйдёт.
         endGroupCallSystemMsg(groupId, prev.messageId);
       }
       ack?.({ ok: true });
-      // eslint-disable-next-line no-unused-vars
+
       void call;
     });
 
@@ -669,7 +705,10 @@ export function attachSocket(httpServer) {
         const isCaller = pair.caller === socket.id;
         const otherSocketId = isCaller ? pair.callee : pair.caller;
         const c = getCall(callId);
-        if (!c) { sockets.delete(callId); continue; }
+        if (!c) {
+          sockets.delete(callId);
+          continue;
+        }
         if (c.status === 'active' && otherSocketId) {
           // Активный звонок → пир получает «peer-disconnected», звонок
           // переводится в waiting (5 мин) на случай рефреша / коротких
@@ -702,12 +741,16 @@ export function attachSocket(httpServer) {
           finalize(callId, c.startedAt ? 'completed' : 'cancelled');
           if (otherSocketId) {
             io.to(otherSocketId).emit('call:end', {
-              from: me.id, fromUsername: me.username, callId, reason: 'peer-disconnected',
+              from: me.id,
+              fromUsername: me.username,
+              callId,
+              reason: 'peer-disconnected',
             });
           }
         }
         // Чистим только наш слот в pair, чтобы вторая сторона осталась
-        if (isCaller) pair.caller = null; else pair.callee = null;
+        if (isCaller) pair.caller = null;
+        else pair.callee = null;
         if (!pair.caller && !pair.callee) sockets.delete(callId);
       }
 
@@ -717,12 +760,15 @@ export function attachSocket(httpServer) {
         const callRoom = `groupcall:${r.groupId}`;
         if (r.userLeft) {
           io.to(callRoom).emit('groupcall:peer-left', {
-            groupId: r.groupId, callId: r.callId, userId: me.id,
+            groupId: r.groupId,
+            callId: r.callId,
+            userId: me.id,
           });
         }
         if (r.callEnded) {
           io.to(groupRoomOf(r.groupId)).emit('groupcall:ended', {
-            groupId: r.groupId, callId: r.callId,
+            groupId: r.groupId,
+            callId: r.callId,
           });
           endGroupCallSystemMsg(r.groupId, r.messageId);
         }

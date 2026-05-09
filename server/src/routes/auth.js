@@ -35,13 +35,15 @@ function registrationCode() {
 // Помощник: есть ли активные коды в БД? Дёшево, чтобы не делать SELECT *.
 function hasActiveDbCodes() {
   const row = db
-    .prepare(`
+    .prepare(
+      `
       SELECT 1 FROM invite_codes
        WHERE revoked_at IS NULL
          AND (max_uses IS NULL OR uses_count < max_uses)
          AND (expires_at IS NULL OR expires_at > ?)
        LIMIT 1
-    `)
+    `,
+    )
     .get(Date.now());
   return !!row;
 }
@@ -119,7 +121,7 @@ router.post('/register', async (req, res) => {
   const hash = await bcrypt.hash(password, 10);
   // Если согласие требовалось и было получено — фиксируем timestamp.
   // Если модуль выключен или клиент не отправил флаг — оставляем NULL.
-  const consentAt = (pc.requireConsent && privacyConsent === true) ? Date.now() : null;
+  const consentAt = pc.requireConsent && privacyConsent === true ? Date.now() : null;
   const info = db
     .prepare('INSERT INTO users (username, password, privacy_consent_at) VALUES (?, ?, ?)')
     .run(username, hash, consentAt);

@@ -24,16 +24,22 @@ export default function VoicePlayer({ src, durationMs, mine }) {
     const a = ref.current;
     if (!a) return;
     if (settings.outputDeviceId && typeof a.setSinkId === 'function') {
-      a.setSinkId(settings.outputDeviceId === 'default' ? '' : settings.outputDeviceId)
-        .catch(() => { /* unsupported */ });
+      a.setSinkId(settings.outputDeviceId === 'default' ? '' : settings.outputDeviceId).catch(
+        () => {
+          /* unsupported */
+        },
+      );
     }
   }, [settings.outputDeviceId]);
 
   const toggle = () => {
     const a = ref.current;
     if (!a) return;
-    if (a.paused) { a.play().catch(() => {}); }
-    else { a.pause(); }
+    if (a.paused) {
+      a.play().catch(() => {});
+    } else {
+      a.pause();
+    }
   };
 
   const onLoaded = () => {
@@ -83,7 +89,9 @@ export default function VoicePlayer({ src, durationMs, mine }) {
             style={{ width: `${percent}%` }}
           />
         </div>
-        <div className={`text-[11px] mt-1 tabular-nums ${mine ? 'text-white/80' : 'text-slate-400'}`}>
+        <div
+          className={`text-[11px] mt-1 tabular-nums ${mine ? 'text-white/80' : 'text-slate-400'}`}
+        >
           {formatDuration(current * 1000)}
           {' / '}
           {formatDuration(total * 1000)}

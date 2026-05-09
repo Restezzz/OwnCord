@@ -9,7 +9,10 @@ import db from './db.js';
 function adminUsernamesFromEnv() {
   const raw = process.env.ADMIN_USERNAMES;
   if (!raw) return null;
-  const list = raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const list = raw
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
   return list.length ? new Set(list) : null;
 }
 
@@ -28,9 +31,7 @@ export function adminRequired(req, res, next) {
   // req.user.username приходит из JWT. Но юзер мог быть переименован через
   // PATCH /api/me (display_name), username в users неизменяем — так что JWT
   // достаточно. На всякий случай подтянем строку из БД.
-  const row = db
-    .prepare('SELECT id, username FROM users WHERE id = ?')
-    .get(req.user.id);
+  const row = db.prepare('SELECT id, username FROM users WHERE id = ?').get(req.user.id);
   if (!row || !isAdminUser(row)) {
     return res.status(403).json({ error: 'admin only' });
   }

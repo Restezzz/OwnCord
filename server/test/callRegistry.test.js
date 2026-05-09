@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import db from '../src/db.js';
 import {
-  registerInvite, markActive, markWaiting, finalize, getCall, tryRejoinable,
+  registerInvite,
+  markActive,
+  markWaiting,
+  finalize,
+  getCall,
+  tryRejoinable,
 } from '../src/callRegistry.js';
 
 let aliceId;
@@ -22,7 +27,10 @@ describe('callRegistry', () => {
   it('registerInvite creates a pending call + system message', () => {
     const callId = uniqueCallId('a');
     const r = registerInvite({
-      callId, callerId: aliceId, calleeId: bobId, withVideo: false,
+      callId,
+      callerId: aliceId,
+      calleeId: bobId,
+      withVideo: false,
     });
     expect(r).toBeTruthy();
     expect(r.message.kind).toBe('call');
@@ -47,9 +55,7 @@ describe('callRegistry', () => {
     const c = getCall(callId);
     expect(c.status).toBe('waiting');
 
-    const row = db
-      .prepare('SELECT payload FROM messages WHERE id = ?')
-      .get(c.messageId);
+    const row = db.prepare('SELECT payload FROM messages WHERE id = ?').get(c.messageId);
     const payload = JSON.parse(row.payload);
     expect(payload.status).toBe('waiting');
     expect(payload.reconnectUntil).toBeGreaterThan(Date.now());

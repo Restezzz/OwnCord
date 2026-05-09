@@ -1,11 +1,4 @@
-import type {
-  ApiOk,
-  AuthSession,
-  Group,
-  IceServerConfig,
-  Message,
-  User,
-} from './types';
+import type { ApiOk, AuthSession, Group, IceServerConfig, Message, User } from './types';
 
 const BASE = '';
 
@@ -36,7 +29,11 @@ function handle401(path: string, status: number, body: unknown) {
   // «неверные креды», а не как «токен истёк». Их игнорируем.
   if (path.startsWith('/api/auth/')) return;
   if (onAuthExpired) {
-    try { onAuthExpired(body); } catch { /* */ }
+    try {
+      onAuthExpired(body);
+    } catch {
+      /* */
+    }
   }
 }
 
@@ -46,7 +43,10 @@ type RequestOptions = {
   token?: string | null;
 };
 
-async function request<T>(path: string, { method = 'GET', body, token }: RequestOptions = {}): Promise<T> {
+async function request<T>(
+  path: string,
+  { method = 'GET', body, token }: RequestOptions = {},
+): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${BASE}${path}`, {
@@ -69,13 +69,21 @@ async function request<T>(path: string, { method = 'GET', body, token }: Request
 
 async function requestMultipart<T>(
   path: string,
-  { token, formData, method = 'POST' }: { token?: string | null; formData: FormData; method?: string },
+  {
+    token,
+    formData,
+    method = 'POST',
+  }: { token?: string | null; formData: FormData; method?: string },
 ): Promise<T> {
   const headers: Record<string, string> = {};
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${BASE}${path}`, { method, headers, body: formData });
   let data: unknown = null;
-  try { data = await res.json(); } catch { /* no body */ }
+  try {
+    data = await res.json();
+  } catch {
+    /* no body */
+  }
   if (!res.ok) {
     handle401(path, res.status, data);
     throw new ApiError((isErrorBody(data) && data.error) || `HTTP ${res.status}`, res.status);
@@ -84,7 +92,12 @@ async function requestMultipart<T>(
 }
 
 export const api = {
-  register: (username: string, password: string, invite?: string, opts: { privacyConsent?: boolean } = {}) =>
+  register: (
+    username: string,
+    password: string,
+    invite?: string,
+    opts: { privacyConsent?: boolean } = {},
+  ) =>
     request<AuthSession>('/api/auth/register', {
       method: 'POST',
       body: {
@@ -99,12 +112,13 @@ export const api = {
     }),
   login: (username: string, password: string) =>
     request<AuthSession>('/api/auth/login', { method: 'POST', body: { username, password } }),
-  registrationInfo: () => request<{
-    disabled: boolean;
-    inviteRequired: boolean;
-    privacyEnabled: boolean;
-    requirePrivacyConsent: boolean;
-  }>('/api/auth/registration-info'),
+  registrationInfo: () =>
+    request<{
+      disabled: boolean;
+      inviteRequired: boolean;
+      privacyEnabled: boolean;
+      requirePrivacyConsent: boolean;
+    }>('/api/auth/registration-info'),
   me: (token: string) => request<{ user: User }>('/api/me', { token }),
   updateMe: (token: string, patch: Partial<User>) =>
     request<{ user: User }>('/api/me', { method: 'PATCH', body: patch, token }),
@@ -113,21 +127,33 @@ export const api = {
     fd.append('avatar', file);
     return requestMultipart<{ user: User }>('/api/me/avatar', { token, formData: fd });
   },
-  deleteAvatar: (token: string) => request<{ user: User }>('/api/me/avatar', { method: 'DELETE', token }),
+  deleteAvatar: (token: string) =>
+    request<{ user: User }>('/api/me/avatar', { method: 'DELETE', token }),
   users: (token: string) => request<{ users: User[] }>('/api/users', { token }),
   user: (token: string, id: number) => request<{ user: User }>(`/api/users/${id}`, { token }),
-  history: (token: string, peerId: number) => request<{ messages: Message[] }>(`/api/messages/${peerId}`, { token }),
+  history: (token: string, peerId: number) =>
+    request<{ messages: Message[] }>(`/api/messages/${peerId}`, { token }),
   sendVoice: (token: string, to: number, blob: Blob, durationMs: number) => {
     const fd = new FormData();
     fd.append('to', String(to));
     fd.append('durationMs', String(durationMs || 0));
     fd.append('voice', blob, `voice-${Date.now()}.webm`);
-    return requestMultipart<{ ok: true; message: Message }>('/api/messages/voice', { token, formData: fd });
+    return requestMultipart<{ ok: true; message: Message }>('/api/messages/voice', {
+      token,
+      formData: fd,
+    });
   },
   editMessage: (token: string, id: number, content: string) =>
-    request<{ ok: true; message: Message }>(`/api/messages/${id}`, { method: 'PATCH', body: { content }, token }),
+    request<{ ok: true; message: Message }>(`/api/messages/${id}`, {
+      method: 'PATCH',
+      body: { content },
+      token,
+    }),
   deleteMessage: (token: string, id: number) =>
-    request<{ ok: true; message?: Message; removed?: boolean }>(`/api/messages/${id}`, { method: 'DELETE', token }),
+    request<{ ok: true; message?: Message; removed?: boolean }>(`/api/messages/${id}`, {
+      method: 'DELETE',
+      token,
+    }),
   sendFile: (token: string, to: number, files: File | File[], content = '') => {
     const fd = new FormData();
     fd.append('to', String(to));
@@ -139,7 +165,10 @@ export const api = {
     } else {
       fd.append('files', files, files.name);
     }
-    return requestMultipart<{ ok: true; message: Message }>('/api/messages/file', { token, formData: fd });
+    return requestMultipart<{ ok: true; message: Message }>('/api/messages/file', {
+      token,
+      formData: fd,
+    });
   },
   listMutes: (token: string) => request<{ ids: number[] }>('/api/mutes', { token }),
   addMute: (token: string, targetId: number) =>
@@ -147,22 +176,46 @@ export const api = {
   removeMute: (token: string, targetId: number) =>
     request<{ ids: number[] }>(`/api/mutes/${targetId}`, { method: 'DELETE', token }),
   iceServers: () => request<IceServerConfig>('/api/ice'),
-  config: () => request<{ maxUploadBytes: number; registrationDisabled?: boolean; privacyRequired?: boolean }>('/api/config'),
+  config: () =>
+    request<{ maxUploadBytes: number; registrationDisabled?: boolean; privacyRequired?: boolean }>(
+      '/api/config',
+    ),
 
   // --- Группы -------------------------------------------------------------
   listGroups: (token: string) => request<{ groups: Group[] }>('/api/groups', { token }),
   createGroup: (token: string, name: string, memberIds: number[]) =>
     request<{ group: Group }>('/api/groups', { method: 'POST', body: { name, memberIds }, token }),
-  getGroup: (token: string, id: number) => request<{ group: Group }>(`/api/groups/${id}`, { token }),
+  getGroup: (token: string, id: number) =>
+    request<{ group: Group }>(`/api/groups/${id}`, { token }),
   updateGroup: (token: string, id: number, patch: Partial<Group>) =>
     request<{ group: Group }>(`/api/groups/${id}`, { method: 'PATCH', body: patch, token }),
-  deleteGroup: (token: string, id: number) => request<ApiOk & { deleted?: true; left?: true }>(`/api/groups/${id}`, { method: 'DELETE', token }),
+  deleteGroup: (token: string, id: number) =>
+    request<ApiOk & { deleted?: true; left?: true }>(`/api/groups/${id}`, {
+      method: 'DELETE',
+      token,
+    }),
   addGroupMembers: (token: string, id: number, memberIds: number[]) =>
-    request<{ group: Group }>(`/api/groups/${id}/members`, { method: 'POST', body: { memberIds }, token }),
+    request<{ group: Group }>(`/api/groups/${id}/members`, {
+      method: 'POST',
+      body: { memberIds },
+      token,
+    }),
   removeGroupMember: (token: string, id: number, userId: number) =>
-    request<ApiOk & { group?: Group }>(`/api/groups/${id}/members/${userId}`, { method: 'DELETE', token }),
-  updateGroupMemberRole: (token: string, id: number, userId: number, role: 'owner' | 'admin' | 'member') =>
-    request<{ ok: true; group: Group }>(`/api/groups/${id}/members/${userId}/role`, { method: 'PATCH', body: { role }, token }),
+    request<ApiOk & { group?: Group }>(`/api/groups/${id}/members/${userId}`, {
+      method: 'DELETE',
+      token,
+    }),
+  updateGroupMemberRole: (
+    token: string,
+    id: number,
+    userId: number,
+    role: 'owner' | 'admin' | 'member',
+  ) =>
+    request<{ ok: true; group: Group }>(`/api/groups/${id}/members/${userId}/role`, {
+      method: 'PATCH',
+      body: { role },
+      token,
+    }),
   uploadGroupAvatar: (token: string, id: number, file: File) => {
     const fd = new FormData();
     fd.append('avatar', file);
@@ -170,7 +223,8 @@ export const api = {
   },
   deleteGroupAvatar: (token: string, id: number) =>
     request<{ group: Group }>(`/api/groups/${id}/avatar`, { method: 'DELETE', token }),
-  groupHistory: (token: string, id: number) => request<{ messages: Message[] }>(`/api/groups/${id}/messages`, { token }),
+  groupHistory: (token: string, id: number) =>
+    request<{ messages: Message[] }>(`/api/groups/${id}/messages`, { token }),
 
   // Удалить собственный аккаунт (требует пароль).
   deleteMe: (token: string, password: string) =>
@@ -195,7 +249,9 @@ export const api = {
       try {
         const body = await res.json();
         msg = (isErrorBody(body) && body.error) || msg;
-      } catch { /* */ }
+      } catch {
+        /* */
+      }
       throw new ApiError(msg, res.status);
     }
     return res.blob();
@@ -209,16 +265,37 @@ export const api = {
     request<ApiOk>('/api/push/unsubscribe', { method: 'POST', body: { endpoint }, token }),
 
   // --- Инвайт-коды (admin only) -------------------------------------------
-  listInvites: (token: string) => request<{ codes: Array<{ code: string; maxUses?: number | null; uses?: number; expiresAt?: number | null; createdAt?: number }> }>('/api/invites', { token }),
+  listInvites: (token: string) =>
+    request<{
+      codes: Array<{
+        code: string;
+        note?: string;
+        maxUses?: number | null;
+        usesCount: number;
+        remaining?: number | null;
+        expiresAt?: number | null;
+        createdAt?: number;
+        createdBy?: number;
+        createdByUsername?: string;
+        revokedAt?: number | null;
+      }>;
+    }>('/api/invites', { token }),
   createInvite: (token: string, body: Record<string, unknown>) =>
-    request<{ code: { code: string } }>('/api/invites', { method: 'POST', body: body || {}, token }),
+    request<{ code: { code: string } }>('/api/invites', {
+      method: 'POST',
+      body: body || {},
+      token,
+    }),
   revokeInvite: (token: string, code: string) =>
     request<ApiOk>(`/api/invites/${encodeURIComponent(code)}`, { method: 'DELETE', token }),
   sendGroupVoice: (token: string, id: number, blob: Blob, durationMs: number) => {
     const fd = new FormData();
     fd.append('durationMs', String(durationMs || 0));
     fd.append('voice', blob, `voice-${Date.now()}.webm`);
-    return requestMultipart<{ ok: true; message: Message }>(`/api/groups/${id}/messages/voice`, { token, formData: fd });
+    return requestMultipart<{ ok: true; message: Message }>(`/api/groups/${id}/messages/voice`, {
+      token,
+      formData: fd,
+    });
   },
   sendGroupFile: (token: string, id: number, files: File | File[], content = '') => {
     const fd = new FormData();
@@ -230,14 +307,20 @@ export const api = {
     } else {
       fd.append('files', files, files.name);
     }
-    return requestMultipart<{ ok: true; message: Message }>(`/api/groups/${id}/messages/file`, { token, formData: fd });
+    return requestMultipart<{ ok: true; message: Message }>(`/api/groups/${id}/messages/file`, {
+      token,
+      formData: fd,
+    });
   },
   // Реакции на сообщения
   addReaction: (token: string, messageId: number, emoji: string, groupId?: number) => {
     const url = groupId
       ? `/api/groups/${groupId}/messages/${messageId}/reaction`
       : `/api/messages/${messageId}/reaction`;
-    return request<{ ok: true; reactions: Array<{ emoji: string; count: number; users: number[] }> }>(url, {
+    return request<{
+      ok: true;
+      reactions: Array<{ emoji: string; count: number; users: number[] }>;
+    }>(url, {
       token,
       method: 'POST',
       body: { emoji },
@@ -247,6 +330,8 @@ export const api = {
     const url = groupId
       ? `/api/groups/${groupId}/messages/${messageId}/reactions`
       : `/api/messages/${messageId}/reactions`;
-    return request<{ reactions: Array<{ emoji: string; count: number; users: number[] }> }>(url, { token });
+    return request<{ reactions: Array<{ emoji: string; count: number; users: number[] }> }>(url, {
+      token,
+    });
   },
 };

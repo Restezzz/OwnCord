@@ -43,7 +43,9 @@ export function useSounds(settings) {
     if (!Ctx) return null;
     if (!ctxRef.current) ctxRef.current = new Ctx();
     if (ctxRef.current.state === 'suspended') {
-      ctxRef.current.resume().catch(() => { /* ignore */ });
+      ctxRef.current.resume().catch(() => {
+        /* ignore */
+      });
     }
     return ctxRef.current;
   }, []);
@@ -177,23 +179,37 @@ export function useSounds(settings) {
       // Превью — игнорирует флаги (для проверки в настройках).
       preview: (which) => {
         const previews = {
-          message: () => { tone(880, 0.1, { gain: 0.07 }); tone(1175, 0.1, { gain: 0.06, when: 0.09 }); },
-          incoming: () => { tone(880, 0.18, { gain: 0.12 }); tone(660, 0.18, { gain: 0.12, when: 0.2 }); },
-          outgoing: () => { tone(440, 0.35, { gain: 0.05 }); },
-          connect: () => { tone(660, 0.09, { gain: 0.1 }); tone(880, 0.12, { gain: 0.1, when: 0.1 }); },
-          disconnect: () => { tone(520, 0.1, { gain: 0.08 }); tone(330, 0.15, { gain: 0.08, when: 0.1 }); },
+          message: () => {
+            tone(880, 0.1, { gain: 0.07 });
+            tone(1175, 0.1, { gain: 0.06, when: 0.09 });
+          },
+          incoming: () => {
+            tone(880, 0.18, { gain: 0.12 });
+            tone(660, 0.18, { gain: 0.12, when: 0.2 });
+          },
+          outgoing: () => {
+            tone(440, 0.35, { gain: 0.05 });
+          },
+          connect: () => {
+            tone(660, 0.09, { gain: 0.1 });
+            tone(880, 0.12, { gain: 0.1, when: 0.1 });
+          },
+          disconnect: () => {
+            tone(520, 0.1, { gain: 0.08 });
+            tone(330, 0.15, { gain: 0.08, when: 0.1 });
+          },
           // Для превью включаем обе половинки (mute→pause→unmute),
           // чтобы юзер услышал, как звучит переключение туда-обратно.
           micMute: () => {
             tone(740, 0.05, { type: 'triangle', gain: 0.09 });
             tone(520, 0.07, { type: 'triangle', gain: 0.09, when: 0.05 });
             tone(520, 0.05, { type: 'triangle', gain: 0.09, when: 0.35 });
-            tone(740, 0.07, { type: 'triangle', gain: 0.09, when: 0.40 });
+            tone(740, 0.07, { type: 'triangle', gain: 0.09, when: 0.4 });
           },
           deafen: () => {
             tone(520, 0.07, { gain: 0.1 });
             tone(330, 0.1, { gain: 0.1, when: 0.07 });
-            tone(330, 0.07, { gain: 0.1, when: 0.40 });
+            tone(330, 0.07, { gain: 0.1, when: 0.4 });
             tone(520, 0.1, { gain: 0.1, when: 0.47 });
           },
         };

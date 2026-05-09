@@ -23,10 +23,18 @@ export default function ProfileModal({ userId, onClose, onCallAudio, onCallVideo
     setError(null);
     api
       .user(auth.token, userId)
-      .then((r) => { if (!cancelled) setUser(r.user); })
-      .catch((e) => { if (!cancelled) setError(e.message); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+      .then((r) => {
+        if (!cancelled) setUser(r.user);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [userId, auth.token]);
 
   const reduce = useReducedMotion();
@@ -57,24 +65,16 @@ export default function ProfileModal({ userId, onClose, onCallAudio, onCallVideo
         variants={panelV}
       >
         <div className="relative h-24 bg-gradient-to-br from-accent/40 to-accent/10">
-          <button
-            className="absolute top-2 right-2 btn-ghost"
-            onClick={onClose}
-            title="Закрыть"
-          >
+          <button className="absolute top-2 right-2 btn-ghost" onClick={onClose} title="Закрыть">
             <X size={18} />
           </button>
         </div>
 
         <div className="px-5 pb-5 -mt-10">
           {loading && (
-            <div className="flex flex-col items-center gap-3 pt-8 text-slate-400">
-              Загрузка…
-            </div>
+            <div className="flex flex-col items-center gap-3 pt-8 text-slate-400">Загрузка…</div>
           )}
-          {error && (
-            <div className="text-sm text-danger pt-8">{error}</div>
-          )}
+          {error && <div className="text-sm text-danger pt-8">{error}</div>}
           {user && !loading && (
             <>
               <div className="flex flex-col items-center gap-2">
@@ -86,13 +86,13 @@ export default function ProfileModal({ userId, onClose, onCallAudio, onCallVideo
                   showStatus
                 />
                 <div className="text-center">
-                  <div className="text-xl font-semibold leading-tight">
-                    {displayName}
-                  </div>
+                  <div className="text-xl font-semibold leading-tight">{displayName}</div>
                   {isCustomName && (
                     <div className="text-sm text-slate-500 mt-0.5">@{user.username}</div>
                   )}
-                  <div className={`text-xs mt-1 ${user.online ? 'text-success' : 'text-slate-500'}`}>
+                  <div
+                    className={`text-xs mt-1 ${user.online ? 'text-success' : 'text-slate-500'}`}
+                  >
                     {user.online ? 'в сети' : 'не в сети'}
                   </div>
                 </div>

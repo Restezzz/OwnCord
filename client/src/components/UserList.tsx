@@ -1,7 +1,5 @@
 import { useMemo, useState } from 'react';
-import {
-  Search, BellOff, Plus, Users as UsersIcon, Phone,
-} from 'lucide-react';
+import { Search, BellOff, Plus, Users as UsersIcon, Phone } from 'lucide-react';
 import Avatar from './Avatar';
 import { getAvatarUrl, getDisplayName } from '../utils/user';
 
@@ -16,7 +14,7 @@ function maxActivity(...values) {
 function sortByActivity(list, getActivity) {
   return list
     .map((item, index) => ({ item, index, activity: activityValue(getActivity(item)) }))
-    .sort((a, b) => (b.activity - a.activity) || (a.index - b.index))
+    .sort((a, b) => b.activity - a.activity || a.index - b.index)
     .map(({ item }) => item);
 }
 
@@ -32,8 +30,8 @@ export default function UserList({
   onSelectUser = null,
   onSelectGroup = null,
   selfId,
-  unread = {},             // peerId -> count (для юзеров)
-  groupUnread = {},        // groupId -> count
+  unread = {}, // peerId -> count (для юзеров)
+  groupUnread = {}, // groupId -> count
   lastActivityByChat = {}, // chatKey -> timestamp
   mutedIds = {},
   activeGroupCalls = null, // Set<groupId> — где идёт групповой звонок
@@ -52,20 +50,16 @@ export default function UserList({
     // системные плашки в истории чатов отображаются отдельно (через
     // глобальный usersById, см. ChatPanel).
     const list = users.filter((u) => u.id !== selfId && !u.deleted);
-    const matched = needle
-      ? list.filter((u) => match(u.username) || match(u.displayName))
-      : list;
-    return sortByActivity(
-      matched,
-      (u) => maxActivity(lastActivityByChat[`u:${u.id}`], u.lastActivityAt),
+    const matched = needle ? list.filter((u) => match(u.username) || match(u.displayName)) : list;
+    return sortByActivity(matched, (u) =>
+      maxActivity(lastActivityByChat[`u:${u.id}`], u.lastActivityAt),
     );
   }, [users, selfId, needle, lastActivityByChat]);
 
   const filteredGroups = useMemo(() => {
     const matched = needle ? groups.filter((g) => match(g.name)) : groups;
-    return sortByActivity(
-      matched,
-      (g) => maxActivity(lastActivityByChat[`g:${g.id}`], g.updatedAt),
+    return sortByActivity(matched, (g) =>
+      maxActivity(lastActivityByChat[`g:${g.id}`], g.updatedAt),
     );
   }, [groups, needle, lastActivityByChat]);
 
@@ -166,9 +160,7 @@ export default function UserList({
           </Section>
         )}
         {filteredUsers.length === 0 && filteredGroups.length === 0 && (
-          <div className="text-center text-slate-500 text-sm py-6">
-            Ничего не найдено
-          </div>
+          <div className="text-center text-slate-500 text-sm py-6">Ничего не найдено</div>
         )}
       </div>
     </div>
@@ -217,9 +209,7 @@ function UserRow({ user, active, onClick, unreadCount = 0, muted, onContextMenu 
   );
 }
 
-function GroupRow({
-  group, active, onClick, unreadCount = 0, callActive = false, onContextMenu,
-}) {
+function GroupRow({ group, active, onClick, unreadCount = 0, callActive = false, onContextMenu }) {
   const name = group.name || 'Группа';
   const memberCount = group.members?.length ?? 0;
   return (
@@ -258,9 +248,7 @@ function GroupRow({
           <span className={`truncate ${unreadCount ? 'font-semibold' : ''}`}>{name}</span>
         </div>
         <div className="text-xs text-slate-500 truncate">
-          {callActive
-            ? <span className="text-success">Идёт звонок</span>
-            : `${memberCount} участ.`}
+          {callActive ? <span className="text-success">Идёт звонок</span> : `${memberCount} участ.`}
         </div>
       </div>
       {unreadCount > 0 && (

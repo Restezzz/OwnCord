@@ -57,7 +57,9 @@ function getPlaceholderAudioContext() {
   placeholderAudioCtxCache = new Ctx();
   // Если контекст suspended — попытаемся возобновить, но молча.
   if (placeholderAudioCtxCache.state === 'suspended') {
-    placeholderAudioCtxCache.resume().catch(() => { /* */ });
+    placeholderAudioCtxCache.resume().catch(() => {
+      /* */
+    });
   }
   return placeholderAudioCtxCache;
 }
@@ -69,7 +71,11 @@ export function createPlaceholderAudioTrack() {
   gain.gain.value = 0;
   const dst = ctx.createMediaStreamDestination();
   osc.connect(gain).connect(dst);
-  try { osc.start(); } catch { /* */ }
+  try {
+    osc.start();
+  } catch {
+    /* */
+  }
   const t = dst.stream.getAudioTracks()[0];
   // enabled=true и gain=0: encoder отправляет тихие фреймы, RTP-пайплайн
   // жив, sender SSRC активен. После replaceTrack(real mic) пир сразу
@@ -117,10 +123,22 @@ export async function captureLocalMedia({ wantVideo = false, audioDeviceId = nul
 // max-bitrate подобран так, чтобы картинка оставалась читабельной
 // (текст не «разъезжался» при движении), но не забивал канал.
 export const SCREEN_PRESETS = {
-  '480p':  { width: 854,  height: 480,  frameRate: 30, maxBitrate:  1_500_000, label: '480p · 30fps' },
-  '720p':  { width: 1280, height: 720,  frameRate: 30, maxBitrate:  3_000_000, label: '720p · 30fps' },
-  '1080p': { width: 1920, height: 1080, frameRate: 30, maxBitrate:  6_000_000, label: '1080p · 30fps' },
-  '1440p': { width: 2560, height: 1440, frameRate: 30, maxBitrate: 12_000_000, label: '1440p · 30fps (2K)' },
+  '480p': { width: 854, height: 480, frameRate: 30, maxBitrate: 1_500_000, label: '480p · 30fps' },
+  '720p': { width: 1280, height: 720, frameRate: 30, maxBitrate: 3_000_000, label: '720p · 30fps' },
+  '1080p': {
+    width: 1920,
+    height: 1080,
+    frameRate: 30,
+    maxBitrate: 6_000_000,
+    label: '1080p · 30fps',
+  },
+  '1440p': {
+    width: 2560,
+    height: 1440,
+    frameRate: 30,
+    maxBitrate: 12_000_000,
+    label: '1440p · 30fps (2K)',
+  },
 };
 
 export const SCREEN_PRESET_KEYS = ['480p', '720p', '1080p', '1440p'];
@@ -165,8 +183,8 @@ export async function captureDisplay(presetKey, includeAudio = false) {
   /** @type {any} */
   const constraints = {
     video: {
-      width:     { ideal: preset.width },
-      height:    { ideal: preset.height },
+      width: { ideal: preset.width },
+      height: { ideal: preset.height },
       frameRate: { ideal: preset.frameRate, max: preset.frameRate },
     },
     audio,
@@ -203,5 +221,7 @@ export async function applyVideoSenderQuality(sender, presetKey) {
       params.degradationPreference = 'maintain-resolution';
     }
     await sender.setParameters(params);
-  } catch { /* не критично */ }
+  } catch {
+    /* не критично */
+  }
 }

@@ -3,7 +3,11 @@ import fs from 'node:fs';
 import db from '../db.js';
 import { authRequired } from '../auth.js';
 import {
-  uploadVoice, uploadAttachment, publicPathFor, absolutePathFor, sniff,
+  uploadVoice,
+  uploadAttachment,
+  publicPathFor,
+  absolutePathFor,
+  sniff,
 } from '../uploads.js';
 import { emitToPair, emitToGroup } from '../ioHub.js';
 
@@ -14,7 +18,11 @@ function rowToMessage(row) {
   let payload = null;
   const raw = row.payload ?? row.payloadJson ?? null;
   if (raw) {
-    try { payload = JSON.parse(raw); } catch { /* ignore */ }
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      /* ignore */
+    }
   }
   return {
     id: row.id,
@@ -57,11 +65,13 @@ function getMessage(id) {
 }
 
 function getReactionsForMessage(messageId) {
-  const reactions = db.prepare(
-    `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
-     FROM message_reactions WHERE message_id = ? GROUP BY emoji`
-  ).all(messageId);
-  return reactions.map(r => ({
+  const reactions = db
+    .prepare(
+      `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
+     FROM message_reactions WHERE message_id = ? GROUP BY emoji`,
+    )
+    .all(messageId);
+  return reactions.map((r) => ({
     emoji: r.emoji,
     count: r.count,
     users: r.users ? r.users.split(',').map(Number) : [],
@@ -129,23 +139,24 @@ router.post('/voice', authRequired, uploadVoice.single('voice'), sniff('audio'),
 router.post('/file', authRequired, uploadAttachment.array('files', 10), sniff(), (req, res) => {
   const to = Number(req.body.to);
   if (!Number.isInteger(to)) return res.status(400).json({ error: 'bad to' });
-  const files = Array.isArray(req.files) ? req.files : (req.file ? [req.file] : []);
+  const files = Array.isArray(req.files) ? req.files : req.file ? [req.file] : [];
   if (files.length === 0) return res.status(400).json({ error: 'no file' });
   const peer = db.prepare('SELECT id FROM users WHERE id = ?').get(to);
   if (!peer) return res.status(404).json({ error: 'no such user' });
 
-  const caption = typeof req.body.content === 'string' ? req.body.content.trim().slice(0, 4000) : '';
+  const caption =
+    typeof req.body.content === 'string' ? req.body.content.trim().slice(0, 4000) : '';
   const now = Date.now();
-  
+
   // Первый файл идёт в основные колонки, остальные - в payload
   const firstFile = files[0];
   const pubPath = publicPathFor(firstFile.path);
   const mime = firstFile.mimetype || 'application/octet-stream';
   const kind = mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : 'file';
-  
+
   let payload = null;
   if (files.length > 1) {
-    const additionalAttachments = files.slice(1).map(f => {
+    const additionalAttachments = files.slice(1).map((f) => {
       const p = publicPathFor(f.path);
       const m = f.mimetype || 'application/octet-stream';
       const k = m.startsWith('image/') ? 'image' : m.startsWith('video/') ? 'video' : 'file';
@@ -159,7 +170,7 @@ router.post('/file', authRequired, uploadAttachment.array('files', 10), sniff(),
     });
     payload = { additionalAttachments };
   }
-  
+
   const info = db
     .prepare(
       `INSERT INTO messages (
@@ -168,8 +179,15 @@ router.post('/file', authRequired, uploadAttachment.array('files', 10), sniff(),
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
-      req.user.id, to, caption, now, kind,
-      pubPath, firstFile.originalname, firstFile.size, mime,
+      req.user.id,
+      to,
+      caption,
+      now,
+      kind,
+      pubPath,
+      firstFile.originalname,
+      firstFile.size,
+      mime,
       payload ? JSON.stringify(payload) : null,
     );
 
@@ -195,7 +213,11 @@ router.patch('/:id', authRequired, (req, res) => {
   if (row.kind !== 'text') return res.status(400).json({ error: 'not editable' });
 
   const editedAt = Date.now();
-  db.prepare('UPDATE messages SET content = ?, edited_at = ? WHERE id = ?').run(trimmed, editedAt, id);
+  db.prepare('UPDATE messages SET content = ?, edited_at = ? WHERE id = ?').run(
+    trimmed,
+    editedAt,
+    id,
+  );
 
   const updated = rowToMessage(getMessage(id));
   emitMessage('dm:update', row, updated);
@@ -217,18 +239,22 @@ router.delete('/:id', authRequired, (req, res) => {
   // Удалим файл, если есть
   if (row.attachment_path) {
     const abs = absolutePathFor(row.attachment_path);
-    if (abs) fs.promises.unlink(abs).catch(() => { /* ignore */ });
+    if (abs)
+      fs.promises.unlink(abs).catch(() => {
+        /* ignore */
+      });
   }
 
-  const author = db
-    .prepare('SELECT hide_on_delete FROM users WHERE id = ?')
-    .get(req.user.id);
+  const author = db.prepare('SELECT hide_on_delete FROM users WHERE id = ?').get(req.user.id);
   const hardRemove = !!author?.hide_on_delete;
 
   if (hardRemove) {
     db.prepare('DELETE FROM messages WHERE id = ?').run(id);
     emitMessage('dm:remove', row, {
-      id, senderId: row.sender_id, receiverId: row.receiver_id, groupId: row.group_id,
+      id,
+      senderId: row.sender_id,
+      receiverId: row.receiver_id,
+      groupId: row.group_id,
     });
     return res.json({ ok: true, removed: true });
   }
@@ -241,7 +267,10 @@ router.delete('/:id', authRequired, (req, res) => {
 
   const updated = rowToMessage(getMessage(id));
   emitMessage('dm:delete', row, {
-    id, senderId: row.sender_id, receiverId: row.receiver_id, groupId: row.group_id,
+    id,
+    senderId: row.sender_id,
+    receiverId: row.receiver_id,
+    groupId: row.group_id,
   });
   res.json({ ok: true, message: updated });
 });
@@ -254,33 +283,40 @@ router.post('/:id/reaction', authRequired, (req, res) => {
   const { emoji } = req.body;
   if (!emoji || typeof emoji !== 'string') return res.status(400).json({ error: 'invalid emoji' });
 
-  const msg = db.prepare('SELECT id, sender_id, receiver_id, group_id FROM messages WHERE id = ?').get(id);
+  const msg = db
+    .prepare('SELECT id, sender_id, receiver_id, group_id FROM messages WHERE id = ?')
+    .get(id);
   if (!msg) return res.status(404).json({ error: 'message not found' });
   if (msg.group_id) return res.status(400).json({ error: 'use group reaction endpoint' });
-  if (msg.sender_id === req.user.id) return res.status(400).json({ error: 'cannot react to own message' });
+  if (msg.sender_id === req.user.id)
+    return res.status(400).json({ error: 'cannot react to own message' });
 
   // Проверяем, есть ли уже такая реакция от этого пользователя
-  const existing = db.prepare(
-    'SELECT id FROM message_reactions WHERE message_id = ? AND user_id = ? AND emoji = ?'
-  ).get(id, req.user.id, emoji);
+  const existing = db
+    .prepare('SELECT id FROM message_reactions WHERE message_id = ? AND user_id = ? AND emoji = ?')
+    .get(id, req.user.id, emoji);
 
   if (existing) {
     // Удаляем реакцию (toggle)
     db.prepare('DELETE FROM message_reactions WHERE id = ?').run(existing.id);
   } else {
     // Добавляем реакцию
-    db.prepare(
-      'INSERT INTO message_reactions (message_id, user_id, emoji) VALUES (?, ?, ?)'
-    ).run(id, req.user.id, emoji);
+    db.prepare('INSERT INTO message_reactions (message_id, user_id, emoji) VALUES (?, ?, ?)').run(
+      id,
+      req.user.id,
+      emoji,
+    );
   }
 
   // Получаем все реакции для этого сообщения
-  const reactions = db.prepare(
-    `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
-     FROM message_reactions WHERE message_id = ? GROUP BY emoji`
-  ).all(id);
+  const reactions = db
+    .prepare(
+      `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
+     FROM message_reactions WHERE message_id = ? GROUP BY emoji`,
+    )
+    .all(id);
 
-  const reactionsMap = reactions.map(r => ({
+  const reactionsMap = reactions.map((r) => ({
     emoji: r.emoji,
     count: r.count,
     users: r.users ? r.users.split(',').map(Number) : [],
@@ -297,12 +333,14 @@ router.get('/:id/reactions', authRequired, (req, res) => {
   if (!msg) return res.status(404).json({ error: 'message not found' });
   if (msg.group_id) return res.status(400).json({ error: 'use group reaction endpoint' });
 
-  const reactions = db.prepare(
-    `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
-     FROM message_reactions WHERE message_id = ? GROUP BY emoji`
-  ).all(id);
+  const reactions = db
+    .prepare(
+      `SELECT emoji, COUNT(*) as count, GROUP_CONCAT(user_id) as users
+     FROM message_reactions WHERE message_id = ? GROUP BY emoji`,
+    )
+    .all(id);
 
-  const reactionsMap = reactions.map(r => ({
+  const reactionsMap = reactions.map((r) => ({
     emoji: r.emoji,
     count: r.count,
     users: r.users ? r.users.split(',').map(Number) : [],

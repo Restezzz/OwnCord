@@ -1,8 +1,21 @@
 import { lazy, memo, Suspense, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  Mic, MicOff, Video, VideoOff, Monitor, MonitorOff, PhoneOff, Settings, Loader2,
-  Volume2, VolumeX, X, Maximize2, Minimize2, Phone,
+  Mic,
+  MicOff,
+  Video,
+  VideoOff,
+  Monitor,
+  MonitorOff,
+  PhoneOff,
+  Settings,
+  Loader2,
+  Volume2,
+  VolumeX,
+  X,
+  Maximize2,
+  Minimize2,
+  Phone,
 } from 'lucide-react';
 import Avatar from './Avatar';
 import ScreenQualityModal from './ScreenQualityModal';
@@ -18,7 +31,12 @@ type StreamVideoProps = {
   mirror?: boolean;
 };
 
-const StreamVideo = memo(function StreamVideo({ stream, muted = false, className = '', mirror = false }: StreamVideoProps) {
+const StreamVideo = memo(function StreamVideo({
+  stream,
+  muted = false,
+  className = '',
+  mirror = false,
+}: StreamVideoProps) {
   const ref = useRef(null);
   useEffect(() => {
     const el = ref.current;
@@ -49,7 +67,12 @@ type RemoteAudioProps = {
   muted?: boolean;
 };
 
-const RemoteAudio = memo(function RemoteAudio({ stream, sinkId, volume, muted = false }: RemoteAudioProps) {
+const RemoteAudio = memo(function RemoteAudio({
+  stream,
+  sinkId,
+  volume,
+  muted = false,
+}: RemoteAudioProps) {
   const ref = useRef(null);
 
   useEffect(() => {
@@ -59,7 +82,9 @@ const RemoteAudio = memo(function RemoteAudio({ stream, sinkId, volume, muted = 
       el.srcObject = stream || null;
     }
     if (stream) {
-      el.play?.().catch(() => { /* autoplay policy — пользователь ещё кликнет */ });
+      el.play?.().catch(() => {
+        /* autoplay policy — пользователь ещё кликнет */
+      });
     }
   }, [stream]);
 
@@ -84,7 +109,9 @@ const RemoteAudio = memo(function RemoteAudio({ stream, sinkId, volume, muted = 
     // 'default' в нашем UI — синоним «системного устройства»; setSinkId
     // принимает '' для того же значения. Пустой строки — единый формат
     // (так же поступают VoicePlayer/GroupCallView).
-    el.setSinkId(sinkId === 'default' ? '' : sinkId).catch(() => { /* not supported */ });
+    el.setSinkId(sinkId === 'default' ? '' : sinkId).catch(() => {
+      /* not supported */
+    });
   }, [sinkId]);
 
   return <audio ref={ref} autoPlay />;
@@ -117,11 +144,24 @@ export default function CallView({
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const {
-    state, peer, localStream, remoteStream,
-    muted, deafened, cameraOn, sharingScreen, peerMedia,
-    waitingUntil, selfLeft,
-    speakingUserIds, selfId,
-    toggleMute, toggleDeafen, toggleCamera, toggleScreenShare, hangup,
+    state,
+    peer,
+    localStream,
+    remoteStream,
+    muted,
+    deafened,
+    cameraOn,
+    sharingScreen,
+    peerMedia,
+    waitingUntil,
+    selfLeft,
+    speakingUserIds,
+    selfId,
+    toggleMute,
+    toggleDeafen,
+    toggleCamera,
+    toggleScreenShare,
+    hangup,
     rejoinAsCaller,
   } = call;
 
@@ -155,12 +195,15 @@ export default function CallView({
       if (document.fullscreenElement === el) {
         document.exitFullscreen?.();
       } else {
-        const req = el.requestFullscreen
-          || (el as any).webkitRequestFullscreen
-          || (el as any).msRequestFullscreen;
+        const req =
+          el.requestFullscreen ||
+          (el as any).webkitRequestFullscreen ||
+          (el as any).msRequestFullscreen;
         req?.call(el);
       }
-    } catch { /* not supported / denied */ }
+    } catch {
+      /* not supported / denied */
+    }
   };
 
   if (state === 'idle' || state === 'incoming') return null;
@@ -171,21 +214,21 @@ export default function CallView({
   const showRemoteVideo = !waiting && !!(peerMedia?.camera || peerMedia?.screen);
   const hasLocalVideo = cameraOn || sharingScreen;
   const peerId = peer?.id;
-  const peerUserVolume = peerId ? settings.userVolumes?.[peerId] ?? 100 : 100;
-  const peerStreamVolume = peerId ? settings.streamVolumes?.[peerId] ?? 100 : 100;
+  const peerUserVolume = peerId ? (settings.userVolumes?.[peerId] ?? 100) : 100;
+  const peerStreamVolume = peerId ? (settings.streamVolumes?.[peerId] ?? 100) : 100;
 
-  const waitLeft = waiting && waitingUntil
-    ? Math.max(0, waitingUntil - Date.now())
-    : 0;
+  const waitLeft = waiting && waitingUntil ? Math.max(0, waitingUntil - Date.now()) : 0;
 
   const label =
-    state === 'calling' ? 'Исходящий вызов…'
-    : state === 'connecting' ? 'Соединение…'
-    : state === 'waiting'
-      ? selfLeft
-        ? `Вы вышли из звонка · ${formatDuration(waitLeft)}`
-        : `Собеседник отключился · ${formatDuration(waitLeft)}`
-      : 'В разговоре';
+    state === 'calling'
+      ? 'Исходящий вызов…'
+      : state === 'connecting'
+        ? 'Соединение…'
+        : state === 'waiting'
+          ? selfLeft
+            ? `Вы вышли из звонка · ${formatDuration(waitLeft)}`
+            : `Собеседник отключился · ${formatDuration(waitLeft)}`
+          : 'В разговоре';
 
   // В embedded-режиме оставляем bg прозрачным — звонок «вписан» в общий
   // фон main-панели. Border снизу нужен, чтобы визуально отделить блок
@@ -276,9 +319,10 @@ export default function CallView({
                 />
               </div>
               <div>
-                <div className={`text-sm flex items-center justify-center gap-1.5 ${
-                  waiting ? 'text-amber-300' : 'text-slate-400'
-                }`}
+                <div
+                  className={`text-sm flex items-center justify-center gap-1.5 ${
+                    waiting ? 'text-amber-300' : 'text-slate-400'
+                  }`}
                 >
                   {waiting && <Loader2 size={14} className="animate-spin" />}
                   <span>{label}</span>
@@ -371,10 +415,7 @@ export default function CallView({
         >
           {sharingScreen ? <MonitorOff size={20} /> : <Monitor size={20} />}
         </ToolButton>
-        <ToolButton
-          onClick={() => setSettingsOpen(true)}
-          title="Настройки звука"
-        >
+        <ToolButton onClick={() => setSettingsOpen(true)} title="Настройки звука">
           <Settings size={20} />
         </ToolButton>
         {waiting && selfLeft ? (
@@ -384,7 +425,9 @@ export default function CallView({
           // пир авто-принимает если он тоже в waiting.
           <button
             type="button"
-            onClick={() => { void rejoinAsCaller?.(); }}
+            onClick={() => {
+              void rejoinAsCaller?.();
+            }}
             className="btn-icon bg-emerald-500 hover:bg-emerald-400 text-white ml-2"
             style={{ width: 52, height: 52 }}
             title="Подключиться к звонку"
@@ -434,75 +477,76 @@ export default function CallView({
           в таргет = fullscreenElement кладёт меню в тот же top-layer,
           куда попадает fullscreen-контейнер. Координаты из clientX/Y
           в обоих режимах остаются от вьюпорта. */}
-      {streamVolumeMenu && peerId && createPortal(
-        <>
-        <div
-          className="fixed z-[90] bg-bg-1 border border-border rounded-lg shadow-xl p-4 w-64"
-          style={{ left: streamVolumeMenu.x, top: streamVolumeMenu.y }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium truncate pr-2">
-              Громкость · {getDisplayName(peer)}
-            </span>
-            <button
-              onClick={() => setStreamVolumeMenu(null)}
-              className="text-slate-400 hover:text-white"
-              aria-label="Закрыть меню громкости"
+      {streamVolumeMenu &&
+        peerId &&
+        createPortal(
+          <>
+            <div
+              className="fixed z-[90] bg-bg-1 border border-border rounded-lg shadow-xl p-4 w-64"
+              style={{ left: streamVolumeMenu.x, top: streamVolumeMenu.y }}
+              onClick={(e) => e.stopPropagation()}
             >
-              <X size={16} />
-            </button>
-          </div>
-          <label className="block text-xs text-slate-400 mb-1">Пользователь</label>
-          <input
-            type="range"
-            min="0"
-            max="100"
-            value={peerUserVolume}
-            onChange={(e) => {
-              const newValue = Number(e.target.value);
-              update({ userVolumes: { ...(settings.userVolumes || {}), [peerId]: newValue } });
-            }}
-            className="range w-full"
-            aria-label="Громкость пользователя"
-            style={{ '--range-progress': `${peerUserVolume}%` } as React.CSSProperties}
-          />
-          <div className="flex justify-between text-xs text-slate-400 mt-1">
-            <span>0%</span>
-            <span>{peerUserVolume}%</span>
-            <span>100%</span>
-          </div>
-          {peerMedia?.screenAudio && (
-            <div className="mt-4">
-              <label className="block text-xs text-slate-400 mb-1">Стрим</label>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium truncate pr-2">
+                  Громкость · {getDisplayName(peer)}
+                </span>
+                <button
+                  onClick={() => setStreamVolumeMenu(null)}
+                  className="text-slate-400 hover:text-white"
+                  aria-label="Закрыть меню громкости"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <label className="block text-xs text-slate-400 mb-1">Пользователь</label>
               <input
                 type="range"
                 min="0"
                 max="100"
-                value={peerStreamVolume}
+                value={peerUserVolume}
                 onChange={(e) => {
                   const newValue = Number(e.target.value);
-                  update({ streamVolumes: { ...(settings.streamVolumes || {}), [peerId]: newValue } });
+                  update({ userVolumes: { ...(settings.userVolumes || {}), [peerId]: newValue } });
                 }}
                 className="range w-full"
-                aria-label="Громкость стрима"
-                style={{ '--range-progress': `${peerStreamVolume}%` } as React.CSSProperties}
+                aria-label="Громкость пользователя"
+                style={{ '--range-progress': `${peerUserVolume}%` } as React.CSSProperties}
               />
               <div className="flex justify-between text-xs text-slate-400 mt-1">
                 <span>0%</span>
-                <span>{peerStreamVolume}%</span>
+                <span>{peerUserVolume}%</span>
                 <span>100%</span>
               </div>
+              {peerMedia?.screenAudio && (
+                <div className="mt-4">
+                  <label className="block text-xs text-slate-400 mb-1">Стрим</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={peerStreamVolume}
+                    onChange={(e) => {
+                      const newValue = Number(e.target.value);
+                      update({
+                        streamVolumes: { ...(settings.streamVolumes || {}), [peerId]: newValue },
+                      });
+                    }}
+                    className="range w-full"
+                    aria-label="Громкость стрима"
+                    style={{ '--range-progress': `${peerStreamVolume}%` } as React.CSSProperties}
+                  />
+                  <div className="flex justify-between text-xs text-slate-400 mt-1">
+                    <span>0%</span>
+                    <span>{peerStreamVolume}%</span>
+                    <span>100%</span>
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-        </div>
-        <div
-          className="fixed inset-0 z-[89]"
-          onClick={() => setStreamVolumeMenu(null)}
-        />
-        </>,
-        (isFullscreen && document.fullscreenElement) || document.body,
-      )}
+            <div className="fixed inset-0 z-[89]" onClick={() => setStreamVolumeMenu(null)} />
+          </>,
+          (isFullscreen && document.fullscreenElement) || document.body,
+        )}
     </div>
   );
 }
@@ -552,7 +596,8 @@ function AvatarTile({
         )}
       </div>
       <div className="text-sm font-medium truncate max-w-[160px]">
-        {name}{selfLabel && <span className="text-slate-400"> (вы)</span>}
+        {name}
+        {selfLabel && <span className="text-slate-400"> (вы)</span>}
       </div>
     </div>
   );

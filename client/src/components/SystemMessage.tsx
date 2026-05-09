@@ -45,7 +45,8 @@ export default function SystemMessage({ message, sendersById }) {
   if (!text) return null;
 
   const time = new Date(message.createdAt).toLocaleTimeString([], {
-    hour: '2-digit', minute: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
   });
 
   return (

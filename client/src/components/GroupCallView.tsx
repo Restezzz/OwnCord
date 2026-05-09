@@ -1,8 +1,21 @@
 import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Mic, MicOff, Video, VideoOff, PhoneOff, Users as UsersIcon,
-  ScreenShare, ScreenShareOff, Volume2, VolumeX, Settings,
-  Pin, PinOff, X, Maximize2, Minimize2,
+  Mic,
+  MicOff,
+  Video,
+  VideoOff,
+  PhoneOff,
+  Users as UsersIcon,
+  ScreenShare,
+  ScreenShareOff,
+  Volume2,
+  VolumeX,
+  Settings,
+  Pin,
+  PinOff,
+  X,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react';
 import Avatar from './Avatar';
 import ScreenQualityModal from './ScreenQualityModal';
@@ -19,7 +32,13 @@ type StreamVideoProps = {
   onSize?: (w: number, h: number) => void;
 };
 
-const StreamVideo = memo(function StreamVideo({ stream, muted = false, className = '', mirror = false, onSize }: StreamVideoProps) {
+const StreamVideo = memo(function StreamVideo({
+  stream,
+  muted = false,
+  className = '',
+  mirror = false,
+  onSize,
+}: StreamVideoProps) {
   const ref = useRef(null);
   useEffect(() => {
     const el = ref.current;
@@ -59,13 +78,21 @@ type RemoteAudioProps = {
   muted?: boolean;
 };
 
-const RemoteAudio = memo(function RemoteAudio({ stream, sinkId, volume, muted = false }: RemoteAudioProps) {
+const RemoteAudio = memo(function RemoteAudio({
+  stream,
+  sinkId,
+  volume,
+  muted = false,
+}: RemoteAudioProps) {
   const ref = useRef(null);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     if (el.srcObject !== stream) el.srcObject = stream || null;
-    if (stream) el.play?.().catch(() => { /* autoplay policy */ });
+    if (stream)
+      el.play?.().catch(() => {
+        /* autoplay policy */
+      });
   }, [stream]);
   // Громкость и mute накладываем только на сам <audio>. Трогать track.enabled
   // на receiver-стороне нельзя: тот же MediaStreamTrack читает
@@ -82,7 +109,9 @@ const RemoteAudio = memo(function RemoteAudio({ stream, sinkId, volume, muted = 
   useEffect(() => {
     const el = ref.current;
     if (!el || !sinkId || typeof el.setSinkId !== 'function') return;
-    el.setSinkId(sinkId === 'default' ? '' : sinkId).catch(() => { /* not supported */ });
+    el.setSinkId(sinkId === 'default' ? '' : sinkId).catch(() => {
+      /* not supported */
+    });
   }, [sinkId]);
   return <audio ref={ref} autoPlay />;
 });
@@ -98,8 +127,17 @@ const RemoteAudio = memo(function RemoteAudio({ stream, sinkId, volume, muted = 
  * фактическим videoWidth/videoHeight тега <video>.
  */
 function Tile({
-  stream, user, self = false, muted = false, mirror = false, className = '',
-  onClick, onContextMenu = undefined, pinned, pinnable, speaking = false,
+  stream,
+  user,
+  self = false,
+  muted = false,
+  mirror = false,
+  className = '',
+  onClick,
+  onContextMenu = undefined,
+  pinned,
+  pinnable,
+  speaking = false,
   fullscreenable = false,
 }) {
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -109,16 +147,18 @@ function Tile({
   // 0×0 — поток ещё не догнал; 320×180 — наш живой placeholder.
   // В обоих случаях аватар поверх. Любое другое разрешение = реальная
   // картинка (камера/демонстрация).
-  const isPlaceholderSize = size.w === 0 || size.h === 0
-    || (size.w === 320 && size.h === 180);
+  const isPlaceholderSize = size.w === 0 || size.h === 0 || (size.w === 320 && size.h === 180);
   const showAvatar = !hasStream || isPlaceholderSize;
   const showFs = fullscreenable && hasStream && !isPlaceholderSize;
   const name = getDisplayName(user) || '?';
   // Стабильная ссылка на колбэк, чтобы StreamVideo не пере-подписывался
   // на каждый рендер.
-  const onSize = useMemo(() => (w, h) => {
-    setSize((s) => (s.w === w && s.h === h ? s : { w, h }));
-  }, []);
+  const onSize = useMemo(
+    () => (w, h) => {
+      setSize((s) => (s.w === w && s.h === h ? s : { w, h }));
+    },
+    [],
+  );
 
   // Слушаем нативный fullscreenchange — Esc / API-выход должны синкаться
   // с UI-кнопкой (Maximize2 ↔ Minimize2).
@@ -138,12 +178,15 @@ function Tile({
       if (document.fullscreenElement === el) {
         document.exitFullscreen?.();
       } else {
-        const req = el.requestFullscreen
-          || (el as any).webkitRequestFullscreen
-          || (el as any).msRequestFullscreen;
+        const req =
+          el.requestFullscreen ||
+          (el as any).webkitRequestFullscreen ||
+          (el as any).msRequestFullscreen;
         req?.call(el);
       }
-    } catch { /* not supported / denied */ }
+    } catch {
+      /* not supported / denied */
+    }
   };
 
   return (
@@ -151,12 +194,19 @@ function Tile({
       ref={wrapRef}
       onClick={onClick}
       onContextMenu={onContextMenu}
-      onDoubleClick={showFs ? (e) => { e.stopPropagation(); toggleFullscreen(); } : undefined}
+      onDoubleClick={
+        showFs
+          ? (e) => {
+              e.stopPropagation();
+              toggleFullscreen();
+            }
+          : undefined
+      }
       className={`relative bg-bg-2 rounded-xl overflow-hidden border-2 group ${
         speaking
-          // Зелёная рамка + мягкое свечение, когда участник говорит.
-          // Полупрозрачное свечение видно даже поверх реальной видеокартинки.
-          ? 'border-emerald-400 shadow-[0_0_0_2px_rgba(16,185,129,0.45),0_0_18px_2px_rgba(16,185,129,0.35)]'
+          ? // Зелёная рамка + мягкое свечение, когда участник говорит.
+            // Полупрозрачное свечение видно даже поверх реальной видеокартинки.
+            'border-emerald-400 shadow-[0_0_0_2px_rgba(16,185,129,0.45),0_0_18px_2px_rgba(16,185,129,0.35)]'
           : 'border-border'
       } transition-colors duration-100 ${
         pinnable ? 'cursor-pointer hover:border-accent' : ''
@@ -193,7 +243,8 @@ function Tile({
       )}
       <div className="absolute bottom-2 left-2 right-2 flex items-center gap-1.5 px-2 py-1 rounded-md bg-black/60 backdrop-blur text-xs">
         <span className="truncate flex-1">
-          {name}{self && <span className="text-slate-400"> (вы)</span>}
+          {name}
+          {self && <span className="text-slate-400"> (вы)</span>}
         </span>
         {muted && <MicOff size={12} className="text-amber-400 shrink-0" />}
         {pinned && <Pin size={12} className="text-accent shrink-0" />}
@@ -205,7 +256,12 @@ function Tile({
 // `embedded` режим — рендерим групповой звонок не как fullscreen
 // оверлей, а как блок внутри main-панели чата. См. комментарий в
 // CallView.tsx — мотивация общая.
-export default function GroupCallView({ call, usersById, selfId, embedded = false }: {
+export default function GroupCallView({
+  call,
+  usersById,
+  selfId,
+  embedded = false,
+}: {
   call: any;
   usersById: any;
   selfId: number;
@@ -218,12 +274,29 @@ export default function GroupCallView({ call, usersById, selfId, embedded = fals
   // его плитка растягивается на всё основное поле, остальные
   // уходят в верхний стрип.
   const [pinnedKey, setPinnedKey] = useState(null);
-  const [streamVolumeMenu, setStreamVolumeMenu] = useState<{ x: number; y: number; userId: number } | null>(null);
+  const [streamVolumeMenu, setStreamVolumeMenu] = useState<{
+    x: number;
+    y: number;
+    userId: number;
+  } | null>(null);
   const {
-    state, group, localStream, remotes, participants, peersMedia,
-    muted, deafened, cameraOn, sharingScreen, withVideo,
+    state,
+    group,
+    localStream,
+    remotes,
+    participants,
+    peersMedia,
+    muted,
+    deafened,
+    cameraOn,
+    sharingScreen,
+    withVideo,
     speakingUserIds,
-    toggleMute, toggleDeafen, toggleCamera, toggleScreenShare, leave,
+    toggleMute,
+    toggleDeafen,
+    toggleCamera,
+    toggleScreenShare,
+    leave,
   } = call;
 
   // ВСЕ хуки должны вызываться ДО любого early return — иначе React
@@ -231,7 +304,7 @@ export default function GroupCallView({ call, usersById, selfId, embedded = fals
   // и весь оверлей уходит в чёрный экран при первом переходе из idle.
   const tiles = useMemo(() => {
     const list: any[] = [{ kind: 'self', key: 'self' }];
-    for (const uid of (participants || [])) {
+    for (const uid of participants || []) {
       if (uid === selfId) continue;
       list.push({ kind: 'remote', userId: uid, key: uid });
     }
@@ -287,9 +360,11 @@ export default function GroupCallView({ call, usersById, selfId, embedded = fals
         />
       );
     }
-    const u = usersById?.[t.userId]
-      || group?.members?.find((m) => m.id === t.userId)
-      || { id: t.userId, displayName: `#${t.userId}` };
+    const u = usersById?.[t.userId] ||
+      group?.members?.find((m) => m.id === t.userId) || {
+        id: t.userId,
+        displayName: `#${t.userId}`,
+      };
     const onTileContextMenu = (e: React.MouseEvent) => {
       e.preventDefault();
       setStreamVolumeMenu({ x: e.clientX, y: e.clientY, userId: t.userId });
@@ -313,10 +388,7 @@ export default function GroupCallView({ call, usersById, selfId, embedded = fals
   const otherTiles = pinnedTile ? tiles.filter((t) => t.key !== pinnedKey) : tiles;
 
   // Grid cols для «не пин-режима» — адаптивно по количеству.
-  const gridCols = tiles.length <= 1 ? 1
-    : tiles.length <= 4 ? 2
-    : tiles.length <= 9 ? 3
-    : 4;
+  const gridCols = tiles.length <= 1 ? 1 : tiles.length <= 4 ? 2 : tiles.length <= 9 ? 3 : 4;
 
   // См. комментарий в CallView.tsx — embedded даёт блок-в-чате; иначе
   // fullscreen-overlay (старое поведение, оставлено на случай если
@@ -336,7 +408,11 @@ export default function GroupCallView({ call, usersById, selfId, embedded = fals
             {otherTiles.length > 0 && (
               <div className="flex gap-2 overflow-x-auto py-1" style={{ height: 120 }}>
                 {otherTiles.map((t) => (
-                  <div key={`strip-${t.key}`} className="shrink-0" style={{ width: 180, height: '100%' }}>
+                  <div
+                    key={`strip-${t.key}`}
+                    className="shrink-0"
+                    style={{ width: 180, height: '100%' }}
+                  >
                     {renderTile(t, { suffix: '-strip', className: 'w-full h-full' })}
                   </div>
                 ))}
@@ -359,7 +435,10 @@ export default function GroupCallView({ call, usersById, selfId, embedded = fals
             const base = settings.outputVolume ?? 1;
             const hasScreenAudio = !!peersMedia?.[uid]?.screenAudio;
             const userMul = Math.max(0, Math.min(1, (settings.userVolumes?.[uid] ?? 100) / 100));
-            const streamMul = Math.max(0, Math.min(1, (settings.streamVolumes?.[uid] ?? 100) / 100));
+            const streamMul = Math.max(
+              0,
+              Math.min(1, (settings.streamVolumes?.[uid] ?? 100) / 100),
+            );
             return (
               <RemoteAudio
                 key={`a-${uid}`}
@@ -374,7 +453,9 @@ export default function GroupCallView({ call, usersById, selfId, embedded = fals
         <div className="absolute top-4 left-4 flex items-center gap-2">
           <div className="px-3 py-1.5 text-xs rounded-full bg-black/60 backdrop-blur border border-white/10 flex items-center gap-1.5">
             <UsersIcon size={14} />
-            <span>{group?.name || 'Группа'} · {peopleLabel}</span>
+            <span>
+              {group?.name || 'Группа'} · {peopleLabel}
+            </span>
           </div>
           {pinnedKey && (
             <button
@@ -425,10 +506,7 @@ export default function GroupCallView({ call, usersById, selfId, embedded = fals
         >
           {sharingScreen ? <ScreenShareOff size={20} /> : <ScreenShare size={20} />}
         </ToolButton>
-        <ToolButton
-          onClick={() => setSettingsOpen(true)}
-          title="Настройки"
-        >
+        <ToolButton onClick={() => setSettingsOpen(true)} title="Настройки">
           <Settings size={20} />
         </ToolButton>
         <button
@@ -455,83 +533,80 @@ export default function GroupCallView({ call, usersById, selfId, embedded = fals
       />
 
       {/* Меню громкости конкретного участника */}
-      {streamVolumeMenu && (() => {
-        const uid = streamVolumeMenu.userId;
-        const u = usersById?.[uid]
-          || group?.members?.find((m) => m.id === uid)
-          || { id: uid, displayName: `#${uid}` };
-        const userVolume = settings.userVolumes?.[uid] ?? 100;
-        const streamVolume = settings.streamVolumes?.[uid] ?? 100;
-        const hasScreenAudio = !!peersMedia?.[uid]?.screenAudio;
-        return (
-          <>
-            <div
-              className="fixed inset-0 z-[89]"
-              onClick={() => setStreamVolumeMenu(null)}
-            />
-            <div
-              className="fixed z-[90] bg-bg-1 border border-border rounded-lg shadow-xl p-4 w-64"
-              style={{ left: streamVolumeMenu.x, top: streamVolumeMenu.y }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium truncate pr-2">
-                  Громкость · {getDisplayName(u)}
-                </span>
-                <button
-                  onClick={() => setStreamVolumeMenu(null)}
-                  className="text-slate-400 hover:text-white"
-                  aria-label="Закрыть меню громкости"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-              <label className="block text-xs text-slate-400 mb-1">Пользователь</label>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={userVolume}
-                onChange={(e) => {
-                  const nv = Number(e.target.value);
-                  update({ userVolumes: { ...(settings.userVolumes || {}), [uid]: nv } });
-                }}
-                className="range w-full"
-                aria-label="Громкость пользователя"
-                style={{ '--range-progress': `${userVolume}%` } as React.CSSProperties}
-              />
-              <div className="flex justify-between text-xs text-slate-400 mt-1">
-                <span>0%</span>
-                <span>{userVolume}%</span>
-                <span>100%</span>
-              </div>
-              {hasScreenAudio && (
-                <div className="mt-4">
-                  <label className="block text-xs text-slate-400 mb-1">Стрим</label>
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={streamVolume}
-                    onChange={(e) => {
-                      const nv = Number(e.target.value);
-                      update({ streamVolumes: { ...(settings.streamVolumes || {}), [uid]: nv } });
-                    }}
-                    className="range w-full"
-                    aria-label="Громкость стрима"
-                    style={{ '--range-progress': `${streamVolume}%` } as React.CSSProperties}
-                  />
-                  <div className="flex justify-between text-xs text-slate-400 mt-1">
-                    <span>0%</span>
-                    <span>{streamVolume}%</span>
-                    <span>100%</span>
-                  </div>
+      {streamVolumeMenu &&
+        (() => {
+          const uid = streamVolumeMenu.userId;
+          const u = usersById?.[uid] ||
+            group?.members?.find((m) => m.id === uid) || { id: uid, displayName: `#${uid}` };
+          const userVolume = settings.userVolumes?.[uid] ?? 100;
+          const streamVolume = settings.streamVolumes?.[uid] ?? 100;
+          const hasScreenAudio = !!peersMedia?.[uid]?.screenAudio;
+          return (
+            <>
+              <div className="fixed inset-0 z-[89]" onClick={() => setStreamVolumeMenu(null)} />
+              <div
+                className="fixed z-[90] bg-bg-1 border border-border rounded-lg shadow-xl p-4 w-64"
+                style={{ left: streamVolumeMenu.x, top: streamVolumeMenu.y }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium truncate pr-2">
+                    Громкость · {getDisplayName(u)}
+                  </span>
+                  <button
+                    onClick={() => setStreamVolumeMenu(null)}
+                    className="text-slate-400 hover:text-white"
+                    aria-label="Закрыть меню громкости"
+                  >
+                    <X size={16} />
+                  </button>
                 </div>
-              )}
-            </div>
-          </>
-        );
-      })()}
+                <label className="block text-xs text-slate-400 mb-1">Пользователь</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={userVolume}
+                  onChange={(e) => {
+                    const nv = Number(e.target.value);
+                    update({ userVolumes: { ...(settings.userVolumes || {}), [uid]: nv } });
+                  }}
+                  className="range w-full"
+                  aria-label="Громкость пользователя"
+                  style={{ '--range-progress': `${userVolume}%` } as React.CSSProperties}
+                />
+                <div className="flex justify-between text-xs text-slate-400 mt-1">
+                  <span>0%</span>
+                  <span>{userVolume}%</span>
+                  <span>100%</span>
+                </div>
+                {hasScreenAudio && (
+                  <div className="mt-4">
+                    <label className="block text-xs text-slate-400 mb-1">Стрим</label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={streamVolume}
+                      onChange={(e) => {
+                        const nv = Number(e.target.value);
+                        update({ streamVolumes: { ...(settings.streamVolumes || {}), [uid]: nv } });
+                      }}
+                      className="range w-full"
+                      aria-label="Громкость стрима"
+                      style={{ '--range-progress': `${streamVolume}%` } as React.CSSProperties}
+                    />
+                    <div className="flex justify-between text-xs text-slate-400 mt-1">
+                      <span>0%</span>
+                      <span>{streamVolume}%</span>
+                      <span>100%</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>
+          );
+        })()}
     </div>
   );
 }

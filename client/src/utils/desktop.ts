@@ -34,7 +34,13 @@ export type UpdateEvent =
   | { kind: 'checking' }
   | { kind: 'available'; version?: string; releaseDate?: string }
   | { kind: 'none' }
-  | { kind: 'progress'; percent: number; bytesPerSecond: number; transferred: number; total: number }
+  | {
+      kind: 'progress';
+      percent: number;
+      bytesPerSecond: number;
+      transferred: number;
+      total: number;
+    }
   | { kind: 'downloaded'; version?: string; releaseDate?: string }
   | { kind: 'error'; message: string };
 
@@ -78,9 +84,7 @@ export async function applyShortcuts(map: Shortcuts): Promise<void> {
  * Подписка на DOM-event 'owncord:shortcut', который preload.js шлёт в
  * ответ на срабатывание globalShortcut'а в main. Возвращает unsubscribe.
  */
-export function onShortcutEvent(
-  handler: (action: ShortcutAction) => void,
-): () => void {
+export function onShortcutEvent(handler: (action: ShortcutAction) => void): () => void {
   const listener = (ev: Event) => {
     const detail = (ev as CustomEvent).detail;
     const action = detail?.action as ShortcutAction | undefined;
@@ -97,7 +101,10 @@ export function onShortcutEvent(
  * звать его безусловно при mount'е.
  */
 export function onUpdateEvent(handler: (e: UpdateEvent) => void): () => void {
-  if (!isDesktop()) return () => { /* noop */ };
+  if (!isDesktop())
+    return () => {
+      /* noop */
+    };
   const listener = (ev: Event) => {
     const detail = (ev as CustomEvent).detail as UpdateEvent | undefined;
     if (!detail?.kind) return;
@@ -125,7 +132,11 @@ export async function installUpdate(): Promise<void> {
  * Ручная проверка обновлений (для кнопки в настройках).
  * На вебе вернёт null. На десктопе — результат запроса.
  */
-export async function checkForUpdates(): Promise<{ ok: boolean; version?: string; error?: string } | null> {
+export async function checkForUpdates(): Promise<{
+  ok: boolean;
+  version?: string;
+  error?: string;
+} | null> {
   if (!isDesktop()) return null;
   try {
     return (await window.electronAPI!.checkForUpdates?.()) || null;
@@ -203,7 +214,8 @@ export function keyEventToAccelerator(e: KeyboardEvent): string | null {
  */
 export function formatAccelerator(acc: string | null | undefined): string {
   if (!acc) return '';
-  const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform || '');
+  const isMac =
+    typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform || '');
   return acc
     .split('+')
     .map((p) => {

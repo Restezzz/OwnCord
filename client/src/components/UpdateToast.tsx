@@ -42,9 +42,7 @@ export default function UpdateToast() {
   if (!state) return null;
 
   const version =
-    state.kind === 'available' || state.kind === 'downloaded'
-      ? state.version
-      : undefined;
+    state.kind === 'available' || state.kind === 'downloaded' ? state.version : undefined;
 
   // Если эту версию уже закрыли — не показывать снова.
   if (version && dismissedVersion === version) return null;
@@ -76,9 +74,7 @@ export default function UpdateToast() {
             <X size={14} />
           </button>
 
-          {state.kind === 'available' && (
-            <AvailableBody version={state.version} />
-          )}
+          {state.kind === 'available' && <AvailableBody version={state.version} />}
 
           {state.kind === 'progress' && (
             <ProgressBody
@@ -152,13 +148,7 @@ function ProgressBody({
   );
 }
 
-function DownloadedBody({
-  version,
-  onInstall,
-}: {
-  version?: string;
-  onInstall: () => void;
-}) {
+function DownloadedBody({ version, onInstall }: { version?: string; onInstall: () => void }) {
   return (
     <div className="flex flex-col gap-2.5">
       <div className="flex items-start gap-2.5">

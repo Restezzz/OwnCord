@@ -6,6 +6,7 @@ import meRoutes from '../src/routes/me.js';
 import muteRoutes from '../src/routes/mutes.js';
 import groupRoutes from '../src/routes/groups.js';
 import inviteRoutes from '../src/routes/invites.js';
+import healthRoutes from '../src/routes/health.js';
 
 /**
  * Поднимает HTTP-приложение (без socket.io), идентичное продовому,
@@ -22,6 +23,7 @@ export function buildTestApp() {
   app.use('/api/mutes', muteRoutes);
   app.use('/api/groups', groupRoutes);
   app.use('/api/invites', inviteRoutes);
+  app.use('/api/health', healthRoutes);
   app.use((err, _req, res, _next) => {
     res.status(err?.status || 400).json({ error: err?.message || 'bad request' });
   });

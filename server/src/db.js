@@ -7,7 +7,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Путь к файлу БД можно переопределить через переменную окружения
 // (используется в тестах для изоляции). По умолчанию — server/data/owncord.sqlite.
-const dbPath = process.env.OWNCORD_DB_FILE || path.resolve(__dirname, '..', 'data', 'owncord.sqlite');
+const dbPath =
+  process.env.OWNCORD_DB_FILE || path.resolve(__dirname, '..', 'data', 'owncord.sqlite');
 const dbDir = path.dirname(dbPath);
 if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
 
@@ -225,19 +226,23 @@ db.exec(`
 // На старте процесса гасим висящие kind='groupcall' с status='active' —
 // в памяти после рестарта сервера их состояние уже потеряно.
 try {
-  const stale = db
-    .prepare(`SELECT id, payload FROM messages WHERE kind = 'groupcall'`)
-    .all();
+  const stale = db.prepare(`SELECT id, payload FROM messages WHERE kind = 'groupcall'`).all();
   const upd = db.prepare('UPDATE messages SET payload = ? WHERE id = ?');
   for (const r of stale) {
     let p = {};
-    try { p = JSON.parse(r.payload || '{}'); } catch { /* */ }
+    try {
+      p = JSON.parse(r.payload || '{}');
+    } catch {
+      /* */
+    }
     if (p.status === 'active') {
       p.status = 'ended';
       p.endedAt = p.endedAt || Date.now();
       upd.run(JSON.stringify(p), r.id);
     }
   }
-} catch { /* ignore */ }
+} catch {
+  /* ignore */
+}
 
 export default db;

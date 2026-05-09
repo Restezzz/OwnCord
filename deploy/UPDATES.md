@@ -91,6 +91,7 @@ sudo chmod 600 /home/owncord-publish/.ssh/authorized_keys
 
 > Если useradd выше не создал `/home/owncord-publish` (мы передавали
 > `--no-create-home`), создай вручную:
+>
 > ```bash
 > sudo mkdir -p /home/owncord-publish
 > sudo chown owncord-publish:owncord-publish /home/owncord-publish

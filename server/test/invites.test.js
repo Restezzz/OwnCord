@@ -1,6 +1,4 @@
-import {
-  describe, it, expect, beforeAll, beforeEach, afterEach,
-} from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import request from 'supertest';
 import { buildTestApp } from './appFactory.js';
 import db from '../src/db.js';
@@ -24,9 +22,7 @@ afterEach(() => {
 async function registerAndLogin(username) {
   // Без env REGISTRATION_CODE и без записей в invite_codes — регистрация
   // открыта (см. логику hasActiveDbCodes/inviteNeeded в auth.js).
-  const r = await request(app)
-    .post('/api/auth/register')
-    .send({ username, password: 'secret123' });
+  const r = await request(app).post('/api/auth/register').send({ username, password: 'secret123' });
   expect(r.status).toBe(200);
   return { token: r.body.token, user: r.body.user };
 }
@@ -49,14 +45,10 @@ describe('invites — admin API', () => {
     expect(first.user.isAdmin).toBe(true);
     expect(second.user.isAdmin).toBe(false);
 
-    const a = await request(app)
-      .get('/api/invites')
-      .set('Authorization', `Bearer ${second.token}`);
+    const a = await request(app).get('/api/invites').set('Authorization', `Bearer ${second.token}`);
     expect(a.status).toBe(403);
 
-    const b = await request(app)
-      .get('/api/invites')
-      .set('Authorization', `Bearer ${first.token}`);
+    const b = await request(app).get('/api/invites').set('Authorization', `Bearer ${first.token}`);
     expect(b.status).toBe(200);
     expect(Array.isArray(b.body.codes)).toBe(true);
   });
@@ -67,14 +59,10 @@ describe('invites — admin API', () => {
 
     process.env.ADMIN_USERNAMES = 'beta';
 
-    const a = await request(app)
-      .get('/api/invites')
-      .set('Authorization', `Bearer ${first.token}`);
+    const a = await request(app).get('/api/invites').set('Authorization', `Bearer ${first.token}`);
     expect(a.status).toBe(403);
 
-    const b = await request(app)
-      .get('/api/invites')
-      .set('Authorization', `Bearer ${second.token}`);
+    const b = await request(app).get('/api/invites').set('Authorization', `Bearer ${second.token}`);
     expect(b.status).toBe(200);
   });
 
@@ -153,9 +141,7 @@ describe('invites — registration with DB codes', () => {
       .send({ maxUses: 5 });
     const code = created.body.code.code;
 
-    await request(app)
-      .delete(`/api/invites/${code}`)
-      .set('Authorization', `Bearer ${admin.token}`);
+    await request(app).delete(`/api/invites/${code}`).set('Authorization', `Bearer ${admin.token}`);
 
     const r = await request(app)
       .post('/api/auth/register')

@@ -1,7 +1,5 @@
 import { useEffect, useState } from 'react';
-import {
-  Phone, Video, PhoneIncoming, PhoneOutgoing, PhoneMissed, PhoneOff,
-} from 'lucide-react';
+import { Phone, Video, PhoneIncoming, PhoneOutgoing, PhoneMissed, PhoneOff } from 'lucide-react';
 import { formatDuration } from '../utils/user';
 
 /**
@@ -33,7 +31,7 @@ export default function CallMessage({ message, selfId, onRejoin = null }) {
     return () => clearInterval(i);
   }, [status, reconnectUntil]);
 
-  let title = withVideo ? 'Видеозвонок' : 'Звонок';
+  const title = withVideo ? 'Видеозвонок' : 'Звонок';
   let subtitle = '';
   let tone = 'neutral'; // neutral | success | danger | warn
 
@@ -71,8 +69,13 @@ export default function CallMessage({ message, selfId, onRejoin = null }) {
   // Иконка в зависимости от роли и итога
   let IconRole = Icon;
   if (status === 'ended' && outcome === 'missed') IconRole = PhoneMissed;
-  else if (status === 'ended' && (outcome === 'rejected' || outcome === 'cancelled' || outcome === 'expired')) IconRole = PhoneOff;
-  else if (status !== 'active' && status !== 'waiting') IconRole = mine ? PhoneOutgoing : PhoneIncoming;
+  else if (
+    status === 'ended' &&
+    (outcome === 'rejected' || outcome === 'cancelled' || outcome === 'expired')
+  )
+    IconRole = PhoneOff;
+  else if (status !== 'active' && status !== 'waiting')
+    IconRole = mine ? PhoneOutgoing : PhoneIncoming;
 
   const tones = {
     neutral: 'text-slate-300 border-border bg-bg-2',
@@ -89,7 +92,8 @@ export default function CallMessage({ message, selfId, onRejoin = null }) {
   void onRejoin;
 
   const time = new Date(message.createdAt).toLocaleTimeString([], {
-    hour: '2-digit', minute: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
   });
 
   return (

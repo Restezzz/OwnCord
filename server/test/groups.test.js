@@ -7,9 +7,7 @@ let app;
 const users = {};
 
 async function registerUser(username) {
-  const r = await request(app)
-    .post('/api/auth/register')
-    .send({ username, password: 'secret123' });
+  const r = await request(app).post('/api/auth/register').send({ username, password: 'secret123' });
   return { token: r.body.token, id: r.body.user.id };
 }
 
@@ -194,16 +192,12 @@ describe('group messages', () => {
       .set(auth(users.carol))
       .send({ content: 'sneak' });
     expect(post.status).toBe(403);
-    const hist = await request(app)
-      .get(`/api/groups/${gid}/messages`)
-      .set(auth(users.carol));
+    const hist = await request(app).get(`/api/groups/${gid}/messages`).set(auth(users.carol));
     expect(hist.status).toBe(403);
   });
 
   it('GET messages returns all messages for group', async () => {
-    const res = await request(app)
-      .get(`/api/groups/${gid}/messages`)
-      .set(auth(users.bob));
+    const res = await request(app).get(`/api/groups/${gid}/messages`).set(auth(users.bob));
     expect(res.status).toBe(200);
     expect(res.body.messages.some((m) => m.content === 'hello group')).toBe(true);
   });

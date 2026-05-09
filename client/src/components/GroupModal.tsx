@@ -1,8 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import {
-  X, Check, Trash2, Upload, UserPlus, UserMinus, Users as UsersIcon,
-  MoreVertical, Shield, ShieldAlert,
+  X,
+  Check,
+  Trash2,
+  Upload,
+  UserPlus,
+  UserMinus,
+  Users as UsersIcon,
+  MoreVertical,
+  Shield,
+  ShieldAlert,
 } from 'lucide-react';
 import Avatar from './Avatar';
 import ContextMenu from './ContextMenu';
@@ -25,7 +33,7 @@ const MEMBER_LIMIT = 10;
 export default function GroupModal({
   mode = 'create',
   group = null,
-  users = [],     // весь список для выбора участников
+  users = [], // весь список для выбора участников
   onClose,
   onCreated,
 }) {
@@ -35,7 +43,7 @@ export default function GroupModal({
 
   const isEdit = mode === 'edit' && group;
   const isOwner = isEdit && group.ownerId === auth.user.id;
-  const isAdmin = isEdit && group.members.find(m => m.id === auth.user.id)?.role === 'admin';
+  const isAdmin = isEdit && group.members.find((m) => m.id === auth.user.id)?.role === 'admin';
   const canEditGroup = isOwner || isAdmin;
 
   const [name, setName] = useState(isEdit ? group.name : '');
@@ -63,8 +71,8 @@ export default function GroupModal({
     if (!needle) return list;
     return list.filter(
       (u) =>
-        u.username.toLowerCase().includes(needle)
-        || (u.displayName || '').toLowerCase().includes(needle),
+        u.username.toLowerCase().includes(needle) ||
+        (u.displayName || '').toLowerCase().includes(needle),
     );
   }, [users, search, auth.user.id]);
 
@@ -72,7 +80,8 @@ export default function GroupModal({
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
-      else if (next.size + 1 < MEMBER_LIMIT) next.add(id); // +1 т.к. owner
+      else if (next.size + 1 < MEMBER_LIMIT)
+        next.add(id); // +1 т.к. owner
       else toast.info(`Максимум ${MEMBER_LIMIT} участников`);
       return next;
     });
@@ -89,7 +98,7 @@ export default function GroupModal({
       return;
     }
     if (isEdit && !canEditGroup) return;
-    
+
     if (isEdit) {
       setBusy(true);
       try {
@@ -143,7 +152,7 @@ export default function GroupModal({
         }
         const created = await g.createGroup(trimmed, ids);
         toast.info('Группа создана');
-        
+
         // Загружаем аватарку если была выбрана
         if (avatarFile) {
           try {
@@ -153,7 +162,7 @@ export default function GroupModal({
             toast.error(err?.message || 'Не удалось загрузить аватар');
           }
         }
-        
+
         onCreated?.(created);
         onClose?.();
       } else if (isEdit && canEditGroup) {
@@ -203,7 +212,7 @@ export default function GroupModal({
   const onMemberContext = (e, member) => {
     e.preventDefault();
     // Проверяем права: owner и admin могут кикать, но только owner может управлять ролями
-    const myRole = group.members.find(m => m.id === auth.user.id)?.role;
+    const myRole = group.members.find((m) => m.id === auth.user.id)?.role;
     if (myRole !== 'owner' && myRole !== 'admin') return;
     // Нельзя управлять собой
     if (member.id === auth.user.id) return;
@@ -256,7 +265,8 @@ export default function GroupModal({
     await g.addMembers(group.id, memberIds);
   };
 
-  const title = mode === 'create' ? 'Новая группа' : (canEditGroup ? 'Редактировать группу' : 'Группа');
+  const title =
+    mode === 'create' ? 'Новая группа' : canEditGroup ? 'Редактировать группу' : 'Группа';
 
   const reduce = useReducedMotion();
   const overlayV = reduce ? reducedVariants(overlayVariants) : overlayVariants;
@@ -372,23 +382,27 @@ export default function GroupModal({
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold">
-                Участники {isEdit ? `(${group.members.length}/${MEMBER_LIMIT})` : `(${selectedIds.size + 1}/${MEMBER_LIMIT})`}
+                Участники{' '}
+                {isEdit
+                  ? `(${group.members.length}/${MEMBER_LIMIT})`
+                  : `(${selectedIds.size + 1}/${MEMBER_LIMIT})`}
               </div>
-              {isEdit && (isOwner || group.members.find(m => m.id === auth.user.id)?.role === 'admin') && (
-                <button
-                  onClick={() => setShowInviteModal(true)}
-                  disabled={busy || group.members.length >= MEMBER_LIMIT}
-                  className="text-xs text-accent hover:text-accent-hover flex items-center gap-1"
-                  type="button"
-                >
-                  <UserPlus size={12} /> Пригласить
-                </button>
-              )}
+              {isEdit &&
+                (isOwner || group.members.find((m) => m.id === auth.user.id)?.role === 'admin') && (
+                  <button
+                    onClick={() => setShowInviteModal(true)}
+                    disabled={busy || group.members.length >= MEMBER_LIMIT}
+                    className="text-xs text-accent hover:text-accent-hover flex items-center gap-1"
+                    type="button"
+                  >
+                    <UserPlus size={12} /> Пригласить
+                  </button>
+                )}
             </div>
             {isEdit ? (
               <div className="space-y-1 max-h-64 overflow-y-auto">
                 {group.members.map((m) => {
-                  const myRole = group.members.find(mem => mem.id === auth.user.id)?.role;
+                  const myRole = group.members.find((mem) => mem.id === auth.user.id)?.role;
                   const canManage = myRole === 'owner' || myRole === 'admin';
                   const canManageRoles = myRole === 'owner';
                   const isMe = m.id === auth.user.id;
@@ -403,24 +417,30 @@ export default function GroupModal({
                       <div className="flex-1 min-w-0 text-sm">
                         {getDisplayName(m)}
                         {isOwner && (
-                          <span className="ml-1.5 text-[10px] uppercase text-accent font-semibold">owner</span>
+                          <span className="ml-1.5 text-[10px] uppercase text-accent font-semibold">
+                            owner
+                          </span>
                         )}
                         {m.role === 'admin' && (
-                          <span className="ml-1.5 text-[10px] uppercase text-yellow-400 font-semibold">admin</span>
+                          <span className="ml-1.5 text-[10px] uppercase text-yellow-400 font-semibold">
+                            admin
+                          </span>
                         )}
                       </div>
-                      {canManage && !isMe && !(myRole === 'admin' && (isOwner || m.role === 'admin')) && (
-                        <button
-                          onClick={(e) => {
-                            e.preventDefault();
-                            onMemberContext(e, m);
-                          }}
-                          className="p-1 hover:bg-bg-3 rounded text-slate-400 hover:text-slate-200"
-                          type="button"
-                        >
-                          <MoreVertical size={14} />
-                        </button>
-                      )}
+                      {canManage &&
+                        !isMe &&
+                        !(myRole === 'admin' && (isOwner || m.role === 'admin')) && (
+                          <button
+                            onClick={(e) => {
+                              e.preventDefault();
+                              onMemberContext(e, m);
+                            }}
+                            className="p-1 hover:bg-bg-3 rounded text-slate-400 hover:text-slate-200"
+                            type="button"
+                          >
+                            <MoreVertical size={14} />
+                          </button>
+                        )}
                     </div>
                   );
                 })}
@@ -445,19 +465,27 @@ export default function GroupModal({
                           sel ? 'bg-accent/20 border border-accent/40' : 'hover:bg-bg-2'
                         }`}
                       >
-                        <Avatar name={getDisplayName(u)} src={getAvatarUrl(u)} size={28} online={u.online} showStatus />
+                        <Avatar
+                          name={getDisplayName(u)}
+                          src={getAvatarUrl(u)}
+                          size={28}
+                          online={u.online}
+                          showStatus
+                        />
                         <div className="flex-1 min-w-0">
                           <div className="text-sm text-slate-100 truncate">{getDisplayName(u)}</div>
                           <div className="text-xs text-slate-500 truncate">@{u.username}</div>
                         </div>
-                        {sel ? <UserMinus size={14} className="text-accent" /> : <UserPlus size={14} className="text-slate-500" />}
+                        {sel ? (
+                          <UserMinus size={14} className="text-accent" />
+                        ) : (
+                          <UserPlus size={14} className="text-slate-500" />
+                        )}
                       </button>
                     );
                   })}
                   {candidates.length === 0 && (
-                    <div className="text-center text-slate-500 text-sm py-4">
-                      Никого не найдено
-                    </div>
+                    <div className="text-center text-slate-500 text-sm py-4">Никого не найдено</div>
                   )}
                 </div>
               </>
@@ -469,23 +497,40 @@ export default function GroupModal({
           {isEdit ? (
             <div className="flex items-center gap-2">
               {isOwner ? (
-                <button onClick={destroy} disabled={busy} className="btn-ghost text-red-400" type="button">
+                <button
+                  onClick={destroy}
+                  disabled={busy}
+                  className="btn-ghost text-red-400"
+                  type="button"
+                >
                   <Trash2 size={14} /> Удалить
                 </button>
               ) : (
-                <button onClick={leave} disabled={busy} className="btn-ghost text-red-400" type="button">
+                <button
+                  onClick={leave}
+                  disabled={busy}
+                  className="btn-ghost text-red-400"
+                  type="button"
+                >
                   <UserMinus size={14} /> Выйти
                 </button>
               )}
             </div>
-          ) : <div />}
+          ) : (
+            <div />
+          )}
 
           <div className="flex items-center gap-2">
             <button onClick={onClose} disabled={busy} className="btn-ghost" type="button">
               Отмена
             </button>
             {(mode === 'create' || canEditGroup) && (
-              <button onClick={submit} disabled={busy || !name.trim()} className="btn-primary" type="button">
+              <button
+                onClick={submit}
+                disabled={busy || !name.trim()}
+                className="btn-primary"
+                type="button"
+              >
                 <Check size={14} />
                 {mode === 'create' ? 'Создать' : 'Сохранить'}
               </button>
@@ -508,21 +553,23 @@ export default function GroupModal({
             onClose={() => setMemberMenu(null)}
             items={[
               ...(memberMenu.myRole === 'owner' && memberMenu.userRole === 'member'
-                ? [{
-                    label: 'Повысить до админа',
-                    icon: <Shield size={14} />,
-                    onClick: () => onPromoteMember(memberMenu.userId),
-                  }]
-                : []
-              ),
+                ? [
+                    {
+                      label: 'Повысить до админа',
+                      icon: <Shield size={14} />,
+                      onClick: () => onPromoteMember(memberMenu.userId),
+                    },
+                  ]
+                : []),
               ...(memberMenu.myRole === 'owner' && memberMenu.userRole === 'admin'
-                ? [{
-                    label: 'Понизить до участника',
-                    icon: <ShieldAlert size={14} />,
-                    onClick: () => onDemoteMember(memberMenu.userId),
-                  }]
-                : []
-              ),
+                ? [
+                    {
+                      label: 'Понизить до участника',
+                      icon: <ShieldAlert size={14} />,
+                      onClick: () => onDemoteMember(memberMenu.userId),
+                    },
+                  ]
+                : []),
               {
                 label: 'Кикнуть из группы',
                 icon: <UserMinus size={14} />,

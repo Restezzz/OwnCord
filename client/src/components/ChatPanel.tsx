@@ -1,14 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Phone, Video, ArrowLeft, Send, Mic, Pencil, Trash2, Paperclip,
-  Users as UsersIcon, Settings as SettingsIcon, X, File as FileIcon, Smile,
+  Phone,
+  Video,
+  ArrowLeft,
+  Send,
+  Mic,
+  Pencil,
+  Trash2,
+  Paperclip,
+  Users as UsersIcon,
+  Settings as SettingsIcon,
+  X,
+  File as FileIcon,
+  Smile,
 } from 'lucide-react';
 import Avatar from './Avatar';
 import ContextMenu from './ContextMenu';
 import ReactionPicker from './ReactionPicker';
 import VoiceRecorder from './VoiceRecorder';
 import MessageList from './MessageList';
-import { getDisplayName, getAvatarUrl, hasCustomDisplayName, formatDuration, isDeletedUser } from '../utils/user';
+import {
+  getDisplayName,
+  getAvatarUrl,
+  hasCustomDisplayName,
+  formatDuration,
+  isDeletedUser,
+} from '../utils/user';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
 
@@ -90,7 +107,9 @@ export default function ChatPanel({
         const n = Number(raw);
         if (Number.isFinite(n) && n >= CALL_BLOCK_MIN_HEIGHT) return n;
       }
-    } catch { /* */ }
+    } catch {
+      /* */
+    }
     return CALL_HEIGHT_DEFAULT;
   });
   const [resizing, setResizing] = useState(false);
@@ -98,7 +117,11 @@ export default function ChatPanel({
   // Сохраняем в effect, а не в onPointerUp, чтобы клавиатурные изменения
   // высоты (если когда-то добавим) тоже персистились без дубликата кода.
   useEffect(() => {
-    try { localStorage.setItem(CALL_HEIGHT_STORAGE_KEY, String(callHeight)); } catch { /* */ }
+    try {
+      localStorage.setItem(CALL_HEIGHT_STORAGE_KEY, String(callHeight));
+    } catch {
+      /* */
+    }
   }, [callHeight]);
   // Авто-зажим callHeight при ресайзе окна: если окно стало уже/ниже,
   // сохранённая высота могла стать больше, чем доступно (превратило бы
@@ -120,36 +143,39 @@ export default function ChatPanel({
     return () => window.removeEventListener('resize', clamp);
   }, [callSlot]);
 
-  const handleCallResizeStart = useCallback((e: React.PointerEvent) => {
-    // Только основная кнопка / тач — игнорируем правую/среднюю.
-    if (e.button !== undefined && e.button !== 0) return;
-    e.preventDefault();
-    const startY = e.clientY;
-    const startH = callHeight;
-    setResizing(true);
+  const handleCallResizeStart = useCallback(
+    (e: React.PointerEvent) => {
+      // Только основная кнопка / тач — игнорируем правую/среднюю.
+      if (e.button !== undefined && e.button !== 0) return;
+      e.preventDefault();
+      const startY = e.clientY;
+      const startH = callHeight;
+      setResizing(true);
 
-    const onMove = (ev: PointerEvent) => {
-      const root = rootRef.current;
-      const block = callBlockRef.current;
-      if (!root || !block) return;
-      const rootBottom = root.getBoundingClientRect().bottom;
-      const blockTop = block.getBoundingClientRect().top;
-      const available = rootBottom - blockTop;
-      const maxH = Math.max(CALL_BLOCK_MIN_HEIGHT, available - CALL_CHAT_MIN_HEIGHT);
-      const desired = startH + (ev.clientY - startY);
-      const next = Math.max(CALL_BLOCK_MIN_HEIGHT, Math.min(maxH, desired));
-      setCallHeight(next);
-    };
-    const onUp = () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointercancel', onUp);
-      setResizing(false);
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', onUp);
-  }, [callHeight]);
+      const onMove = (ev: PointerEvent) => {
+        const root = rootRef.current;
+        const block = callBlockRef.current;
+        if (!root || !block) return;
+        const rootBottom = root.getBoundingClientRect().bottom;
+        const blockTop = block.getBoundingClientRect().top;
+        const available = rootBottom - blockTop;
+        const maxH = Math.max(CALL_BLOCK_MIN_HEIGHT, available - CALL_CHAT_MIN_HEIGHT);
+        const desired = startH + (ev.clientY - startY);
+        const next = Math.max(CALL_BLOCK_MIN_HEIGHT, Math.min(maxH, desired));
+        setCallHeight(next);
+      };
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onUp);
+        setResizing(false);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+    },
+    [callHeight],
+  );
   const lastTypingSentAtRef = useRef(0);
 
   const isGroup = !!group;
@@ -193,10 +219,7 @@ export default function ChatPanel({
 
   const sendTypingStart = useCallback(() => {
     const now = Date.now();
-    if (
-      typingActiveRef.current
-      && now - lastTypingSentAtRef.current < TYPING_SEND_INTERVAL_MS
-    ) {
+    if (typingActiveRef.current && now - lastTypingSentAtRef.current < TYPING_SEND_INTERVAL_MS) {
       return;
     }
     onTypingChange?.(true);
@@ -204,9 +227,12 @@ export default function ChatPanel({
     lastTypingSentAtRef.current = now;
   }, [onTypingChange]);
 
-  useEffect(() => () => {
-    stopTyping();
-  }, [stopTyping, target?.id, isGroup]);
+  useEffect(
+    () => () => {
+      stopTyping();
+    },
+    [stopTyping, target?.id, isGroup],
+  );
 
   if (!target) {
     // Если активен звонок, но чат ещё не выбран — всё равно показываем
@@ -270,9 +296,15 @@ export default function ChatPanel({
   const commitEdit = async () => {
     const id = editingId;
     const next = editDraft.trim();
-    if (!id || !next) { cancelEdit(); return; }
+    if (!id || !next) {
+      cancelEdit();
+      return;
+    }
     const existing = messages.find((m) => m.id === id);
-    if (existing && next === existing.content) { cancelEdit(); return; }
+    if (existing && next === existing.content) {
+      cancelEdit();
+      return;
+    }
     try {
       await onEditMessage?.(id, next);
     } finally {
@@ -307,11 +339,11 @@ export default function ChatPanel({
       onSendFile?.(null, { error: 'too-large', limit: maxFileBytes });
       return;
     }
-    setPendingAttachments(prev => [...prev, file]);
+    setPendingAttachments((prev) => [...prev, file]);
   };
 
   const removePendingAttachment = (index) => {
-    setPendingAttachments(prev => prev.filter((_, i) => i !== index));
+    setPendingAttachments((prev) => prev.filter((_, i) => i !== index));
   };
 
   const onFileChange = async (e) => {
@@ -332,7 +364,9 @@ export default function ChatPanel({
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
-    const files = Array.from(e.dataTransfer.files).filter((f: File) => f.type.startsWith('image/') || f.type.startsWith('video/'));
+    const files = Array.from(e.dataTransfer.files).filter(
+      (f: File) => f.type.startsWith('image/') || f.type.startsWith('video/'),
+    );
     for (const file of files) {
       addPendingAttachment(file);
     }
@@ -367,13 +401,13 @@ export default function ChatPanel({
     if (!reactionPicker) return;
     const messageId = reactionPicker.messageId;
     const groupId = isGroup ? group.id : undefined;
-    
+
     try {
       await api.addReaction(auth?.token, messageId, emoji, groupId);
     } catch (err) {
       console.error('Failed to add reaction:', err);
     }
-    
+
     setReactionPicker(null);
   };
 
@@ -387,10 +421,12 @@ export default function ChatPanel({
   };
 
   const menuMessage = menu ? messages.find((m) => m.id === menu.messageId) : null;
-  const reactionMessage = reactionPicker ? messages.find((m) => m.id === reactionPicker.messageId) : null;
+  const reactionMessage = reactionPicker
+    ? messages.find((m) => m.id === reactionPicker.messageId)
+    : null;
 
-  const displayName = isGroup ? (group.name || 'Группа') : getDisplayName(peer);
-  const avatarUrl = isGroup ? (group.avatarPath || null) : getAvatarUrl(peer);
+  const displayName = isGroup ? group.name || 'Группа' : getDisplayName(peer);
+  const avatarUrl = isGroup ? group.avatarPath || null : getAvatarUrl(peer);
   // Удалённому аккаунту нельзя звонить и писать — история остаётся
   // read-only. Сами кнопки скрываем, а поле ввода делаем disabled.
   const peerDeleted = !isGroup && isDeletedUser(peer);
@@ -399,18 +435,19 @@ export default function ChatPanel({
     if (!isGroup) return 'печатает…';
     const firstName = getDisplayName(typingUsers[0]);
     const rest = typingUsers.length - 1;
-    return rest > 0
-      ? `${firstName} и ещё ${rest} печатают…`
-      : `${firstName} печатает…`;
+    return rest > 0 ? `${firstName} и ещё ${rest} печатают…` : `${firstName} печатает…`;
   })();
-  const subtitle = typingLabel || (isGroup
-    ? `${group.members?.length || 0} участ.`
-    : peerDeleted
-      ? 'аккаунт удалён'
-      : (hasCustomDisplayName(peer) ? `@${peer.username} • ` : '') + (peer.online ? 'в сети' : 'не в сети'));
+  const subtitle =
+    typingLabel ||
+    (isGroup
+      ? `${group.members?.length || 0} участ.`
+      : peerDeleted
+        ? 'аккаунт удалён'
+        : (hasCustomDisplayName(peer) ? `@${peer.username} • ` : '') +
+          (peer.online ? 'в сети' : 'не в сети'));
 
   return (
-    <div 
+    <div
       ref={rootRef}
       className={`flex flex-col h-full ${isDragging ? 'ring-2 ring-accent ring-inset' : ''} ${
         resizing ? 'select-none' : ''
@@ -463,7 +500,9 @@ export default function ChatPanel({
               появлении «печатает…». */}
           <div className="min-w-0 w-[130px] sm:w-[150px] md:w-[170px]">
             <div className="truncate font-semibold">{displayName}</div>
-            <div className={`text-xs truncate ${typingLabel ? 'text-slate-300' : 'text-slate-500'}`}>
+            <div
+              className={`text-xs truncate ${typingLabel ? 'text-slate-300' : 'text-slate-500'}`}
+            >
               {subtitle}
             </div>
           </div>
@@ -620,7 +659,8 @@ export default function ChatPanel({
       <div className="p-3 border-t border-border">
         {peerDeleted ? (
           <div className="px-3 py-2 rounded-lg bg-bg-3 text-slate-400 text-sm text-center">
-            Этот аккаунт был удалён. Написать или позвонить уже не получится — история остаётся только для чтения.
+            Этот аккаунт был удалён. Написать или позвонить уже не получится — история остаётся
+            только для чтения.
           </div>
         ) : recording ? (
           <VoiceRecorder
@@ -633,12 +673,7 @@ export default function ChatPanel({
           />
         ) : (
           <div className="flex items-end gap-2">
-            <input
-              ref={fileInputRef}
-              type="file"
-              className="hidden"
-              onChange={onFileChange}
-            />
+            <input ref={fileInputRef} type="file" className="hidden" onChange={onFileChange} />
             <button
               onClick={onPickFile}
               disabled={uploading}
@@ -696,7 +731,7 @@ export default function ChatPanel({
             {pendingAttachments.map((file, index) => {
               const isImage = file.type.startsWith('image/');
               const isVideo = file.type.startsWith('video/');
-              const previewUrl = (isImage || isVideo) ? URL.createObjectURL(file) : null;
+              const previewUrl = isImage || isVideo ? URL.createObjectURL(file) : null;
               return (
                 <div key={index} className="relative group">
                   {isImage ? (
@@ -705,25 +740,18 @@ export default function ChatPanel({
                       onClick={() => setPreviewZoom(previewUrl)}
                       className="w-16 h-16 object-cover rounded-lg border border-border overflow-hidden"
                     >
-                      <img
-                        src={previewUrl}
-                        alt={file.name}
-                        className="w-16 h-16 object-cover"
-                      />
+                      <img src={previewUrl} alt={file.name} className="w-16 h-16 object-cover" />
                     </button>
                   ) : isVideo ? (
                     <div className="w-16 h-16 rounded-lg border border-border bg-bg-3 grid place-items-center overflow-hidden">
-                      <video
-                        src={previewUrl}
-                        className="w-16 h-16 object-cover"
-                        muted
-                      />
+                      <video src={previewUrl} className="w-16 h-16 object-cover" muted />
                     </div>
                   ) : (
                     <div className="w-16 h-16 rounded-lg border border-border bg-bg-3 grid place-items-center flex-col gap-0.5 p-1">
                       <FileIcon size={16} className="text-slate-400 shrink-0" />
                       <div className="text-[9px] text-slate-400 truncate w-full text-center leading-tight">
-                        {file.name.slice(0, 12)}{file.name.length > 12 ? '...' : ''}
+                        {file.name.slice(0, 12)}
+                        {file.name.length > 12 ? '...' : ''}
                       </div>
                     </div>
                   )}
@@ -765,11 +793,13 @@ export default function ChatPanel({
           onClose={() => setMenu(null)}
           items={[
             ...(menuMessage.kind === 'text'
-              ? [{
-                  label: 'Редактировать',
-                  icon: <Pencil size={14} />,
-                  onClick: () => startEdit(menuMessage),
-                }]
+              ? [
+                  {
+                    label: 'Редактировать',
+                    icon: <Pencil size={14} />,
+                    onClick: () => startEdit(menuMessage),
+                  },
+                ]
               : []),
             {
               label: 'Удалить',

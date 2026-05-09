@@ -46,9 +46,7 @@ describe('users', () => {
        VALUES (?, ?, '', ?, 'call')`,
     ).run(alice.user.id, bob.user.id, bobLast);
 
-    const res = await request(app)
-      .get('/api/users')
-      .set('Authorization', `Bearer ${alice.token}`);
+    const res = await request(app).get('/api/users').set('Authorization', `Bearer ${alice.token}`);
     expect(res.status).toBe(200);
 
     const bobRow = res.body.users.find((u) => u.id === bob.user.id);
