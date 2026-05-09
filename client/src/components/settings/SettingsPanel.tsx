@@ -3,12 +3,30 @@
 // (см. ./ProfileTab, ./PasswordTab, …) — этот файл только роутит между
 // ними и решает, какие пункты вообще показывать (admin/desktop only).
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { Bell, Headphones, KeyRound, Keyboard, Lock, ShieldCheck, User, X } from 'lucide-react';
+import {
+  Bell,
+  Download,
+  Headphones,
+  KeyRound,
+  Keyboard,
+  Lock,
+  RefreshCw,
+  ShieldCheck,
+  User,
+  X,
+} from 'lucide-react';
 import { modalVariants, overlayVariants, reducedVariants } from '../../utils/motion';
 import { useAuth } from '../../context/AuthContext';
-import { isDesktop, getDesktopVersion } from '../../utils/desktop';
+import {
+  isDesktop,
+  getDesktopVersion,
+  checkForUpdates,
+  installUpdate,
+  onUpdateEvent,
+  type UpdateEvent,
+} from '../../utils/desktop';
 import { ProfileTab } from './ProfileTab';
 import { PasswordTab } from './PasswordTab';
 import { AudioTab } from './AudioTab';
@@ -51,6 +69,77 @@ export default function SettingsPanel({ open, onClose }: { open: boolean; onClos
       alive = false;
     };
   }, []);
+
+  // Локальное состояние ручной проверки обновлений (только в десктопе).
+  // updateState отражает последнее событие из onUpdateEvent — этого
+  // достаточно для inline-фидбэка в подвале сайдбара. Полный UI прогресса
+  // и кнопка перезапуска живут в UpdateToast, чтобы не дублировать логику.
+  const [updateState, setUpdateState] = useState<UpdateEvent | null>(null);
+  const [checking, setChecking] = useState(false);
+  useEffect(() => {
+    if (!desktop) return;
+    return onUpdateEvent((ev) => {
+      setUpdateState(ev);
+      // 'checking' приходит от main и снаружи (фоновая периодическая
+      // проверка). Сбросим локальный флаг только на терминальных
+      // состояниях, чтобы кнопка не разблокировалась раньше времени.
+      if (ev.kind !== 'checking') setChecking(false);
+    });
+  }, [desktop]);
+
+  const updateInFlight =
+    checking ||
+    updateState?.kind === 'checking' ||
+    updateState?.kind === 'available' ||
+    updateState?.kind === 'progress';
+  const updateReady = updateState?.kind === 'downloaded';
+
+  const onUpdateButton = useCallback(async () => {
+    if (updateReady) {
+      void installUpdate();
+      return;
+    }
+    if (updateInFlight) return;
+    setChecking(true);
+    setUpdateState({ kind: 'checking' });
+    const res = await checkForUpdates();
+    if (!res) {
+      // Не в десктопе либо preload без хендлера — просто откатываем.
+      setChecking(false);
+      setUpdateState(null);
+      return;
+    }
+    if (!res.ok) {
+      setChecking(false);
+      setUpdateState({ kind: 'error', message: res.error || 'Не удалось проверить' });
+    }
+    // При ok=true финальный стейт ('available'/'none'/'downloaded'/'error')
+    // придёт через onUpdateEvent — там и обновим UI.
+  }, [updateReady, updateInFlight]);
+
+  const updateStatusText = (() => {
+    if (!updateState) return null;
+    switch (updateState.kind) {
+      case 'checking':
+        return 'Проверяю…';
+      case 'available':
+        return updateState.version
+          ? `Доступна ${updateState.version}, скачиваю…`
+          : 'Доступно обновление, скачиваю…';
+      case 'progress':
+        return `Загрузка ${Math.max(0, Math.min(100, Math.round(updateState.percent)))}%`;
+      case 'downloaded':
+        return updateState.version
+          ? `Готово к установке (${updateState.version})`
+          : 'Готово к установке';
+      case 'none':
+        return 'Установлена последняя версия';
+      case 'error':
+        return `Ошибка: ${updateState.message}`;
+      default:
+        return null;
+    }
+  })();
   const reduce = useReducedMotion();
   const overlayV = reduce ? reducedVariants(overlayVariants) : overlayVariants;
   const panelV = reduce ? reducedVariants(modalVariants) : modalVariants;
@@ -92,12 +181,57 @@ export default function SettingsPanel({ open, onClose }: { open: boolean; onClos
                   </button>
                 );
               })}
-              {/* Версия десктоп-приложения — только в Electron'е, прибита
-                  к низу сайдбара. На вебе — пусто (на горизонтальном скролле
-                  тоже скроется через hidden md:block). */}
-              {desktopVersion && (
-                <div className="hidden md:block mt-auto pt-3 px-2 text-[10px] text-slate-500 select-text">
-                  OwnCord {desktopVersion}
+              {/* Подвал сайдбара — только в Electron'е, прибит к низу.
+                  Содержит: версию приложения, кнопку ручной проверки
+                  обновлений и короткий статус. На вебе/мобильном горизонтальном
+                  скролле скрыт через hidden md:flex. */}
+              {desktop && (
+                <div className="hidden md:flex mt-auto pt-3 px-2 flex-col gap-1.5">
+                  {desktopVersion && (
+                    <div className="text-[10px] text-slate-500 select-text">
+                      OwnCord {desktopVersion}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={onUpdateButton}
+                    disabled={updateInFlight && !updateReady}
+                    className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] transition-colors ${
+                      updateReady
+                        ? 'bg-accent text-white hover:bg-accent-hover'
+                        : 'bg-bg-3 text-slate-200 hover:bg-bg-3/70'
+                    } disabled:opacity-60 disabled:cursor-not-allowed`}
+                    title={
+                      updateReady
+                        ? 'Перезапустить и применить обновление'
+                        : 'Проверить наличие обновлений сейчас'
+                    }
+                  >
+                    {updateReady ? (
+                      <Download size={12} className="flex-shrink-0" />
+                    ) : (
+                      <RefreshCw
+                        size={12}
+                        className={`flex-shrink-0 ${updateInFlight ? 'animate-spin' : ''}`}
+                      />
+                    )}
+                    <span>
+                      {updateReady ? 'Перезапустить и обновить' : 'Проверить обновления'}
+                    </span>
+                  </button>
+                  {updateStatusText && (
+                    <div
+                      className={`text-[10px] leading-snug break-words ${
+                        updateState?.kind === 'error'
+                          ? 'text-danger'
+                          : updateState?.kind === 'downloaded'
+                            ? 'text-success'
+                            : 'text-slate-500'
+                      }`}
+                    >
+                      {updateStatusText}
+                    </div>
+                  )}
                 </div>
               )}
             </aside>
