@@ -22,6 +22,22 @@ export type ShortcutAction = 'toggleMute' | 'toggleDeafen';
 // Примеры: 'CommandOrControl+Shift+M', 'Alt+Space', 'F8'.
 export type Shortcuts = Partial<Record<ShortcutAction, string | null>>;
 
+// Жизненный цикл апдейта. Соответствует event'ам electron-updater'а
+// в main-процессе (см. desktop/autoUpdater.js):
+//   'checking'   — пошёл запрос за latest.yml
+//   'available'  — есть новая версия, скачивается
+//   'none'       — текущая версия актуальна
+//   'progress'   — идёт скачивание (приходит много раз)
+//   'downloaded' — апдейт готов, можно перезапускаться
+//   'error'      — что-то пошло не так
+export type UpdateEvent =
+  | { kind: 'checking' }
+  | { kind: 'available'; version?: string; releaseDate?: string }
+  | { kind: 'none' }
+  | { kind: 'progress'; percent: number; bytesPerSecond: number; transferred: number; total: number }
+  | { kind: 'downloaded'; version?: string; releaseDate?: string }
+  | { kind: 'error'; message: string };
+
 type ElectronApi = {
   isDesktop: true;
   getConfig: () => Promise<any>;
@@ -29,6 +45,9 @@ type ElectronApi = {
   getShortcuts: () => Promise<Shortcuts>;
   setShortcuts: (map: Shortcuts) => Promise<string[]>;
   onShortcut: (handler?: (action: ShortcutAction) => void) => () => void;
+  onUpdateEvent?: (handler?: (e: UpdateEvent) => void) => () => void;
+  installUpdate?: () => Promise<true>;
+  checkForUpdates?: () => Promise<{ ok: boolean; version?: string; error?: string }>;
 };
 
 declare global {
@@ -70,6 +89,49 @@ export function onShortcutEvent(
   };
   window.addEventListener('owncord:shortcut', listener as EventListener);
   return () => window.removeEventListener('owncord:shortcut', listener as EventListener);
+}
+
+/**
+ * Подписка на события автообновления (см. UpdateEvent выше).
+ * На вебе — no-op (вернёт пустой unsubscribe), что позволяет UI
+ * звать его безусловно при mount'е.
+ */
+export function onUpdateEvent(handler: (e: UpdateEvent) => void): () => void {
+  if (!isDesktop()) return () => { /* noop */ };
+  const listener = (ev: Event) => {
+    const detail = (ev as CustomEvent).detail as UpdateEvent | undefined;
+    if (!detail?.kind) return;
+    handler(detail);
+  };
+  window.addEventListener('owncord:update', listener as EventListener);
+  return () => window.removeEventListener('owncord:update', listener as EventListener);
+}
+
+/**
+ * Применить уже скачанный апдейт. Закрывает приложение, NSIS бесшумно
+ * подменит файлы, новая версия запустится. Вызывать только после того,
+ * как пришёл event { kind: 'downloaded' }.
+ */
+export async function installUpdate(): Promise<void> {
+  if (!isDesktop()) return;
+  try {
+    await window.electronAPI!.installUpdate?.();
+  } catch (e) {
+    console.warn('installUpdate failed:', e);
+  }
+}
+
+/**
+ * Ручная проверка обновлений (для кнопки в настройках).
+ * На вебе вернёт null. На десктопе — результат запроса.
+ */
+export async function checkForUpdates(): Promise<{ ok: boolean; version?: string; error?: string } | null> {
+  if (!isDesktop()) return null;
+  try {
+    return (await window.electronAPI!.checkForUpdates?.()) || null;
+  } catch (e) {
+    return { ok: false, error: (e as Error)?.message || String(e) };
+  }
 }
 
 /**

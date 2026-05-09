@@ -44,4 +44,32 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('shortcut:fired', listener);
     return () => ipcRenderer.removeListener('shortcut:fired', listener);
   },
+
+  // --- Автообновление -------------------------------------------------
+  // Подписка на жизненный цикл апдейта. payload.kind:
+  //   'checking' | 'available' | 'none' | 'progress' | 'downloaded' | 'error'
+  // Возвращает unsubscribe.
+  onUpdateEvent: (handler) => {
+    const listener = (_e, payload) => {
+      try {
+        // DOM-событие — для компонентов, которые не могут вызвать preload
+        // напрямую (хук в одном месте, listener'ы в другом).
+        window.dispatchEvent(new CustomEvent('owncord:update', { detail: payload }));
+        if (typeof handler === 'function') handler(payload);
+      } catch (err) {
+        console.warn('update handler failed:', err);
+      }
+    };
+    ipcRenderer.on('update:event', listener);
+    return () => ipcRenderer.removeListener('update:event', listener);
+  },
+
+  // Применить скачанный апдейт прямо сейчас. Под капотом
+  // autoUpdater.quitAndInstall(silent=true, runAfter=true) — приложение
+  // закроется, NSIS бесшумно подменит файлы, новая версия запустится.
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+
+  // Ручная проверка обновлений (например, кнопка в настройках).
+  // Возвращает { ok: boolean, version?: string, error?: string }.
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
 });

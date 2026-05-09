@@ -26,6 +26,7 @@ const { app, BrowserWindow, ipcMain, shell, Menu } = require('electron');
 const path = require('path');
 const config = require('./config');
 const shortcuts = require('./shortcuts');
+const autoUpdater = require('./autoUpdater');
 
 // Закрепляем имя приложения ДО любых обращений к app.getPath('userData').
 // Иначе в dev (`electron .` из desktop/) Electron берёт name из package.json
@@ -87,6 +88,10 @@ function createWindow() {
     if (cfg.hotkeysEnabled) {
       shortcuts.register(cfg.shortcuts || {}, mainWindow);
     }
+    // Автообновление: настраиваем после готовности webContents,
+    // чтобы первые события (checking/available) долетели до renderer'а.
+    // В dev (app.isPackaged === false) сам модуль no-op'ит.
+    autoUpdater.setup(mainWindow, { app, ipcMain });
   });
 
   mainWindow.on('closed', () => {

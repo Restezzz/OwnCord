@@ -8,6 +8,7 @@ import { SettingsProvider } from './context/SettingsContext';
 import { MutesProvider } from './context/MutesContext';
 import { ConfigProvider } from './context/ConfigContext';
 import { GroupsProvider } from './context/GroupsContext';
+import UpdateToast from './components/UpdateToast';
 import { attachNotificationClickHandler } from './utils/push';
 import './index.css';
 
@@ -25,6 +26,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <MutesProvider>
                 <GroupsProvider>
                   <App />
+                  <UpdateToast />
                 </GroupsProvider>
               </MutesProvider>
             </AuthProvider>

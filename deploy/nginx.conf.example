@@ -81,6 +81,36 @@ server {
     proxy_read_timeout 3600s;
   }
 
+  # --- Авто-обновление десктоп-клиента ------------------------------
+  # latest.yml + OwnCord Setup *.exe + *.blockmap раздаются как статика.
+  # electron-updater на стороне клиента качает их напрямую через nginx,
+  # минуя node — это разгружает app-сервер от 80MB-блобов.
+  # Папка на диске (по умолчанию /var/www/owncord-updates) должна быть
+  # доступна на запись юзеру, который делает релизы (см. deploy/UPDATES.md).
+  location /updates/ {
+    alias /var/www/owncord-updates/;
+    autoindex off;
+    add_header X-Content-Type-Options "nosniff" always;
+
+    # Вложенные location'ы наследуют alias родителя, так что повторять
+    # его не нужно — nginx сам подставит /var/www/owncord-updates/<file>.
+
+    # latest.yml НЕ кешируем — иначе клиенты будут «видеть» старую
+    # версию ещё долго после релиза.
+    location ~* \.ya?ml$ {
+      add_header Cache-Control "no-cache, must-revalidate" always;
+      add_header X-Content-Type-Options "nosniff" always;
+    }
+
+    # .exe и .blockmap immutable по версии (имя файла содержит версию),
+    # их можно кешировать на день — экономит трафик при retry'ах.
+    location ~* \.(exe|blockmap)$ {
+      expires 1d;
+      add_header Cache-Control "public, max-age=86400, immutable" always;
+      add_header X-Content-Type-Options "nosniff" always;
+    }
+  }
+
   # --- Загрузки/раздача файлов (стримим, не буферизуем) -------------
   # Для больших файлов (видео, голосовые до 500 МБ) важно отключить
   # буферизацию: иначе nginx складывает запрос на диск/в RAM целиком,
