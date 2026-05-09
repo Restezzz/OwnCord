@@ -24,7 +24,11 @@
 
 .PARAMETER RemoteDir
   Абсолютный путь на сервере, который раздаётся nginx-ом по /updates/.
-  По умолчанию /var/www/owncord-updates.
+  ВАЖНО: если SSH-доступ релизера ограничен через ChrootDirectory
+  /var/www (как в deploy/UPDATES.md), то внутри chroot путь будет
+  /owncord-updates, а НЕ /var/www/owncord-updates — sftp-сессия видит
+  /var/www как свой root. Поэтому дефолт = /owncord-updates.
+  Если chroot НЕ настроен — переопредели на /var/www/owncord-updates.
 
 .PARAMETER SshKey
   Путь к приватному SSH-ключу. Если не задан — используется ключ из
@@ -53,7 +57,7 @@
 param(
   [string]$RemoteHost = "owncord.patgen.ru",
   [string]$RemoteUser = "owncord-publish",
-  [string]$RemoteDir = "/var/www/owncord-updates",
+  [string]$RemoteDir = "/owncord-updates",
   [string]$SshKey = "",
   [switch]$SkipBuild
 )
@@ -120,6 +124,12 @@ $sshArgs = @()
 if ($SshKey) {
   if (-not (Test-Path $SshKey)) { throw "SSH-ключ не найден: $SshKey" }
   $sshArgs += @("-i", $SshKey)
+  # IdentitiesOnly=yes — критично: без этого OpenSSH сначала пытается
+  # ВСЕ ключи из ~/.ssh/ (id_ed25519, id_rsa, owncord-publish, …),
+  # и если хоть один из них зашифрован passphrase'ом — scp зависает
+  # на запросе passphrase ДО того, как добраться до нашего -i. С
+  # этой опцией используется только переданный ключ — никаких чужих.
+  $sshArgs += @("-o", "IdentitiesOnly=yes")
 }
 # Не падать на «Are you sure you want to continue?» при первой коннект-сессии.
 # StrictHostKeyChecking=accept-new добавляет ключ хоста в known_hosts, но
