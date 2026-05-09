@@ -22,6 +22,7 @@ import GroupCallView from '../components/GroupCallView';
 import { useCall } from '../hooks/useCall';
 import { useGroupCall } from '../hooks/useGroupCall';
 import { useSounds } from '../hooks/useSounds';
+import { useKeybinds } from '../hooks/useKeybinds';
 import { getAvatarUrl, getDisplayName, isDeletedUser } from '../utils/user';
 
 const SettingsPanel = lazy(() => import('../components/SettingsPanel'));
@@ -123,6 +124,9 @@ export default function Home() {
   const sounds = useSounds(settings);
   const call = useCall({ socket, selfUser, settings, toast, sounds });
   const groupCall = useGroupCall({ socket, selfUser, settings, toast, sounds });
+  // Регистрация глобальных хоткеев в десктоп-обёртке. На вебе хук
+  // — no-op (подробности в utils/desktop.ts и hooks/useKeybinds.ts).
+  useKeybinds(settings.keybinds);
 
   const selectedUser = useMemo(() => {
     if (!selected || selected.kind !== 'user') return null;
@@ -591,7 +595,12 @@ export default function Home() {
       if (call.state === 'idle') {
         call.start(peerUser, { withVideo: wantVideo });
       } else if (call.state === 'waiting' && call.peer?.id === peerId) {
-        call.rejoinAsCaller();
+        // start() сам корректно обработает waiting-вход (видит state и
+        // не играет исходящий звонок, идёт сразу в connecting + getMedia).
+        // rejoinAsCaller предполагал, что локальные треки живы (он
+        // создавался для in-app waiting), а после F5 они null. Поэтому
+        // унифицируем вход через start().
+        call.start(peerUser, { withVideo: wantVideo });
       } else {
         // Звонок с другим пиром или иное состояние — игнор.
         toast?.info?.('Сначала завершите текущий звонок');
@@ -662,6 +671,56 @@ export default function Home() {
     if (groupModal?.mode !== 'edit') return null;
     return groups.find((g) => g.id === groupModal.groupId) || null;
   }, [groupModal, groups]);
+
+  // Видим ли встроенный звонок внутри main? incoming-стадия отдельная —
+  // это модалка (IncomingCallModal), а не блок в чате.
+  const embeddedCallVisible = call.state !== 'idle' && call.state !== 'incoming';
+  const embeddedGroupCallVisible = groupCall.state !== 'idle';
+
+  // Авто-переключение чата на пира звонка ровно в момент его «оживления»
+  // (idle/incoming → calling/connecting/in-call/waiting). Это нужно из-за
+  // того, что окно звонка по фидбеку показывается ТОЛЬКО в чате с пиром
+  // звонка (см. callInThisChat ниже). Иначе пользователь, инициирующий
+  // звонок из контекстного меню сайдбара или принимающий входящий
+  // через модалку, не увидел бы окно звонка вообще, пока вручную не
+  // зайдёт в чат с пиром. Дальнейшие переходы (calling → connecting →
+  // in-call) уже не дёргают select — пользователь может спокойно уйти
+  // в другой чат, и звонок остаётся жить в фоне.
+  const lastCallStateRef = useRef('idle');
+  useEffect(() => {
+    const prev = lastCallStateRef.current;
+    const cur = call.state;
+    lastCallStateRef.current = cur;
+    const wasOff = prev === 'idle' || prev === 'incoming';
+    const wasActive = cur !== 'idle' && cur !== 'incoming';
+    if (wasOff && wasActive && call.peer?.id) {
+      setSelected({ kind: 'user', id: call.peer.id });
+      setSidebarOpen(false);
+    }
+  }, [call.state, call.peer?.id]);
+  const lastGroupCallStateRef = useRef('idle');
+  useEffect(() => {
+    const prev = lastGroupCallStateRef.current;
+    const cur = groupCall.state;
+    lastGroupCallStateRef.current = cur;
+    if (prev === 'idle' && cur !== 'idle' && groupCall.group?.id) {
+      setSelected({ kind: 'group', id: groupCall.group.id });
+      setSidebarOpen(false);
+    }
+  }, [groupCall.state, groupCall.group?.id]);
+
+  // По фидбеку: окно звонка показываем ТОЛЬКО в чате с тем, с кем
+  // сейчас разговариваешь. Сам звонок при этом продолжается (audio/
+  // video идут как обычно), просто UI прячется когда листаешь другие
+  // чаты — и снова появляется при возвращении в нужный.
+  const callInThisChat = embeddedCallVisible
+    && selected?.kind === 'user'
+    && selectedUser
+    && call.peer?.id === selectedUser.id;
+  const groupCallInThisChat = embeddedGroupCallVisible
+    && selected?.kind === 'group'
+    && selectedGroup
+    && groupCall.group?.id === selectedGroup.id;
 
   const key = selected ? chatKey(selected) : null;
   const messages = (key && messagesByChat[key]) || [];
@@ -770,6 +829,11 @@ export default function Home() {
             <div className="text-sm text-slate-400">Выбери собеседника или группу</div>
           </div>
         )}
+
+        {/* Активный звонок (1:1 или групповой) передаётся в ChatPanel
+            как callSlot — он рендерится СРАЗУ ПОД хедером (имя+кнопки),
+            ВЫШЕ списка сообщений. Это и есть «дискорд-стайл» из
+            фидбека: ник наверху, звонок под ним, чат ещё ниже. */}
         <ChatPanel
           peer={selectedUser}
           group={selectedGroup}
@@ -803,6 +867,13 @@ export default function Home() {
           firstUnreadId={firstUnreadId}
           maxFileBytes={maxUploadBytes}
           usersById={usersById}
+          callSlot={
+            callInThisChat
+              ? <CallView call={call} embedded selfUser={selfUser} />
+              : groupCallInThisChat
+                ? <GroupCallView call={groupCall} usersById={usersById} selfId={selfUser.id} embedded />
+                : null
+          }
         />
       </main>
 
@@ -931,14 +1002,10 @@ export default function Home() {
         </AnimatePresence>
       </Suspense>
 
-      {/* Overlay: входящий звонок */}
+      {/* Входящий звонок — это всё ещё модалка-оверлей: чтобы пользователь
+          гарантированно увидел приглашение, даже если у него открыт другой
+          чат и сайдбар свернут. Сам активный звонок встроен в main выше. */}
       <IncomingCallModal call={call} />
-
-      {/* Overlay: активный 1:1 звонок */}
-      <CallView call={call} />
-
-      {/* Overlay: активный групповой звонок */}
-      <GroupCallView call={groupCall} usersById={usersById} selfId={selfUser.id} />
 
       {/* Настройки */}
       <Suspense fallback={null}>

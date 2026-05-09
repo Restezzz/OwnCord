@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import CallMessage from '../src/components/CallMessage';
 
 const baseMsg = {
@@ -41,7 +40,12 @@ describe('CallMessage', () => {
     expect(screen.getByText(/не отвечен/)).toBeInTheDocument();
   });
 
-  it('renders Rejoin button only when status=waiting and reconnect window is open', async () => {
+  // Контракт изменился: кнопка «Подключиться» в плашке чата больше не
+  // рисуется (см. CallMessage.tsx, комментарий о том, почему её убрали).
+  // Реджойн происходит только из самого окна звонка — там у того, кто ушёл,
+  // вместо красной End-кнопки появляется зелёная Connect. Это снимает
+  // путаницу, когда оба собеседника видели в чате одинаковую кнопку.
+  it('does not render Rejoin button even in status=waiting', () => {
     const onRejoin = vi.fn();
     render(
       <CallMessage
@@ -59,14 +63,11 @@ describe('CallMessage', () => {
         onRejoin={onRejoin}
       />,
     );
-    const btn = screen.getByRole('button', { name: /Подключиться/i });
-    expect(btn).toBeInTheDocument();
-    const user = userEvent.setup();
-    await user.click(btn);
-    // Рут получает (callId, message) — message нужен, чтобы корректно
-    // открыть нужный чат при reconnect.
-    expect(onRejoin).toHaveBeenCalledTimes(1);
-    expect(onRejoin.mock.calls[0][0]).toBe('c3');
+    expect(screen.queryByRole('button', { name: /Подключиться/i })).toBeNull();
+    // Сабтайтл с таймером ожидания всё равно должен быть виден,
+    // чтобы юзер понимал «звонок ещё активен, пир ждёт реконнекта».
+    expect(screen.getByText(/ждём собеседника/i)).toBeInTheDocument();
+    expect(onRejoin).not.toHaveBeenCalled();
   });
 
   it('does not render Rejoin when call already ended', () => {

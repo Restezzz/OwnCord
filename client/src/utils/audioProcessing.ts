@@ -1,4 +1,5 @@
-// Аудио-цепочка для исходящего микрофона: HighPass → Compressor → NoiseGate → MakeupGain.
+// Аудио-цепочка для исходящего микрофона:
+//   [RNNoise?] → HighPass → Compressor → NoiseGate → MakeupGain.
 //
 // Зачем: «сырое» аудио из getUserMedia передаёт всё, что слышит микрофон —
 // гул вентилятора, удары по клавиатуре, эхо комнаты, неровные пики голоса.
@@ -6,6 +7,11 @@
 // сценарий, что в OBS: HP отрезает низкочастотный шум, компрессор
 // выравнивает громкость, шумовые ворота гасят паузы, makeup-gain
 // возвращает потерянный уровень.
+//
+// RNNoise (опциональная первая ступень): нейросетевой шумодав, гасит
+// клавиатуру/вентилятор/детский крик/уличный шум на уровень ниже того,
+// что вытягивает классический gate. Включается флагом aiNoiseSuppression
+// (см. пресет «Агрессивный»). Грузит WASM ~150 КБ при первом включении.
 //
 // Важно: AudioContext должен быть в running-состоянии. Если его
 // создавать после async-цепочки (accept→getUserMedia), он может прийти
@@ -47,6 +53,13 @@ export type AudioFilterSettings = {
 
   // Make-up gain после компрессора (компенсация просадки уровня).
   makeupGainDb?: number; // dB
+
+  // AI-шумодав (RNNoise) первой ступенью. Если true, createMicPipeline
+  // попробует загрузить WASM-модуль и вставить RnnoiseWorkletNode
+  // между source и highPass. Загрузка асинхронна: если упадёт (offline,
+  // блокировка CSP, отсутствие AudioWorklet) — пайплайн тихо
+  // обойдётся без AI и продолжит работу. См. utils/audioRnnoise.ts.
+  aiNoiseSuppression?: boolean;
 };
 
 export type MicPipeline = {
@@ -90,6 +103,7 @@ export const DEFAULT_AUDIO_FILTERS: Required<Omit<AudioFilterSettings, 'enabled'
   noiseGateAttackMs: 10,
   noiseGateReleaseMs: 80,
   makeupGainDb: 0,
+  aiNoiseSuppression: false,
 };
 
 function clampNumber(value: any, min: number, max: number, fallback: number): number {
@@ -124,6 +138,7 @@ function mergeSettings(s: AudioFilterSettings | undefined): typeof DEFAULT_AUDIO
     noiseGateAttackMs: clampNumber(s.noiseGateAttackMs, 0, 500, d.noiseGateAttackMs),
     noiseGateReleaseMs: clampNumber(s.noiseGateReleaseMs, 0, 1000, d.noiseGateReleaseMs),
     makeupGainDb: clampNumber(s.makeupGainDb, -20, 20, d.makeupGainDb),
+    aiNoiseSuppression: s.aiNoiseSuppression === true,
   };
 }
 
@@ -155,10 +170,30 @@ export async function createMicPipeline(
   const audioTracks = rawStream.getAudioTracks();
   if (!audioTracks.length) throw new Error('No audio tracks in source stream');
 
+  // ВАЖНО: ставим mergeSettings ДО создания контекста — нам нужно знать,
+  // включён ли RNNoise, чтобы выбрать sampleRate. RNNoise хочет ровно
+  // 48 kHz; для остальной цепочки sample rate не важен (Web Audio API
+  // ресэмплирует прозрачно). Ставим 48000 ТОЛЬКО когда AI запрошен,
+  // чтобы у юзеров без AI ничего не менялось (любые риски ресэмплинга
+  // никого не задевают).
+  let s = mergeSettings(settings);
+
   // Создаём контекст и СРАЗУ резюмируем — иначе MediaStreamDestination
   // может отдать «немой» track. resume() в click-цепочке (start/accept/join)
   // подхватывает sticky activation страницы и завершается успешно.
-  const ctx: AudioContext = new Ctx({ latencyHint: 'interactive' });
+  let ctx: AudioContext;
+  try {
+    ctx = s.aiNoiseSuppression
+      ? new Ctx({ latencyHint: 'interactive', sampleRate: 48000 })
+      : new Ctx({ latencyHint: 'interactive' });
+  } catch (e) {
+    // Старый Safari: бросает, если sampleRate не родной для устройства.
+    // Падаем на дефолтный конструктор и просто отключаем AI для этого
+    // сеанса (RNNoise всё равно не заработает не на 48 kHz).
+    console.warn('AudioContext({sampleRate:48000}) failed; disabling AI:', e);
+    ctx = new Ctx({ latencyHint: 'interactive' });
+    s = { ...s, aiNoiseSuppression: false };
+  }
   if (ctx.state === 'suspended') {
     try {
       await ctx.resume();
@@ -167,10 +202,21 @@ export async function createMicPipeline(
     }
   }
 
-  let s = mergeSettings(settings);
-
   // Узлы цепочки -------------------------------------------------------
   const source = ctx.createMediaStreamSource(rawStream);
+
+  // RNNoise (опционально, первая ступень). Загрузка асинхронна; если
+  // упала — просто остаёмся без AI. Узел вставляем между source и
+  // inputGain, и держим ссылку, чтобы корректно destroy() в финале.
+  let rnnoiseNode: any = null;
+  if (s.aiNoiseSuppression) {
+    try {
+      const { createRnnoiseNode } = await import('./audioRnnoise');
+      rnnoiseNode = await createRnnoiseNode(ctx);
+    } catch (e) {
+      console.warn('RNNoise unavailable, falling back to plain pipeline:', e);
+    }
+  }
 
   const inputGain = ctx.createGain();
   inputGain.gain.value = s.inputVolume;
@@ -219,7 +265,16 @@ export async function createMicPipeline(
   const destination = ctx.createMediaStreamDestination();
 
   // Соединяем -------------------------------------------------------
-  source.connect(inputGain);
+  // Если RNNoise загрузился — он становится первой ступенью:
+  //   source → rnnoise → inputGain → ...
+  // Иначе классическая цепочка:
+  //   source → inputGain → ...
+  if (rnnoiseNode) {
+    source.connect(rnnoiseNode as AudioNode);
+    (rnnoiseNode as AudioNode).connect(inputGain);
+  } else {
+    source.connect(inputGain);
+  }
   inputGain.connect(highPass);
   highPass.connect(compressor);
   compressor.connect(gateGain);
@@ -297,6 +352,10 @@ export async function createMicPipeline(
 
   const updateSettings: MicPipeline['updateSettings'] = (next) => {
     const merged = mergeSettings({ ...live.s, ...next });
+    // Внимание: aiNoiseSuppression тут НЕ перецепить — RNNoise-узел
+    // фиксируется в момент создания pipeline'а (нужен async-import
+    // WASM и другая sample-rate у контекста). Изменение этого флага
+    // вступит в силу при следующем запуске звонка / тесте микрофона.
     live.s = merged;
     // Аккуратно применяем — некоторые AudioParam требуют setValueAtTime.
     try {
@@ -324,6 +383,13 @@ export async function createMicPipeline(
     cancelled = true;
     cancelAnimationFrame(rafId);
     try { source.disconnect(); } catch { /* */ }
+    if (rnnoiseNode) {
+      try { (rnnoiseNode as any).disconnect?.(); } catch { /* */ }
+      // У RnnoiseWorkletNode из @sapphi-red есть свой destroy(), который
+      // освобождает WASM-память внутри worklet'а. Без него worklet
+      // тихо утекает по 0.5 МБ/звонок.
+      try { (rnnoiseNode as any).destroy?.(); } catch { /* */ }
+    }
     try { inputGain.disconnect(); } catch { /* */ }
     try { highPass.disconnect(); } catch { /* */ }
     try { compressor.disconnect(); } catch { /* */ }
@@ -352,6 +418,264 @@ export async function createMicPipeline(
   };
 }
 
+// =============================================================================
+// Микшер «микрофон + системный звук стрима»
+// =============================================================================
+//
+// Зачем нужен:
+//   У RTCPeerConnection в нашей схеме ровно один audio-sender (одна
+//   m-секция в SDP). Если при включении демонстрации экрана со звуком
+//   тупо replaceTrack(audioSender, screenAudioTrack), голос пира перестаёт
+//   доходить — это и был баг "стрим со звуком ⇒ меня не слышно".
+//
+// Что делает:
+//   Открывает свой AudioContext, подсоединяет туда два source'а — мик
+//   (уже после нашей обработки HighPass→Compressor→Gate→MakeupGain)
+//   и системный звук стрима — каждый со своим Gain-узлом, и сводит их
+//   в один MediaStreamDestination. Получившийся audio-track ставится
+//   на тот же audio-sender и заменяет одиночный мик-трек.
+//
+// Громкости:
+//   - micGain = 1.0 (без изменений; компрессор уже выровнял уровень).
+//   - screenGain = 0.7 — лёгкий ducking системного звука: голос должен
+//     пробиваться через музыку/игру. Discord использует похожее значение
+//     (~0.5..0.7) по умолчанию. Параметризуется на случай, если кому-то
+//     надо иначе.
+//
+// Жизненный цикл:
+//   Возвращённый destroy() остановит outputTrack и закроет AudioContext.
+//   Сами входные треки (mic/screen) НЕ останавливаются — ими владеет тот,
+//   кто передал их сюда.
+
+export type MicScreenMixer = {
+  outputTrack: MediaStreamTrack;
+  destroy: () => void;
+};
+
+export function createMicScreenMixer(opts: {
+  micTrack: MediaStreamTrack;
+  screenAudioTrack: MediaStreamTrack;
+  micGain?: number;
+  screenGain?: number;
+}): MicScreenMixer {
+  const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
+  if (!Ctx) {
+    // Браузер не умеет Web Audio (древние мобилки) — отдаём screen-audio
+    // как есть и теряем голос. Это плохо, но альтернативы нет; в реальной
+    // практике все таргеты OwnCord поддерживают AudioContext.
+    return {
+      outputTrack: opts.screenAudioTrack,
+      destroy: () => { /* */ },
+    };
+  }
+  const ctx: AudioContext = new Ctx({ latencyHint: 'interactive' });
+  // Best-effort resume. Если вызвали из не-user-gesture'а (например,
+  // из onended-обработчика), браузер может оставить ctx 'suspended' —
+  // но даже в этом случае MediaStreamDestination отдаёт реальный трек
+  // (в отличие от createMicPipeline, который подвержен 'silent track'-
+  // багу при создании ДО первого user gesture). Тут контекст всегда
+  // создаётся уже после клика по кнопке «Демонстрация со звуком».
+  ctx.resume().catch(() => { /* */ });
+
+  const micSource = ctx.createMediaStreamSource(new MediaStream([opts.micTrack]));
+  const screenSource = ctx.createMediaStreamSource(new MediaStream([opts.screenAudioTrack]));
+
+  const micGainNode = ctx.createGain();
+  micGainNode.gain.value = opts.micGain ?? 1.0;
+  const screenGainNode = ctx.createGain();
+  screenGainNode.gain.value = opts.screenGain ?? 0.7;
+
+  const dest = ctx.createMediaStreamDestination();
+  micSource.connect(micGainNode).connect(dest);
+  screenSource.connect(screenGainNode).connect(dest);
+
+  const outputTrack = dest.stream.getAudioTracks()[0];
+
+  const destroy = () => {
+    try { micSource.disconnect(); } catch { /* */ }
+    try { screenSource.disconnect(); } catch { /* */ }
+    try { micGainNode.disconnect(); } catch { /* */ }
+    try { screenGainNode.disconnect(); } catch { /* */ }
+    try { dest.disconnect(); } catch { /* */ }
+    try { outputTrack?.stop(); } catch { /* */ }
+    try { ctx.close(); } catch { /* */ }
+  };
+
+  return { outputTrack, destroy };
+}
+
+// =============================================================================
+// Пресеты обработки микрофона
+// =============================================================================
+//
+// Цель: дать юзеру три понятных кнопки вместо десяти ползунков, как в Discord.
+//
+// Контракт:
+// - Каждый пресет — это набор значений для тех же самых ключей в settings,
+//   что и раньше (highPassFilter, compressorEnabled, noiseSuppression и т.д.).
+//   То есть пайплайн audioProcessing вообще не знает о существовании пресетов;
+//   мы просто записываем нужные числа в общий settings, как если бы юзер
+//   сам выкрутил каждый ползунок.
+// - Поле `micFilterPreset` в settings — это лишь подсказка для UI: какой
+//   пресет показать как «активный». Если значения отдельных ключей перестают
+//   совпадать ни с одним пресетом, UI помечает выбор как 'custom'.
+// - 'custom' нельзя «применить» — это терминальное состояние «юзер всё
+//   докрутил вручную»; SettingsPanel при выборе любого реального пресета
+//   просто перезапишет все ключи разом (см. applyMicFilterPreset).
+//
+// Если в будущем добавим RNNoise (или любую AI-шумодавку), пресет
+// «Агрессивный» включит и её тоже — но сами по себе пресеты к этому коду
+// никак не привязаны и могут жить независимо.
+
+export type MicFilterPreset = 'off' | 'standard' | 'aggressive' | 'custom';
+
+// Только те ключи, которые реально записываются пресетом. Не лезем
+// в inputVolume/inputDeviceId — это юзер выбирает сам.
+type PresetPayload = {
+  highPassFilter: boolean;
+  highPassFrequency: number;
+  compressorEnabled: boolean;
+  compressorThreshold: number;
+  compressorRatio: number;
+  compressorAttack: number;
+  compressorRelease: number;
+  compressorKnee: number;
+  noiseSuppression: boolean;
+  noiseThreshold: number;
+  noiseGateHoldMs: number;
+  noiseGateAttackMs: number;
+  noiseGateReleaseMs: number;
+  makeupGainDb: number;
+  // AI-шумодав. Включаем только в «Агрессивном» — RNNoise тащит +150 КБ
+  // WASM, ему нужен AudioWorklet и контекст на 48 kHz; для большинства
+  // юзеров это излишне.
+  aiNoiseSuppression: boolean;
+};
+
+// Эти три значения должны совпадать с DEFAULTS в SettingsContext, иначе
+// при открытии настроек UI будет показывать «Пользовательский» сразу
+// после установки. Если меняешь дефолты — синхронизируй и тут.
+const STANDARD_PRESET: PresetPayload = {
+  highPassFilter: true,
+  highPassFrequency: 100,
+  compressorEnabled: true,
+  compressorThreshold: -24,
+  compressorRatio: 4,
+  compressorAttack: 5,
+  compressorRelease: 50,
+  compressorKnee: 30,
+  noiseSuppression: true,
+  noiseThreshold: -55,
+  noiseGateHoldMs: 200,
+  noiseGateAttackMs: 10,
+  noiseGateReleaseMs: 80,
+  makeupGainDb: 0,
+  aiNoiseSuppression: false,
+};
+
+// «Выкл» — полностью прозрачная цепочка. Юзер либо пользуется
+// внешним софтом (OBS / Krisp / VoiceMeeter), либо у него очень
+// чистый микрофон и любая обработка только мешает.
+const OFF_PRESET: PresetPayload = {
+  highPassFilter: false,
+  highPassFrequency: 100,
+  compressorEnabled: false,
+  compressorThreshold: -24,
+  compressorRatio: 4,
+  compressorAttack: 5,
+  compressorRelease: 50,
+  compressorKnee: 30,
+  noiseSuppression: false,
+  noiseThreshold: -55,
+  noiseGateHoldMs: 200,
+  noiseGateAttackMs: 10,
+  noiseGateReleaseMs: 80,
+  makeupGainDb: 0,
+  aiNoiseSuppression: false,
+};
+
+// «Агрессивный» = RNNoise + жёсткий gate + сильный compressor.
+// Для шумных комнат / клавиатур / соседей за стеной. RNNoise сам
+// справляется с большинством шумов нейросетью; gate и compressor
+// оставлены на тот случай, если RNNoise не загрузился (offline / CSP /
+// старый браузер) — без них в этом сценарии было бы выключено всё.
+// HP режет ниже 150 Гц, компрессор давит сильнее (и компенсирует +3 дБ
+// makeup, иначе всё станет тише), gate закрывается раньше и быстрее.
+const AGGRESSIVE_PRESET: PresetPayload = {
+  highPassFilter: true,
+  highPassFrequency: 400,
+  compressorEnabled: true,
+  compressorThreshold: -28,
+  compressorRatio: 6,
+  compressorAttack: 3,
+  compressorRelease: 60,
+  compressorKnee: 24,
+  noiseSuppression: true,
+  noiseThreshold: -45,
+  noiseGateHoldMs: 150,
+  noiseGateAttackMs: 5,
+  noiseGateReleaseMs: 60,
+  makeupGainDb: 0,
+  aiNoiseSuppression: true,
+};
+
+const PRESET_MAP: Record<Exclude<MicFilterPreset, 'custom'>, PresetPayload> = {
+  off: OFF_PRESET,
+  standard: STANDARD_PRESET,
+  aggressive: AGGRESSIVE_PRESET,
+};
+
+/**
+ * Возвращает payload пресета для записи в settings. Для 'custom'
+ * возвращает null — кастом нельзя «применить» (это просто метка).
+ */
+export function getMicFilterPreset(name: MicFilterPreset): PresetPayload | null {
+  if (name === 'custom') return null;
+  return PRESET_MAP[name] ?? null;
+}
+
+/**
+ * Сравнивает текущий settings с известными пресетами и возвращает имя
+ * совпавшего; если ни один не подходит — 'custom'. Числовые поля
+ * сравниваются с небольшим эпсилоном на случай float-погрешностей
+ * после localStorage round-trip'а.
+ */
+export function detectMicFilterPreset(settings: any): MicFilterPreset {
+  if (!settings || typeof settings !== 'object') return 'standard';
+  const keys = Object.keys(STANDARD_PRESET) as (keyof PresetPayload)[];
+  for (const presetName of ['off', 'standard', 'aggressive'] as const) {
+    const preset = PRESET_MAP[presetName];
+    let match = true;
+    for (const k of keys) {
+      const expected = preset[k];
+      const actual = settings[k];
+      // Если в settings ключ ещё не задан — считаем, что значение
+      // равно дефолту 'standard' (это и так живёт в DEFAULTS).
+      const a = actual === undefined ? STANDARD_PRESET[k] : actual;
+      if (typeof expected === 'boolean') {
+        if (Boolean(a) !== expected) { match = false; break; }
+      } else {
+        if (typeof a !== 'number' || Math.abs(a - (expected as number)) > 0.001) {
+          match = false; break;
+        }
+      }
+    }
+    if (match) return presetName;
+  }
+  return 'custom';
+}
+
+/**
+ * Возвращает объект для передачи в update(): значения пресета +
+ * сам ключ micFilterPreset. Удобно, чтобы в одном setSettings
+ * перезаписать всё разом.
+ */
+export function applyMicFilterPreset(name: Exclude<MicFilterPreset, 'custom'>) {
+  const payload = getMicFilterPreset(name);
+  if (!payload) return { micFilterPreset: name };
+  return { ...payload, micFilterPreset: name };
+}
+
 /**
  * Извлечь срез настроек фильтров из общего объекта settings. Полезно,
  * чтобы в одном месте знать «какие ключи относятся к аудио-цепочке».
@@ -375,5 +699,6 @@ export function pickAudioFilterSettings(settings: any): AudioFilterSettings {
     noiseGateAttackMs: settings.noiseGateAttackMs,
     noiseGateReleaseMs: settings.noiseGateReleaseMs,
     makeupGainDb: settings.makeupGainDb,
+    aiNoiseSuppression: settings.aiNoiseSuppression,
   };
 }

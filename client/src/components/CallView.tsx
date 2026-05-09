@@ -1,7 +1,8 @@
 import { lazy, memo, Suspense, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Mic, MicOff, Video, VideoOff, Monitor, MonitorOff, PhoneOff, Settings, Loader2,
-  Volume2, VolumeX, X,
+  Volume2, VolumeX, X, Maximize2, Minimize2, Phone,
 } from 'lucide-react';
 import Avatar from './Avatar';
 import ScreenQualityModal from './ScreenQualityModal';
@@ -89,19 +90,39 @@ const RemoteAudio = memo(function RemoteAudio({ stream, sinkId, volume, muted = 
   return <audio ref={ref} autoPlay />;
 });
 
-export default function CallView({ call }) {
+// `embedded` режим — вместо fullscreen-overlay рендерим CallView как
+// обычный flex-блок, который занимает выделенный сверху чата кусок.
+// Это нужно для дискорд-подобной схемы, где звонок виден ВНУТРИ чата:
+// можно одновременно и говорить, и листать сообщения / переключать
+// контакты. Для совместимости проп опциональный — снаружи (Home.tsx)
+// мы всегда отдаём embedded=true.
+export default function CallView({
+  call,
+  embedded = false,
+  selfUser = null,
+}: {
+  call: any;
+  embedded?: boolean;
+  selfUser?: any;
+}) {
   const { settings, update } = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [qualityOpen, setQualityOpen] = useState(false);
   const [streamVolumeMenu, setStreamVolumeMenu] = useState(null);
   const [, tick] = useState(0);
+  // Фуллскрин для удалённого стрима. Цепляемся к враппер-диву (а не к
+  // самому <video>) — так пользователь видит всю плашку и оверлеи поверх,
+  // а не голую видеокартинку без управления.
+  const remoteWrapperRef = useRef<HTMLDivElement | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const {
     state, peer, localStream, remoteStream,
     muted, deafened, cameraOn, sharingScreen, peerMedia,
-    waitingUntil,
+    waitingUntil, selfLeft,
     speakingUserIds, selfId,
     toggleMute, toggleDeafen, toggleCamera, toggleScreenShare, hangup,
+    rejoinAsCaller,
   } = call;
 
   // Зелёная подсветка вокруг плитки/превью, когда участник реально говорит.
@@ -116,6 +137,31 @@ export default function CallView({ call }) {
     const i = setInterval(() => tick((n) => n + 1), 1000);
     return () => clearInterval(i);
   }, [state]);
+
+  // Подписка на нативное событие fullscreenchange — пользователь может
+  // выйти из фуллскрина клавишей Esc, и наш state должен это знать.
+  useEffect(() => {
+    const handler = () => {
+      setIsFullscreen(document.fullscreenElement === remoteWrapperRef.current);
+    };
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
+
+  const toggleFullscreen = () => {
+    const el = remoteWrapperRef.current;
+    if (!el) return;
+    try {
+      if (document.fullscreenElement === el) {
+        document.exitFullscreen?.();
+      } else {
+        const req = el.requestFullscreen
+          || (el as any).webkitRequestFullscreen
+          || (el as any).msRequestFullscreen;
+        req?.call(el);
+      }
+    } catch { /* not supported / denied */ }
+  };
 
   if (state === 'idle' || state === 'incoming') return null;
 
@@ -135,26 +181,39 @@ export default function CallView({ call }) {
   const label =
     state === 'calling' ? 'Исходящий вызов…'
     : state === 'connecting' ? 'Соединение…'
-    : state === 'waiting' ? `Ждём собеседника · ${formatDuration(waitLeft)}`
-    : 'В разговоре';
+    : state === 'waiting'
+      ? selfLeft
+        ? `Вы вышли из звонка · ${formatDuration(waitLeft)}`
+        : `Собеседник отключился · ${formatDuration(waitLeft)}`
+      : 'В разговоре';
+
+  // В embedded-режиме оставляем bg прозрачным — звонок «вписан» в общий
+  // фон main-панели. Border снизу нужен, чтобы визуально отделить блок
+  // звонка от чата под ним. В fullscreen-режиме (не используется сейчас,
+  // но осталось для совместимости) сохраняем поведение старого оверлея.
+  const rootClass = embedded
+    ? 'relative w-full h-full flex flex-col bg-bg-0 border-b border-border min-h-0'
+    : 'fixed inset-0 z-40 bg-bg-0 flex flex-col';
 
   return (
-    <div className="fixed inset-0 z-40 bg-bg-0 flex flex-col">
+    <div className={rootClass}>
       {/* Поток */}
-      <div className="flex-1 relative overflow-hidden">
-        {/* Рамка говорящего для себя (когда не стримим экран) */}
-        {!sharingScreen && selfSpeaking && (
-          <div
-            aria-hidden
-            className="absolute inset-0 pointer-events-none z-10 transition-shadow duration-150 shadow-[inset_0_0_0_3px_rgba(16,185,129,0.85),inset_0_0_22px_2px_rgba(16,185,129,0.45)]"
-          />
-        )}
+      <div className="flex-1 relative overflow-hidden min-h-0">
+        {/* Раньше тут была зелёная inset-рамка вокруг ВСЕЙ зоны звонка,
+            когда мы говорим. По фидбеку убрана: visual-cue говорящего
+            переехал на сами аватарки (см. ниже peerSpeakingRing /
+            selfSpeakingRing). Это явнее показывает кто именно говорит. */}
         {showRemoteVideo ? (
-          <div className="absolute inset-0" onContextMenu={(e) => {
-            if (!peerId) return;
-            e.preventDefault();
-            setStreamVolumeMenu({ x: e.clientX, y: e.clientY });
-          }}>
+          <div
+            ref={remoteWrapperRef}
+            className="absolute inset-0 group bg-black"
+            onContextMenu={(e) => {
+              if (!peerId) return;
+              e.preventDefault();
+              setStreamVolumeMenu({ x: e.clientX, y: e.clientY });
+            }}
+            onDoubleClick={toggleFullscreen}
+          >
             <StreamVideo
               key={`${peerMedia?.camera ? 'c' : ''}${peerMedia?.screen ? 's' : ''}`}
               stream={remoteStream}
@@ -171,45 +230,64 @@ export default function CallView({ call }) {
                   : 'shadow-none'
               }`}
             />
+            {/* Кнопка фуллскрина — появляется в правом верхнем углу при
+                наведении на видео-плашку. Двойной клик по самой плашке —
+                алиас (как в YouTube). */}
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              className="absolute top-4 right-4 z-20 btn-icon bg-black/60 hover:bg-black/80 text-white border border-white/10 backdrop-blur opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+              style={{ width: 40, height: 40 }}
+              title={isFullscreen ? 'Выйти из полноэкранного режима' : 'Развернуть на весь экран'}
+              aria-label={isFullscreen ? 'Выйти из полноэкранного режима' : 'Полноэкранный режим'}
+            >
+              {isFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+            </button>
           </div>
         ) : (
           <div
-            className="absolute inset-0 grid place-items-center"
+            className="absolute inset-0 grid place-items-center px-4"
             onContextMenu={(e) => {
               if (!peerId) return;
               e.preventDefault();
               setStreamVolumeMenu({ x: e.clientX, y: e.clientY });
             }}
           >
-            <div className="flex flex-col items-center gap-4 text-center">
-              <div
-                className={`rounded-full p-1 transition-shadow duration-150 ${
-                  waiting ? 'opacity-60' : ''
-                } ${
-                  peerSpeaking
-                    ? 'shadow-[0_0_0_3px_rgba(16,185,129,0.9),0_0_22px_4px_rgba(16,185,129,0.45)]'
-                    : ''
-                }`}
-              >
-                <Avatar name={getDisplayName(peer) || '?'} src={getAvatarUrl(peer)} size={128} />
+            <div className="flex flex-col items-center gap-4 text-center w-full">
+              {/* Две аватарки: пир + я. Зелёный ring — на самой аватарке
+                  того, кто прямо сейчас говорит (Discord-like). Размер
+                  адаптивный, но не меньше 96px — чтобы при минимальной
+                  высоте панели (≈ avatar+40px по фидбеку) аватарки всё
+                  ещё были крупными и читаемыми. */}
+              <div className="flex items-center justify-center gap-6 sm:gap-10">
+                <AvatarTile
+                  user={peer}
+                  fallbackName={getDisplayName(peer) || '?'}
+                  speaking={peerSpeaking}
+                  dim={waiting}
+                  micOff={state === 'in-call' && peerMedia && !peerMedia.mic}
+                />
+                <AvatarTile
+                  user={selfUser}
+                  fallbackName={getDisplayName(selfUser) || 'Вы'}
+                  selfLabel
+                  speaking={selfSpeaking}
+                  micOff={muted}
+                />
               </div>
               <div>
-                <div className="text-xl font-semibold">{getDisplayName(peer)}</div>
-                <div className={`text-sm mt-1 flex items-center justify-center gap-1.5 ${
+                <div className={`text-sm flex items-center justify-center gap-1.5 ${
                   waiting ? 'text-amber-300' : 'text-slate-400'
                 }`}
                 >
                   {waiting && <Loader2 size={14} className="animate-spin" />}
                   <span>{label}</span>
                 </div>
-                {state === 'in-call' && peerMedia && !peerMedia.mic && (
-                  <div className="mt-3 text-xs text-amber-400 flex items-center justify-center gap-1">
-                    <MicOff size={12} /> у собеседника выключен микрофон
-                  </div>
-                )}
                 {waiting && (
-                  <div className="mt-3 text-xs text-slate-500 max-w-xs">
-                    Если собеседник вернётся в течение этого времени — соединение восстановится автоматически.
+                  <div className="mt-2 text-xs text-slate-500 max-w-xs">
+                    {selfLeft
+                      ? 'Окно звонка останется открытым, пока собеседник ждёт. Нажмите «Подключиться», чтобы вернуться в звонок.'
+                      : 'Если собеседник вернётся в течение этого времени — соединение восстановится автоматически.'}
                   </div>
                 )}
               </div>
@@ -299,14 +377,41 @@ export default function CallView({ call }) {
         >
           <Settings size={20} />
         </ToolButton>
-        <button
-          onClick={() => hangup()}
-          className="btn-icon bg-danger hover:bg-danger-hover text-white ml-2"
-          style={{ width: 52, height: 52 }}
-          title="Завершить"
-        >
-          <PhoneOff size={22} />
-        </button>
+        {waiting && selfLeft ? (
+          // Leaver: мы сами нажали End и сейчас вне звонка. Зелёная
+          // Connect → rejoinAsCaller → server-side rebindForRejoin
+          // (см. callRegistry.js) переиспользует waiting-звонок,
+          // пир авто-принимает если он тоже в waiting.
+          <button
+            type="button"
+            onClick={() => { void rejoinAsCaller?.(); }}
+            className="btn-icon bg-emerald-500 hover:bg-emerald-400 text-white ml-2"
+            style={{ width: 52, height: 52 }}
+            title="Подключиться к звонку"
+            aria-label="Подключиться к звонку"
+          >
+            <Phone size={22} />
+          </button>
+        ) : (
+          // Базовая End-кнопка — для:
+          //   • in-call / connecting: покинуть звонок (уйдём в waiting
+          //     через hangup → enterWaiting(true); окно остаётся);
+          //   • waiting + !selfLeft (ПИР ушёл, я остался): End =
+          //     «завершить ожидание». hangup → cleanup → idle; сервер
+          //     finalize → forward call:end пиру → его окно тоже закроется.
+          <button
+            onClick={() => hangup()}
+            className="btn-icon bg-danger hover:bg-danger-hover text-white ml-2"
+            style={{ width: 52, height: 52 }}
+            title={
+              waiting
+                ? 'Завершить ожидание и закрыть окно'
+                : 'Покинуть звонок (окно останется до возврата собеседника)'
+            }
+          >
+            <PhoneOff size={22} />
+          </button>
+        )}
       </div>
 
       <Suspense fallback={null}>
@@ -322,8 +427,15 @@ export default function CallView({ call }) {
         }}
       />
 
-      {/* Меню громкости */}
-      {streamVolumeMenu && peerId && (
+      {/* Меню громкости. В фуллскрин-режиме порталим внутрь
+          `document.fullscreenElement`, иначе «фиксированная» плашка
+          попадает в DOM, который в топ-лейере fullscreen НЕ виден —
+          пользователю приходилось выходить из фуллскрина. createPortal
+          в таргет = fullscreenElement кладёт меню в тот же top-layer,
+          куда попадает fullscreen-контейнер. Координаты из clientX/Y
+          в обоих режимах остаются от вьюпорта. */}
+      {streamVolumeMenu && peerId && createPortal(
+        <>
         <div
           className="fixed z-[90] bg-bg-1 border border-border rounded-lg shadow-xl p-4 w-64"
           style={{ left: streamVolumeMenu.x, top: streamVolumeMenu.y }}
@@ -384,13 +496,64 @@ export default function CallView({ call }) {
             </div>
           )}
         </div>
-      )}
-      {streamVolumeMenu && peerId && (
         <div
           className="fixed inset-0 z-[89]"
           onClick={() => setStreamVolumeMenu(null)}
         />
+        </>,
+        (isFullscreen && document.fullscreenElement) || document.body,
       )}
+    </div>
+  );
+}
+
+// Плитка аватарки в no-video зоне звонка. На самой аватарке висит
+// «зелёный ring» когда участник говорит (Discord-стиль). Имя — под
+// аватаркой, мелким шрифтом, чтобы плитка вписывалась в минимальную
+// высоту звонка (avatar + 40px). Поддерживает selfLabel («Вы») и
+// иконку выключенного микрофона в правом нижнем углу.
+function AvatarTile({
+  user,
+  fallbackName,
+  speaking = false,
+  dim = false,
+  selfLabel = false,
+  micOff = false,
+}: {
+  user: any;
+  fallbackName: string;
+  speaking?: boolean;
+  dim?: boolean;
+  selfLabel?: boolean;
+  micOff?: boolean;
+}) {
+  const name = getDisplayName(user) || fallbackName;
+  return (
+    <div className="flex flex-col items-center gap-2 min-w-0">
+      <div className="relative">
+        <div
+          className={`rounded-full p-1 transition-shadow duration-150 ${dim ? 'opacity-60' : ''} ${
+            speaking
+              ? 'shadow-[0_0_0_3px_rgba(16,185,129,0.9),0_0_22px_4px_rgba(16,185,129,0.45)]'
+              : ''
+          }`}
+        >
+          <Avatar name={name} src={getAvatarUrl(user)} size={112} />
+        </div>
+        {micOff && (
+          <div
+            className="absolute -bottom-1 -right-1 grid place-items-center rounded-full bg-bg-1 border border-border"
+            style={{ width: 28, height: 28 }}
+            aria-label="Микрофон выключен"
+            title="Микрофон выключен"
+          >
+            <MicOff size={14} className="text-amber-400" />
+          </div>
+        )}
+      </div>
+      <div className="text-sm font-medium truncate max-w-[160px]">
+        {name}{selfLabel && <span className="text-slate-400"> (вы)</span>}
+      </div>
     </div>
   );
 }

@@ -38,10 +38,18 @@ export function formatDate(ts) {
   }
 }
 
+// Длительность в формате M:SS, а с часа и больше — H:MM:SS.
+// Без формата H:MM:SS длинные звонки (>= 60 минут) выглядели как
+// «100:00» — пользователю непонятно, идёт ли это второй час разговора
+// или счётчик банально не учитывает часы. Теперь учитывает.
 export function formatDuration(ms) {
   if (!ms || ms <= 0) return '0:00';
   const total = Math.round(ms / 1000);
-  const m = Math.floor(total / 60);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
   const s = total % 60;
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }
   return `${m}:${String(s).padStart(2, '0')}`;
 }

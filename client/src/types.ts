@@ -99,10 +99,18 @@ export type Settings = {
   soundOutgoing: boolean;
   soundConnect: boolean;
   soundDisconnect: boolean;
+  soundMicMute: boolean;
+  soundDeafen: boolean;
   uiVolume: number;
   userVolumes?: Record<number, number>;
   streamVolumes?: Record<number, number>;
   screenQuality?: string;
+  // Карта десктоп-биндингов. Применяется только в Electron-обёртке;
+  // в браузере поля просто хранятся в localStorage.
+  keybinds?: {
+    toggleMute?: string | null;
+    toggleDeafen?: string | null;
+  };
 };
 
 export type ChatSelection =

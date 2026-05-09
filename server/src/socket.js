@@ -5,7 +5,7 @@ import { addUserSocket, removeUserSocket, getOnlineUserIds } from './presence.js
 import { setIO } from './ioHub.js';
 import {
   registerInvite, markActive, markWaiting, finalize, getCall,
-  findActiveCallsBetween, rebindForRejoin,
+  findActiveCallsBetween, findActiveCallsForUser, rebindForRejoin,
 } from './callRegistry.js';
 import {
   joinGroupCall, leaveGroupCall, getCall as getGroupCall,
@@ -172,6 +172,40 @@ export function attachSocket(httpServer) {
       .all(me.id)
       .map((r) => r.target_id);
     socket.emit('mutes:update', { ids: muteRows });
+
+    // --- Re-emit pending invites адресату на reconnect ---------------------
+    // Сценарий: пользователю звонят (status=pending), он перезагружает
+    // страницу или у него обрывается сеть. Прежде эта переподписка
+    // приводила к тому, что нотификация исчезала: новый сокет не помнил,
+    // что для него висит invite, а сервер call:invite повторно не слал.
+    // 30-секундный pendingTimeout всё ещё работает (на сервере), значит
+    // если callee успевает вернуться в окне, мы можем ему просто заново
+    // отдать payload приглашения. Если callee замутил каллера — повторно
+    // не дёргаем модалку, как и при изначальном invite.
+    try {
+      const pendingForMe = findActiveCallsForUser(me.id).filter(
+        (c) => c.status === 'pending' && c.calleeId === me.id,
+      );
+      for (const c of pendingForMe) {
+        const isMutedRow = db
+          .prepare('SELECT 1 FROM mutes WHERE user_id = ? AND target_id = ?')
+          .get(me.id, c.callerId);
+        if (isMutedRow) continue;
+        const callerRow = db
+          .prepare('SELECT username, display_name, avatar_path FROM users WHERE id = ?')
+          .get(c.callerId);
+        if (!callerRow) continue;
+        const callerName = callerRow.display_name || callerRow.username;
+        socket.emit('call:invite', {
+          callId: c.callId,
+          withVideo: !!c.withVideo,
+          from: c.callerId,
+          fromUsername: callerRow.username,
+          fromDisplayName: callerName,
+          fromAvatarPath: callerRow.avatar_path || null,
+        });
+      }
+    } catch { /* лучше тихо проглотить, чем сорвать handshake */ }
 
     // --- Direct/group сообщения ---------------------------------------------
     // to — peer-id (DM) ИЛИ groupId — один из двух должен быть указан.
@@ -354,7 +388,7 @@ export function attachSocket(httpServer) {
         }
         dropSockets(waitingCall.callId);
 
-        const rebound = rebindForRejoin(waitingCall.callId, callId, !!withVideo);
+        const rebound = rebindForRejoin(waitingCall.callId, callId, !!withVideo, me.id);
         if (!rebound) return; // внезапно ended — игнор
         // Узнать, замучен ли callee, тут нужно локально (isMuted в registry
         // не экспортирован). db уже в scope.
@@ -434,29 +468,46 @@ export function attachSocket(httpServer) {
     });
 
     socket.on('call:end', (payload) => {
-      const { callId, reason } = payload || {};
+      const { callId, to, reason } = payload || {};
+      if (typeof callId !== 'string' || typeof to !== 'number') return;
       const c = getCall(callId);
+      if (!c) return;
+      // Звонок в registry ещё 60 сек висит после finalize (грейс-период
+      // на поздние события). Повторный call:end от клиента в это окно
+      // игнорируем, чтобы не слать пиру дубль.
+      if (c.status === 'ended') return;
+      // Валидация пары (аналог forward): оба участника события — члены звонка.
+      const pair = new Set([c.callerId, c.calleeId]);
+      if (!pair.has(me.id) || !pair.has(to)) return;
+
       let outboundReason = reason;
-      if (c) {
-        if (c.status === 'active' && reason !== 'completed') {
-          // Один ушёл из активного звонка — даём 5 минут на возврат.
-          markWaiting(callId);
-          // Нормализуем причину для второй стороны: если клиент не указал
-          // 'peer-disconnected' / 'peer-leaving' — это явный hangup, значит
-          // для второй стороны это «пир ушёл, ждём» (peer-leaving).
-          if (!outboundReason || outboundReason === 'hangup') {
-            outboundReason = 'peer-leaving';
-          }
-        } else {
-          // Если звонок был хоть раз активен (startedAt != null) —
-          // это «completed», даже если текущий статус 'waiting'. Иначе
-          // в истории появится «звонок отменён» после успешного разговора.
-          finalize(callId, c.startedAt ? 'completed' : 'cancelled');
+      if (c.status === 'active' && reason !== 'completed') {
+        // Один ушёл из активного звонка — даём 5 минут на возврат.
+        markWaiting(callId);
+        // Нормализуем причину: если клиент не указал
+        // 'peer-disconnected'/'peer-leaving' — это явный hangup,
+        // для второй стороны это «пир ушёл, ждём».
+        if (!outboundReason || outboundReason === 'hangup') {
+          outboundReason = 'peer-leaving';
         }
+      } else if (c.status !== 'ended') {
+        // Случай «ВТОРОЙ жмёт End из waiting»: c.status='waiting', пир
+        // уже в waiting с selfLeft=true. Финалим и шлём явный call:end
+        // второй стороне — её клиент выйдет из waiting в idle (окно
+        // закроется). ВАЖНО: НЕ используем forward() ниже — он проверяет
+        // c.status !== 'ended', а finalize выставляет именно 'ended',
+        // и событие отбрасывалось. Из-за этого у первого отключившегося
+        // окно оставалось висеть до 5-мин таймаута.
+        finalize(callId, c.startedAt ? 'completed' : 'cancelled');
       }
-      // Форвардим оригинальный/нормализованный reason второй стороне.
-      const out = { ...payload, reason: outboundReason };
-      forward('call:end')(out);
+
+      // Шлём напрямую, минуя forward: c.status мог стать 'ended' выше.
+      io.to(roomOf(to)).emit('call:end', {
+        ...payload,
+        reason: outboundReason,
+        from: me.id,
+        fromUsername: me.username,
+      });
     });
 
     // Полное завершение по обоюдному согласию (или таймауту)
@@ -620,6 +671,9 @@ export function attachSocket(httpServer) {
         const c = getCall(callId);
         if (!c) { sockets.delete(callId); continue; }
         if (c.status === 'active' && otherSocketId) {
+          // Активный звонок → пир получает «peer-disconnected», звонок
+          // переводится в waiting (5 мин) на случай рефреша / коротких
+          // обрывов сети.
           io.to(otherSocketId).emit('call:end', {
             from: me.id,
             fromUsername: me.username,
@@ -627,9 +681,24 @@ export function attachSocket(httpServer) {
             reason: 'peer-disconnected',
           });
           markWaiting(callId);
+        } else if (c.status === 'waiting') {
+          // КРИТИЧЕСКИ ВАЖНО: не финализируем waiting-звонок и не шлём
+          // повторный call:end. Иначе сценарий «пользователь A нажал F5»
+          // ломал звонок целиком: сначала beforeunload каллбэк A слал
+          // call:end (peer-leaving), сервер переводил звонок в waiting и
+          // нотифицировал B → B входил в waiting. Затем сразу же
+          // disconnect handler видел status='waiting' и попадал в
+          // прежнюю else-ветку, которая делала finalize() и слала B
+          // ВТОРОЙ call:end (peer-disconnected). У B onEnd с этим
+          // reason'ом в state='waiting' (а не in-call/connecting) уходил
+          // в cleanup → idle → пира тоже выкидывало из звонка.
+          //
+          // Здесь ровно ничего не делаем: либо пир уже знает (got
+          // peer-leaving), либо это второй обрыв подряд, и состояние
+          // waiting уже корректно стоит. 5-минутный pendingTimeout сам
+          // финализирует звонок, если никто не вернётся.
         } else {
-          // Для звонков, которые уже были активны — итог 'completed'
-          // (даже если сейчас 'waiting'). Без startedAt — cancelled.
+          // pending / уже ended / прочие промежутки — cleanup как раньше.
           finalize(callId, c.startedAt ? 'completed' : 'cancelled');
           if (otherSocketId) {
             io.to(otherSocketId).emit('call:end', {

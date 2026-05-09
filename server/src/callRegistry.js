@@ -155,6 +155,11 @@ export function registerInvite({ callId, callerId, calleeId, withVideo }) {
 export function markActive(callId) {
   const c = calls.get(callId);
   if (!c) return null;
+  // Защита: если звонок уже завершён (например, пир нажал
+  // End, пока в полёте был старый call:accept) — НЕ воскрешаем.
+  // Иначе в чате после 'ended' сообщение внезапно становится
+  // 'active' с outcome=null, а следующий call:end запишет 'cancelled'.
+  if (c.status === 'ended') return c;
   if (c.status === 'active') return c;
   c.status = 'active';
   // При реджойне startedAt уже проставлен — сохраняем, чтобы длительность
@@ -280,7 +285,7 @@ export function findActiveCallsBetween(userA, userB) {
  * Возвращает обновлённый call (уже под новым id) или null, если исходный
  * не найден / не в waiting.
  */
-export function rebindForRejoin(oldCallId, newCallId, withVideo) {
+export function rebindForRejoin(oldCallId, newCallId, withVideo, newCallerId) {
   const c = calls.get(oldCallId);
   if (!c) return null;
   if (c.status === 'ended') return null;
@@ -288,6 +293,21 @@ export function rebindForRejoin(oldCallId, newCallId, withVideo) {
   c.callId = newCallId;
   c.status = 'pending';
   c.withVideo = !!withVideo;
+  // Реджойн может инициировать ЛЮБАЯ из сторон через кнопку
+  // «Подключиться» в waiting-окне. Тот, кто прислал новый call:invite,
+  // теперь является caller'ом этого сеанса; вторая сторона — callee.
+  // Без свопа call:accept от исходного callerId отбрасывался проверкой
+  // c.calleeId !== me.id (см. socket.js → call:accept), и реджойн
+  // оставался в pending до 30 сек, после чего finalize'ился как
+  // 'missed' — в чате появлялась плашка «конец звонка».
+  if (
+    typeof newCallerId === 'number'
+    && newCallerId === c.calleeId
+  ) {
+    const tmp = c.callerId;
+    c.callerId = c.calleeId;
+    c.calleeId = tmp;
+  }
   clearTimer(c, 'reconnectTimer');
   clearTimer(c, 'pendingTimer');
   // 30 сек на ответ второй стороны, иначе — missed с сохранением
@@ -295,7 +315,10 @@ export function rebindForRejoin(oldCallId, newCallId, withVideo) {
   c.pendingTimer = setTimeout(() => {
     const cur = calls.get(newCallId);
     if (!cur || cur.status !== 'pending') return;
-    finalize(newCallId, 'missed');
+    // Если до реджойна звонок уже был успешным (startedAt выставлен
+    // при первом markActive) — это не «пропущенный», а «завершённый»
+    // звонок, у которого переподключение не удалось.
+    finalize(newCallId, cur.startedAt ? 'completed' : 'missed');
   }, PENDING_TIMEOUT_MS);
   calls.set(newCallId, c);
   writePayload(c.messageId, {

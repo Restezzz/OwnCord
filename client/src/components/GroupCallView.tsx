@@ -2,7 +2,7 @@ import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from 'reac
 import {
   Mic, MicOff, Video, VideoOff, PhoneOff, Users as UsersIcon,
   ScreenShare, ScreenShareOff, Volume2, VolumeX, Settings,
-  Pin, PinOff, X,
+  Pin, PinOff, X, Maximize2, Minimize2,
 } from 'lucide-react';
 import Avatar from './Avatar';
 import ScreenQualityModal from './ScreenQualityModal';
@@ -100,8 +100,11 @@ const RemoteAudio = memo(function RemoteAudio({ stream, sinkId, volume, muted = 
 function Tile({
   stream, user, self = false, muted = false, mirror = false, className = '',
   onClick, onContextMenu = undefined, pinned, pinnable, speaking = false,
+  fullscreenable = false,
 }) {
   const [size, setSize] = useState({ w: 0, h: 0 });
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [isFs, setIsFs] = useState(false);
   const hasStream = !!stream && stream.getVideoTracks().length > 0;
   // 0×0 — поток ещё не догнал; 320×180 — наш живой placeholder.
   // В обоих случаях аватар поверх. Любое другое разрешение = реальная
@@ -109,17 +112,47 @@ function Tile({
   const isPlaceholderSize = size.w === 0 || size.h === 0
     || (size.w === 320 && size.h === 180);
   const showAvatar = !hasStream || isPlaceholderSize;
+  const showFs = fullscreenable && hasStream && !isPlaceholderSize;
   const name = getDisplayName(user) || '?';
   // Стабильная ссылка на колбэк, чтобы StreamVideo не пере-подписывался
   // на каждый рендер.
   const onSize = useMemo(() => (w, h) => {
     setSize((s) => (s.w === w && s.h === h ? s : { w, h }));
   }, []);
+
+  // Слушаем нативный fullscreenchange — Esc / API-выход должны синкаться
+  // с UI-кнопкой (Maximize2 ↔ Minimize2).
+  useEffect(() => {
+    const handler = () => {
+      setIsFs(document.fullscreenElement === wrapRef.current);
+    };
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
+
+  const toggleFullscreen = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const el = wrapRef.current;
+    if (!el) return;
+    try {
+      if (document.fullscreenElement === el) {
+        document.exitFullscreen?.();
+      } else {
+        const req = el.requestFullscreen
+          || (el as any).webkitRequestFullscreen
+          || (el as any).msRequestFullscreen;
+        req?.call(el);
+      }
+    } catch { /* not supported / denied */ }
+  };
+
   return (
     <div
+      ref={wrapRef}
       onClick={onClick}
       onContextMenu={onContextMenu}
-      className={`relative bg-bg-2 rounded-xl overflow-hidden border-2 ${
+      onDoubleClick={showFs ? (e) => { e.stopPropagation(); toggleFullscreen(); } : undefined}
+      className={`relative bg-bg-2 rounded-xl overflow-hidden border-2 group ${
         speaking
           // Зелёная рамка + мягкое свечение, когда участник говорит.
           // Полупрозрачное свечение видно даже поверх реальной видеокартинки.
@@ -143,6 +176,21 @@ function Tile({
           <Avatar name={name} src={getAvatarUrl(user)} size={72} />
         </div>
       )}
+      {/* Кнопка фуллскрина — только когда у плитки есть реальная картинка
+          (не аватарка/placeholder). stopPropagation, чтобы клик НЕ дёргал
+          pin/unpin плитки. */}
+      {showFs && (
+        <button
+          type="button"
+          onClick={toggleFullscreen}
+          className="absolute top-2 right-2 z-20 btn-icon bg-black/60 hover:bg-black/80 text-white border border-white/10 backdrop-blur opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+          style={{ width: 32, height: 32 }}
+          title={isFs ? 'Выйти из полноэкранного режима' : 'Развернуть на весь экран'}
+          aria-label={isFs ? 'Выйти из полноэкранного режима' : 'Полноэкранный режим'}
+        >
+          {isFs ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+        </button>
+      )}
       <div className="absolute bottom-2 left-2 right-2 flex items-center gap-1.5 px-2 py-1 rounded-md bg-black/60 backdrop-blur text-xs">
         <span className="truncate flex-1">
           {name}{self && <span className="text-slate-400"> (вы)</span>}
@@ -154,7 +202,15 @@ function Tile({
   );
 }
 
-export default function GroupCallView({ call, usersById, selfId }) {
+// `embedded` режим — рендерим групповой звонок не как fullscreen
+// оверлей, а как блок внутри main-панели чата. См. комментарий в
+// CallView.tsx — мотивация общая.
+export default function GroupCallView({ call, usersById, selfId, embedded = false }: {
+  call: any;
+  usersById: any;
+  selfId: number;
+  embedded?: boolean;
+}) {
   const { settings, update } = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [qualityOpen, setQualityOpen] = useState(false);
@@ -262,9 +318,16 @@ export default function GroupCallView({ call, usersById, selfId }) {
     : tiles.length <= 9 ? 3
     : 4;
 
+  // См. комментарий в CallView.tsx — embedded даёт блок-в-чате; иначе
+  // fullscreen-overlay (старое поведение, оставлено на случай если
+  // понадобится развернуть звонок поверх всего UI).
+  const rootClass = embedded
+    ? 'relative w-full h-full flex flex-col bg-bg-0 border-b border-border min-h-0'
+    : 'fixed inset-0 z-40 bg-bg-0 flex flex-col';
+
   return (
-    <div className="fixed inset-0 z-40 bg-bg-0 flex flex-col">
-      <div className="flex-1 relative overflow-hidden p-3">
+    <div className={rootClass}>
+      <div className="flex-1 relative overflow-hidden p-3 min-h-0">
         {pinnedTile ? (
           <div className="w-full h-full flex flex-col gap-2">
             <div className="flex-1 min-h-0">

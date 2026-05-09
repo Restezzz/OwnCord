@@ -13,7 +13,10 @@ import {
 import {
   createMicPipeline,
   pickAudioFilterSettings,
+  createMicScreenMixer,
+  type MicScreenMixer,
 } from '../utils/audioProcessing';
+import { onShortcutEvent } from '../utils/desktop';
 
 /**
  * useCall — один активный звонок между двумя пользователями.
@@ -31,13 +34,57 @@ import {
  */
 const WAIT_WINDOW_MS = 5 * 60 * 1000;
 
+// SessionStorage-ключ для воскрешения активного звонка после reload'а.
+// Храним только в sessionStorage (не localStorage), чтобы данные жили
+// строго в рамках одной вкладки и не путали другие сессии. Просрочиваем
+// записи старше 5 минут — серверный waiting-window столько же.
+const ACTIVE_CALL_STORAGE_KEY = 'owncord.activeCall';
+const REJOIN_MAX_AGE_MS = 5 * 60 * 1000;
+
 export function useCall({ socket, selfUser, settings, toast, sounds }) {
-  const [state, setState] = useState('idle');
-  const [peer, setPeer] = useState(null);
-  const [withVideo, setWithVideo] = useState(false);
+  // Refresh-resilience: считываем сохранённый звонок СИНХРОННО ещё до
+  // useState'ов, чтобы инициализировать state='waiting' / peer / callId
+  // СРАЗУ на маунте. Без этого после F5 пользователь видит idle (CallView
+  // возвращает null) и не понимает, что звонок ещё активен на сервере.
+  // По фидбеку юзер хотел видеть окно звонка у обоих участников —
+  // отключённый теперь синхронно попадает в 'waiting' и видит ту же
+  // плашку с двумя аватарками, что и пир.
+  const [initialSavedCall] = useState(() => {
+    try {
+      const raw = sessionStorage.getItem(ACTIVE_CALL_STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || !parsed.peer || typeof parsed.peer.id !== 'number') return null;
+      if (Date.now() - (parsed.ts || 0) > REJOIN_MAX_AGE_MS) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  });
+
+  const [state, setState] = useState(initialSavedCall ? 'waiting' : 'idle');
+  const [peer, setPeer] = useState(initialSavedCall?.peer || null);
+  const [withVideo, setWithVideo] = useState(initialSavedCall ? !!initialSavedCall.withVideo : false);
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
-  const [waitingUntil, setWaitingUntil] = useState(null);
+  // waitingUntil: сколько у нас осталось до того, как сервер сам
+  // финализирует звонок. Считаем от saved.ts + 5 мин, не от now (если
+  // юзер refreshнул через 1 минуту, должно остаться 4, а не свежие 5).
+  const [waitingUntil, setWaitingUntil] = useState(
+    initialSavedCall ? (initialSavedCall.ts || Date.now()) + REJOIN_MAX_AGE_MS : null,
+  );
+  // selfLeft=true — это Я нажал End (должен видеть зелёную «Подключиться»).
+  // selfLeft=false — ушёл ПИР, я остался в звонке один и жду его (должен
+  // видеть красную End, чтобы тоже уйти и закрыть окно у обоих).
+  //
+  // НА F5: форсируем selfLeft=true независимо от сохранённого
+  // значения. Рефреш разывает socket — сервер видит disconnect,
+  // пиру прилетает 'peer-disconnected', т.е. мы фактически вышли
+  // из звонка. Чтобы юзер мог вручную переподключиться через
+  // зелёную Connect, на хидрации выставляем selfLeft=true.
+  // (Раньше selfLeft=false + авто-rejoin работал нестабильно и
+  // часто выкидывал из звонка.)
+  const [selfLeft, setSelfLeft] = useState(!!initialSavedCall);
 
   const [muted, setMuted] = useState(false);
   // Локальный «глухой режим»: заставляет наш <audio> НЕ воспроизводить
@@ -82,8 +129,13 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   const micPipelineRef = useRef(null);
   const cameraTrackRef = useRef(null);
   const screenTrackRef = useRef(null);
-  const screenAudioDeafenRef = useRef(false); // Отслеживаем автоматически включённый deafen для звука экрана
   const screenAudioTrackRef = useRef(null); // Аудио трек из стрима экрана
+  // Микшер mic + screen-audio. Живёт ровно столько же, сколько включена
+  // демонстрация со звуком: создаётся в toggleScreenShare(includeAudio),
+  // ставится на audio-sender, уничтожается при выключении демки/onended.
+  // Без него replaceTrack(audioSender, screenAudio) выкидывал бы голос
+  // с провода — это и был баг "стрим со звуком ⇒ меня не слышно".
+  const micScreenMixerRef = useRef<MicScreenMixer | null>(null);
   // Placeholder-треки, прицепляемые к sender'ам, когда нет реального
   // аудио/видео. Существуют, чтобы SDP сразу содержал msid+ssrc и
   // последующий replaceTrack(realTrack) не требовал renegotiation.
@@ -177,6 +229,13 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         try { micPipelineRef.current.destroy(); } catch { /* */ }
         micPipelineRef.current = null;
       }
+      // Микшер mic+screen-audio (если демка со звуком была активна на
+      // момент завершения звонка) — закрываем свой AudioContext и
+      // outputTrack, чтобы не утекали ресурсы.
+      if (micScreenMixerRef.current) {
+        try { micScreenMixerRef.current.destroy(); } catch { /* */ }
+        micScreenMixerRef.current = null;
+      }
 
       for (const ref of [
         cameraTrackRef, screenTrackRef, micTrackRef,
@@ -198,6 +257,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       setWithVideo(false);
       setPeerMedia({ mic: true, camera: false, screen: false, screenAudio: false });
       setWaitingUntil(null);
+      setSelfLeft(false);
       setState('idle');
     },
     [sounds],
@@ -206,7 +266,12 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   // Перевод в состояние "ждём собеседника": пир ушёл, но у нас 5 минут,
   // чтобы он вернулся. Не трогаем локальные треки (микрофон/камера),
   // чтобы при возврате не перевыбирать устройства.
-  const enterWaiting = useCallback(() => {
+  //
+  // `bySelf` — это МЫ сами только что нажали End (true) или ушёл ПИР
+  // (false). UI по этому флагу решает, какую кнопку показать:
+  //   leaver          → зелёная «Подключиться» (rejoinAsCaller)
+  //   оставшийся один → красная End (hangup → cleanup; сервер финалит)
+  const enterWaiting = useCallback((bySelf = false) => {
     if (iceTimeoutRef.current) {
       clearTimeout(iceTimeoutRef.current);
       iceTimeoutRef.current = null;
@@ -228,6 +293,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     setRemoteStream(null);
     setPeerMedia({ mic: false, camera: false, screen: false, screenAudio: false });
     setWaitingUntil(Date.now() + WAIT_WINDOW_MS);
+    setSelfLeft(bySelf);
     setState('waiting');
     sounds?.playDisconnect?.();
   }, [sounds]);
@@ -467,34 +533,75 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   // треки через addTrack/addTransceiver. Оставлено как явный no-op-маркер.
 
   // --- Завершение --------------------------------------------------------
+  //
+  // "Мягкий" hangup (кнопка End во время установленного разговора, либо
+  // без указания reason) не убивает окно звонка — переводит ЛОКАЛЬНОГО
+  // пользователя в 'waiting' аналогично тому, как это происходит, когда
+  // уходит пир. Это совпадает с требованием юзера: «окно должно
+  // оставаться, чтобы через него можно было переподключиться, а не
+  // только через плашку в чате». Второй End-клик уже из waiting → полный
+  // cleanup (state != established, идём в else-ветку).
+  //
+  // "Жёсткие" reasons (ice-failed, connection-failed, ice-timeout,
+  // offer-failed, answer-failed, start-failed, rejoin-failed,
+  // waiting-expired) и хангап из calling/incoming (вызов не состоялся) —
+  // сразу закрывают всё. Серверу в любом случае шлём call:end: для
+  // established-звонка он пометит call как waiting и разошлёт пиру
+  // reason='peer-leaving' (пир тоже увидит waiting-окно), для waiting —
+  // финализирует и разошлёт финальный call:end.
   const hangup = useCallback(
     (reason) => {
       const cid = callIdRef.current;
       const target = peerRef.current;
       const wasActive = !!cid && !!target;
-      cleanup('hangup');
+      const curState = stateRef.current;
       if (wasActive && socket) {
         socket.emit('call:end', { to: target.id, callId: cid, reason });
       }
+      const softReason = !reason || reason === 'hangup';
+      const established = curState === 'in-call' || curState === 'connecting';
+      if (softReason && established) {
+        enterWaiting(true); // это МЫ ушли → зелёная Connect у нас
+      } else {
+        cleanup('hangup');
+      }
     },
-    [cleanup, socket],
+    [cleanup, enterWaiting, socket],
   );
 
   // --- Исходящий вызов ---------------------------------------------------
   const start = useCallback(
     async (targetUser, { withVideo: wantVideo = false } = {}) => {
-      if (state !== 'idle') return;
+      // Допускаем 2 точки входа: idle → новый исходящий звонок; waiting →
+      // реджойн (например, после F5 у того, кто в звонке был, или когда
+      // пир ушёл и сервер на пять минут дал шанс вернуться). Сервер на
+      // call:invite сам найдёт существующий waiting-звонок между парой
+      // и рекомпонует его (см. server/src/socket.js → call:invite handler
+      // → rebindForRejoin). Так не плодим новые DB-записи для каждого
+      // F5 и сохраняем длительность начатого разговора.
+      if (state !== 'idle' && state !== 'waiting') return;
+      const isRejoin = state === 'waiting';
       const callId = `${selfUser.id}-${targetUser.id}-${Date.now()}`;
       callIdRef.current = callId;
       peerRef.current = targetUser;
       setPeer(targetUser);
       setWithVideo(wantVideo);
-      setState('calling');
-      sounds?.startOutgoing?.();
+      // При реджойне — НЕ играем outgoing-звонок и НЕ показываем
+      // 'calling' (это для свежего исходящего вызова). Сразу
+      // 'connecting' — пир уже знает про звонок и сервер мгновенно
+      // рассылает invite дальше через rebindForRejoin.
+      if (isRejoin) {
+        setWaitingUntil(null);
+        setState('connecting');
+      } else {
+        setState('calling');
+        sounds?.startOutgoing?.();
+      }
 
       try {
-        // Сначала захватываем медиа, чтобы createPeerConnection сразу
-        // прицепил треки к sender'ам и SDP офера содержал msid.
+        // Сначала захватываем медиа (после F5 localStream был null —
+        // обязательно), потом создаём PC. createPeerConnection сразу
+        // прицепит треки к sender'ам и SDP офера содержал msid.
         await getLocalMedia(wantVideo);
         const pc = createPeerConnection('caller');
 
@@ -504,7 +611,10 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         await pc.setLocalDescription(offer);
         socket.emit('rtc:offer', { to: targetUser.id, callId, sdp: pc.localDescription });
       } catch (e) {
-        toast?.error?.(prettyMediaError('Не удалось начать звонок', e));
+        toast?.error?.(prettyMediaError(
+          isRejoin ? 'Не удалось переподключиться' : 'Не удалось начать звонок',
+          e,
+        ));
         hangup('start-failed');
       }
     },
@@ -524,8 +634,14 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     const newCallId = `${selfUser.id}-${target.id}-${Date.now()}`;
     callIdRef.current = newCallId;
     setWaitingUntil(null);
-    setState('calling');
-    sounds?.startOutgoing?.();
+    setSelfLeft(false);
+    // При реджойне не играем outgoing-рингтон: пир уже знает про звонок
+    // (он в waiting), и длинный исходящий гудок тут не в тему. Короткий
+    // connect/disconnect-звук (см. sounds.playConnect/playDisconnect)
+    // остаётся — он триггерится из PC-коллбеков при реальном connected.
+    // Состояние сразу 'connecting' (а не 'calling'), как и в start()
+    // на isRejoin-ветке.
+    setState('connecting');
 
     try {
       // Локальные треки в waiting не уничтожались — createPeerConnection
@@ -599,16 +715,42 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     const nextEnabled = !track.enabled;
     track.enabled = nextEnabled;
     setMuted(!nextEnabled);
+    // Пип перед emitMyMedia — пользователь должен услышать фидбек
+    // мгновенно, независимо от задержки сети.
+    if (nextEnabled) sounds?.playMicUnmute?.(); else sounds?.playMicMute?.();
     // emit отправим после setMuted
     setTimeout(emitMyMedia, 0);
-  }, [emitMyMedia]);
+  }, [emitMyMedia, sounds]);
 
   // Локальный «мьют наушников» — просто тумблер. Применяется в UI через
   // <audio muted={deafened}> без затрагивания входящего трека, поэтому
   // ре-подписывания WebRTC не требуется.
   const toggleDeafen = useCallback(() => {
-    setDeafened((d) => !d);
-  }, []);
+    setDeafened((d) => {
+      const next = !d;
+      // Играем ДО того, как state применится — но сами звуки идут через
+      // отдельный AudioContext useSounds, не через тот <audio>, который
+      // мы сейчас замьютим; так что пользователь услышит их даже если
+      // включается deafen. Это ожидаемое поведение: UI-пип — не «звук
+      // собеседника», его глушить deafen'ом не надо.
+      if (next) sounds?.playDeafen?.(); else sounds?.playUndeafen?.();
+      return next;
+    });
+  }, [sounds]);
+
+  // Глобальные хоткеи десктопа (Electron globalShortcut). Срабатывают
+  // даже когда окно OwnCord не в фокусе — для этого мы тут вешаемся
+  // на DOM-event 'owncord:shortcut', который шлёт preload.js. На вебе
+  // событие никогда не прилетит — onShortcutEvent сам no-op'ом.
+  // Хоткеи действуют только когда есть активный mic-трек: иначе toggle
+  // вернётся раньше времени (см. сами toggleMute/toggleDeafen) — это
+  // ожидаемое поведение: если ты не в звонке, мьютить нечего.
+  useEffect(() => {
+    return onShortcutEvent((action) => {
+      if (action === 'toggleMute') toggleMute();
+      else if (action === 'toggleDeafen') toggleDeafen();
+    });
+  }, [toggleMute, toggleDeafen]);
 
   const turnOffVideoSender = useCallback(async () => {
     if (!videoSenderRef.current) return;
@@ -690,18 +832,24 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       // может пойти параллельно по тому же ref'у (двойная очистка → NPE
       // на s.removeTrack(null)). Race-protection в onended построена на
       // проверке screenTrackRef.current !== track — поэтому нулим сразу.
-      const wasDeafenedForAudio = screenAudioDeafenRef.current;
       const screenVideoTrack = screenTrackRef.current;
       const screenAudioLocal = screenAudioTrackRef.current;
+      const mixer = micScreenMixerRef.current;
       screenTrackRef.current = null;
       screenAudioTrackRef.current = null;
-      screenAudioDeafenRef.current = false;
+      micScreenMixerRef.current = null;
 
       try { screenVideoTrack.stop(); } catch { /* */ }
       if (screenAudioLocal) {
-        try { screenAudioLocal.stop(); } catch { /* */ }
+        // Сначала возвращаем чистый мик на audio-sender, ПОТОМ останавливаем
+        // микшер. Иначе пир на 1-2 кадра услышит «никого» (sender держит
+        // остановленный mixer.outputTrack).
         if (audioSenderRef.current && micTrackRef.current) {
           try { await audioSenderRef.current.replaceTrack(micTrackRef.current); } catch { /* */ }
+        }
+        try { screenAudioLocal.stop(); } catch { /* */ }
+        if (mixer) {
+          try { mixer.destroy(); } catch { /* */ }
         }
       }
       const s = localStreamRef.current;
@@ -709,9 +857,6 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         try { s.removeTrack(screenVideoTrack); } catch { /* */ }
       }
       setSharingScreen(false);
-      if (wasDeafenedForAudio) {
-        setDeafened(false);
-      }
       if (cameraOn && cameraTrackRef.current) {
         await videoSenderRef.current.replaceTrack(cameraTrackRef.current);
       } else {
@@ -726,11 +871,13 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       const display = await captureDisplay(presetKey, includeAudio);
       const track = display.getVideoTracks()[0];
       if (!track) return;
-      // Если включён звук экрана, автоматически deafen чтобы избежать эха
-      if (includeAudio && !deafened) {
-        setDeafened(true);
-        screenAudioDeafenRef.current = true;
-      }
+      // Раньше тут был авто-setDeafened(true) при includeAudio — мол,
+      // «избежать эха». Это было ошибкой: deafened глушит ВХОДЯЩЕЕ
+      // аудио (см. <RemoteAudio> и mute=deafened), т.е. ты переставал
+      // слышать пира при старте демонстрации экрана со звуком. Эхо
+      // между screen-audio и нашим mic'ом и так не возникает, т.к.
+      // screen capture идёт ОТ системного аудио-выхода, а getUserMedia
+      // mic’у включает echoCancellation. Никаких deafen'ов автоматом.
       screenTrackRef.current = track;
 
       // Добавляем аудио трек из стрима экрана в локальный стрим и на audio sender
@@ -743,13 +890,32 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       s.addTrack(track);
       if (audioTrack) {
         screenAudioTrackRef.current = audioTrack;
-        // Заменяем мик на screen-audio (пока идёт стрим со звуком,
-        // голос не передаётся — таково ограничение одного audio-sender'а).
-        if (audioSenderRef.current) {
+        // Микшируем мик + screen-audio в один трек и ставим его на
+        // audio-sender. До этого фикса replaceTrack(audioSender, screenAudio)
+        // выкидывал голос с провода (см. createMicScreenMixer в
+        // audioProcessing.ts) — пир видел индикатор речи у себя
+        // (анализатор крутится на raw-mic), но не слышал ни слова.
+        if (audioSenderRef.current && micTrackRef.current) {
           try {
-            await audioSenderRef.current.replaceTrack(audioTrack);
+            // На всякий случай: если предыдущий микшер не успел убраться
+            // (быстрое off→on), снесём его перед созданием нового.
+            if (micScreenMixerRef.current) {
+              try { micScreenMixerRef.current.destroy(); } catch { /* */ }
+              micScreenMixerRef.current = null;
+            }
+            const mixer = createMicScreenMixer({
+              micTrack: micTrackRef.current,
+              screenAudioTrack: audioTrack,
+            });
+            micScreenMixerRef.current = mixer;
+            await audioSenderRef.current.replaceTrack(mixer.outputTrack);
           } catch (e) {
-            console.error('Failed to replace audio track:', e);
+            console.error('Failed to attach mic+screen audio mixer:', e);
+            // Fallback: если что-то поломалось при сборке миксера, отдаём
+            // голый мик (пир не услышит звук стрима, но зато услышит нас).
+            try {
+              await audioSenderRef.current.replaceTrack(micTrackRef.current);
+            } catch { /* */ }
           }
         }
       }
@@ -767,16 +933,21 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       // Системная остановка демонстрации (кнопка в OS overlay): зеркалим
       // toggle-off, иначе остаются висеть screen-audio на audio sender'е
       // (мик не возвращается → пира никто не слышит) и dead-track-и в
-      // localStreamRef. Также обнуляем screenAudioDeafenRef и снимаем
-      // авто-deafen, если включали его при старте.
+      // localStreamRef.
       screenTrackRef.current.onended = () => {
         if (screenTrackRef.current !== track) return; // защита от гонок
-        const wasDeafenedForAudio = screenAudioDeafenRef.current;
         if (screenAudioTrackRef.current) {
-          try { screenAudioTrackRef.current.stop(); } catch { /* */ }
+          // Сначала возвращаем чистый мик на провод, потом сносим миксер
+          // и останавливаем screen-audio (порядок важен по той же причине,
+          // что и в ручном toggle-off — иначе короткая «тишина» у пира).
           if (audioSenderRef.current && micTrackRef.current) {
             audioSenderRef.current.replaceTrack(micTrackRef.current).catch(() => { /* */ });
           }
+          if (micScreenMixerRef.current) {
+            try { micScreenMixerRef.current.destroy(); } catch { /* */ }
+            micScreenMixerRef.current = null;
+          }
+          try { screenAudioTrackRef.current.stop(); } catch { /* */ }
           screenAudioTrackRef.current = null;
         }
         const ls = localStreamRef.current;
@@ -784,9 +955,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
           try { ls.removeTrack(track); } catch { /* */ }
         }
         screenTrackRef.current = null;
-        screenAudioDeafenRef.current = false;
         setSharingScreen(false);
-        if (wasDeafenedForAudio) setDeafened(false);
         if (cameraOn && cameraTrackRef.current) {
           videoSenderRef.current.replaceTrack(cameraTrackRef.current).catch(() => { /* */ });
         } else {
@@ -800,7 +969,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         toast?.error?.(prettyMediaError('Не удалось начать демонстрацию', e));
       }
     }
-  }, [cameraOn, deafened, emitMyMedia, renegotiate, setLocal, sharingScreen, toast, turnOffVideoSender]);
+  }, [cameraOn, emitMyMedia, renegotiate, setLocal, sharingScreen, toast, turnOffVideoSender]);
 
   // --- Обработка сигналинга ---------------------------------------------
   useEffect(() => {
@@ -817,6 +986,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         callIdRef.current = callId;
         setWithVideo(!!wv);
         setWaitingUntil(null);
+        setSelfLeft(false);
         setState('connecting');
         // Как callee: создаём свежий PC, шлём accept и ждём offer.
         (async () => {
@@ -937,7 +1107,15 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       const wasTalking = curState === 'in-call' || curState === 'connecting';
       if (temporary && wasTalking) {
         toast?.info?.('Собеседник отключился — ждём возврата');
-        enterWaiting();
+        enterWaiting(false); // ушёл ПИР → красная End у нас
+        return;
+      }
+      // Защита от дубликата: при F5 у пира сервер мог прислать сначала
+      // peer-leaving (от beforeunload), а потом peer-disconnected (от
+      // disconnect handler'а). Первый перевёл нас в waiting; второй с
+      // прежней логикой провалился бы в cleanup ниже и кикал из звонка.
+      // Если мы уже в waiting и причина временная — это эхо, игнор.
+      if (temporary && curState === 'waiting') {
         return;
       }
       if (reason === 'peer-disconnected') {
@@ -1023,6 +1201,103 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [socket]);
 
+  // --- Refresh-resilience: sessionStorage + auto-rejoin -----------------
+  // initialSavedCall объявлен в самом начале хука (до useState'ов state/
+  // peer/...), чтобы синхронно проинициализировать их в 'waiting'+peer.
+  // Здесь — только write-effect для актуализации записи и auto-rejoin.
+  //
+  // Сохраняем только активные стадии: in-call/connecting/waiting. Стадию
+  // 'calling' (исходящий, ещё не принят) не сохраняем — на сервере invite
+  // финализируется как cancelled при disconnect каллера, реджойн не
+  // имеет шансов. 'incoming' тоже пропускаем — без серверной поддержки
+  // восстановить нотификацию нечем.
+  //
+  // Поскольку state на mount теперь сразу 'waiting' (когда savedCall
+  // есть), write-effect синхронизирует данные сразу. callIdRef нужно
+  // успеть выставить ДО первого write-effect (state==='waiting' попадёт
+  // в первый if). Поэтому подсасываем callId через мутирующий ref-init
+  // эффект (см. ниже initialRefsAppliedRef).
+  const initialRefsAppliedRef = useRef(false);
+  if (!initialRefsAppliedRef.current && initialSavedCall) {
+    callIdRef.current = initialSavedCall.callId || null;
+    peerRef.current = initialSavedCall.peer || null;
+    initialRefsAppliedRef.current = true;
+  }
+
+  useEffect(() => {
+    try {
+      if (state === 'in-call' || state === 'connecting' || state === 'waiting') {
+        if (peer && callIdRef.current) {
+          sessionStorage.setItem(
+            ACTIVE_CALL_STORAGE_KEY,
+            JSON.stringify({
+              callId: callIdRef.current,
+              peer,
+              withVideo,
+              state,
+              selfLeft,
+              // На F5 ts не пере-выписываем — он используется для
+              // оценки REJOIN_MAX_AGE_MS на следующий маунт; мы хотим
+              // сохранить исходное время, иначе пользователь может
+              // бесконечно перезагружать страницу и звонок никогда не
+              // протухнет (а сервер уже давно его финализировал).
+              ts: initialSavedCall?.ts || Date.now(),
+            }),
+          );
+        }
+      } else if (state === 'idle') {
+        sessionStorage.removeItem(ACTIVE_CALL_STORAGE_KEY);
+      }
+    } catch { /* quota exceeded / disabled storage — игнор */ }
+  }, [state, peer, withVideo, selfLeft, initialSavedCall]);
+
+  // Авто-rejoin после F5 удалён. Он пытался через 800мс дёрнуть
+  // start() на восстановленных peer/callId, но при переходе через
+  // getLocalMedia нередко ловил error (Chrome бывает забирает mic/cam
+  // на короткий период после reload), что фаллилось в hangup
+  // с reason='start-failed' → cleanup → idle. Юзер видел
+  // «выкидывает». Теперь после F5 юзер остаётся в waiting+selfLeft=true
+  // (см. хидрацию selfLeft выше) и видит зелёную Connect — жмёт и
+  // переподключается через rejoinAsCaller (тот же server-side
+  // rebindForRejoin flow), но уже в ответ на живой user-gesture, так
+  // что getUserMedia не падает.
+
+  // --- Audio-pipeline resume при возврате во вкладку --------------------
+  // Браузеры (особенно Chromium) могут перевести AudioContext в suspended,
+  // когда вкладка уходит в фон или окно теряет фокус. MediaStreamDestination
+  // в этом состоянии отдаёт тишину — пир «слышит» только наш голос пока
+  // мы СМОТРИМ во вкладку OwnCord. Возврат во вкладку сам по себе ctx
+  // не воскрешает: нужно явно вызвать ctx.resume() в активной user-сессии.
+  // Слушаем все три события, чтобы покрыть Chrome/Firefox/Safari/мобильные:
+  //   - visibilitychange → стандартный сигнал «вкладка снова видна»;
+  //   - focus            → дополнительный сигнал на десктопе (alt-tab);
+  //   - pageshow         → возврат из bfcache (кнопка «назад»).
+  // Пока state=idle — пайплайна нет, эффект no-op'ит.
+  useEffect(() => {
+    if (state === 'idle') return undefined;
+    const tryResume = () => {
+      const pipeline = micPipelineRef.current;
+      const ctx = pipeline?.context;
+      if (!ctx) return;
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => { /* без user activation — попробуем позже */ });
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') tryResume();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', tryResume);
+    window.addEventListener('pageshow', tryResume);
+    // Первый прогон — на случай если эффект запустился уже после возврата.
+    tryResume();
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', tryResume);
+      window.removeEventListener('pageshow', tryResume);
+    };
+  }, [state]);
+
   return {
     state,
     peer,
@@ -1035,6 +1310,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     sharingScreen,
     peerMedia,
     waitingUntil,
+    selfLeft,
     speakingUserIds,
     selfId: selfUser.id,
     start,

@@ -11,7 +11,10 @@ import {
 import {
   createMicPipeline,
   pickAudioFilterSettings,
+  createMicScreenMixer,
+  type MicScreenMixer,
 } from '../utils/audioProcessing';
+import { onShortcutEvent } from '../utils/desktop';
 import { useSpeakingDetector } from './useSpeakingDetector';
 
 /**
@@ -42,6 +45,12 @@ import { useSpeakingDetector } from './useSpeakingDetector';
  *   socket.on('groupcall:ended',       { groupId, callId })
  *   socket.on('rtc:offer'|'rtc:answer'|'rtc:ice', { from, callId, groupId, … })
  */
+
+// SessionStorage-ключ для воскрешения активного группового звонка после
+// reload'а. Серверный grace-window для group-call'а — те же 5 минут.
+const ACTIVE_GROUPCALL_STORAGE_KEY = 'owncord.activeGroupCall';
+const REJOIN_MAX_AGE_MS = 5 * 60 * 1000;
+
 export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
   const [state, setState] = useState('idle');      // 'idle' | 'joining' | 'in-call'
   const [group, setGroup] = useState(null);
@@ -71,8 +80,12 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
   const micPipelineRef = useRef(null);
   const videoTrackRef = useRef(null);   // камера
   const screenTrackRef = useRef(null);
-  const screenAudioDeafenRef = useRef(false); // Отслеживаем автоматически включённый deafen для звука экрана
   const screenAudioTrackRef = useRef(null); // Аудио трек из стрима экрана  // демонстрация экрана (приоритет над камерой)
+  // Микшер mic + screen-audio. Аналог из useCall.ts: чтобы голос не
+  // выкидывался с провода при включении демонстрации со звуком.
+  // Жив, пока активна демка с аудио; в applyLocalTracksToPc/createPeer
+  // его outputTrack ставится на audio-sender каждого PC вместо голого мика.
+  const micScreenMixerRef = useRef<MicScreenMixer | null>(null);
   // Placeholder-треки на случай отсутствия камеры — используются при
   // создании каждого PC, чтобы SDP сразу содержал msid+ssrc и пир
   // получал ontrack ещё до того, как мы реально включим камеру/демку.
@@ -191,6 +204,12 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
       try { micPipelineRef.current.destroy(); } catch { /* */ }
       micPipelineRef.current = null;
     }
+    // Микшер mic+screen-audio (если демка со звуком была активна на
+    // момент leave): закрываем свой AudioContext и outputTrack.
+    if (micScreenMixerRef.current) {
+      try { micScreenMixerRef.current.destroy(); } catch { /* */ }
+      micScreenMixerRef.current = null;
+    }
     const ls = localStreamRef.current;
     if (ls) ls.getTracks().forEach((t) => { try { t.stop(); } catch { /* */ } });
     localStreamRef.current = null;
@@ -233,11 +252,13 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
   const applyLocalTracksToPc = useCallback((pc) => {
     const aS = pc.__audioSender;
     const vS = pc.__videoSender;
-    // Если идёт screen-share со звуком — приоритет за screen-audio: это
-    // тот же контракт, что в 1-на-1 (replaceTrack на audio-sender). Без
-    // этого фикса screenAudioTrackRef добавлялся в localStream, но НИЧЬИХ
-    // пиров не достигал — audio-sender оставался на микрофоне.
-    let aTrack = screenAudioTrackRef.current || audioTrackRef.current;
+    // Если идёт screen-share со звуком — берём microphone+screen микшер
+    // (mixer.outputTrack), чтобы пиры слышали И голос, И звук стрима
+    // одновременно. Без микшера replaceTrack(audioSender, screenAudio)
+    // выкидывал бы голос с провода — это и был баг "стрим со звуком ⇒
+    // меня не слышно". См. createMicScreenMixer в audioProcessing.ts.
+    const mixedAudio = micScreenMixerRef.current?.outputTrack || null;
+    let aTrack = mixedAudio || audioTrackRef.current;
     if (!aTrack) {
       if (!placeholderAudioRef.current) {
         placeholderAudioRef.current = createPlaceholderAudioTrack();
@@ -272,12 +293,11 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
     // Без этого Chrome не fire-ит ontrack у пира при последующем
     // replaceTrack — демонстрация экрана/камера от не-инициатора
     // оказывались невидимыми у других участников.
-    // Аудио: при активном screen-share с аудио приоритет за screen-audio
-    // (зеркаля логику applyLocalTracksToPc), иначе late joiner получит
-    // микрофон, и onAnswer уже не пере-привязывает sender'ы со стороны
-    // инициатора — т.е. screen-audio до такого пира не дойдёт никогда.
+    // Аудио: при активном screen-share с аудио — mixer.outputTrack (mic +
+    // системный звук), иначе чистый мик. Late joiner сразу получит то же,
+    // что и остальные участники, без дополнительного renegotiation.
     const ls = localStreamRef.current;
-    const aTrack = screenAudioTrackRef.current || audioTrackRef.current;
+    const aTrack = micScreenMixerRef.current?.outputTrack || audioTrackRef.current;
     const vTrack = currentVideoTrack();
 
     let audioForSender = aTrack;
@@ -526,8 +546,11 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
     if (!t) return;
     t.enabled = !t.enabled;
     setMuted(!t.enabled);
+    // Пип перед emitMyMedia — локальный фидбэк не должен
+    // ждать сети. t.enabled уже отражает новое состояние.
+    if (t.enabled) sounds?.playMicUnmute?.(); else sounds?.playMicMute?.();
     setTimeout(emitMyMedia, 0);
-  }, [emitMyMedia]);
+  }, [emitMyMedia, sounds]);
 
   // Прокидываем изменения фильтров в живой mic-pipeline без пересборки.
   // useEffect-сравнение по плоским ключам, чтобы reconciler не дёргался
@@ -557,8 +580,25 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
   ]);
 
   const toggleDeafen = useCallback(() => {
-    setDeafened((d) => !d);
-  }, []);
+    setDeafened((d) => {
+      const next = !d;
+      // UI-пип проходит через отдельный AudioContext useSounds,
+      // а не через <RemoteAudio>, который мы замьютим этим
+      // тогглом — так что звук deafen-уведомления будет слышен
+      // вне зависимости от направления переключения.
+      if (next) sounds?.playDeafen?.(); else sounds?.playUndeafen?.();
+      return next;
+    });
+  }, [sounds]);
+
+  // Глобальные хоткеи десктопа. Подписка зеркалит useCall.ts —
+  // см. там подробный комментарий.
+  useEffect(() => {
+    return onShortcutEvent((action) => {
+      if (action === 'toggleMute') toggleMute();
+      else if (action === 'toggleDeafen') toggleDeafen();
+    });
+  }, [toggleMute, toggleDeafen]);
 
   const toggleCamera = useCallback(() => {
     const t = videoTrackRef.current;
@@ -602,21 +642,24 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
       // Захватываем треки и нулим ref'ы ДО stop()/await — чтобы наш же
       // onended-handler, отрабатывающий на ended event от .stop(), увидел
       // screenTrackRef.current === null и вышел по race-guard'у.
-      const wasDeafenedForAudio = screenAudioDeafenRef.current;
       const screenVideoTrack = screenTrackRef.current;
       const screenAudioLocal = screenAudioTrackRef.current;
+      const mixer = micScreenMixerRef.current;
       screenTrackRef.current = null;
       screenAudioTrackRef.current = null;
-      screenAudioDeafenRef.current = false;
+      micScreenMixerRef.current = null;
 
       try { screenVideoTrack.stop(); } catch { /* */ }
       if (screenAudioLocal) {
+        // applyLocalTracksToPc ниже уже подберёт чистый мик (mixer.outputTrack
+        // → audioTrackRef.current), потому что mixerRef уже обнулён. Нам
+        // остаётся только остановить screen-audio и снести сам микшер.
         try { screenAudioLocal.stop(); } catch { /* */ }
+        if (mixer) {
+          try { mixer.destroy(); } catch { /* */ }
+        }
       }
       setSharingScreen(false);
-      if (wasDeafenedForAudio) {
-        setDeafened(false);
-      }
       // Ребилд localStream от первичных треков. Раньше делали filter по
       // kind !== 'video', но это сохраняло уже остановленный screen-audio
       // в стриме (он добавлялся в ls при старте и не вычищался при стопе).
@@ -637,11 +680,11 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
     let display;
     try {
       display = await captureDisplay(presetKey, includeAudio);
-      // Если включён звук экрана, автоматически deafen чтобы избежать эха
-      if (includeAudio && !deafened) {
-        setDeafened(true);
-        screenAudioDeafenRef.current = true;
-      }
+      // Авто-deafen при includeAudio убран намеренно (как и в useCall):
+      // он глушил ВХОДЯЩЕЕ аудио, т.е. ты переставал слышать остальных
+      // участников при старте демки со звуком. echoCancellation у мика
+      // и так не даёт фидбэка, потому что screen-audio идёт от системного
+      // выхода, а не из мика.
     } catch (e) {
       if (e?.name !== 'NotAllowedError' && e?.name !== 'AbortError') {
         toast?.error?.(`Не удалось начать демонстрацию: ${e.message || e}`);
@@ -656,6 +699,26 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
     const audioTrack = display.getAudioTracks()[0];
     if (audioTrack) {
       screenAudioTrackRef.current = audioTrack;
+      // Собираем микшер mic + screen-audio. applyLocalTracksToPc после
+      // этого подберёт mixer.outputTrack как audio-track и поставит его
+      // на каждый __audioSender. Голос продолжает идти параллельно
+      // системному звуку.
+      if (audioTrackRef.current) {
+        try {
+          if (micScreenMixerRef.current) {
+            try { micScreenMixerRef.current.destroy(); } catch { /* */ }
+            micScreenMixerRef.current = null;
+          }
+          micScreenMixerRef.current = createMicScreenMixer({
+            micTrack: audioTrackRef.current,
+            screenAudioTrack: audioTrack,
+          });
+        } catch (e) {
+          console.error('Failed to attach mic+screen audio mixer (group):', e);
+        }
+      }
+      // В localStream добавляем сырой screen-audio (а не mixer.outputTrack)
+      // только для UI/отладки — на провод идёт mixer через applyLocalTracksToPc.
       const ls = localStreamRef.current || new MediaStream();
       ls.addTrack(audioTrack);
       localStreamRef.current = ls;
@@ -677,6 +740,11 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
       if (screenAudioTrackRef.current) {
         try { screenAudioTrackRef.current.stop(); } catch { /* */ }
         screenAudioTrackRef.current = null;
+      }
+      // Микшер тоже сносим — applyLocalTracksToPc ниже подберёт чистый мик.
+      if (micScreenMixerRef.current) {
+        try { micScreenMixerRef.current.destroy(); } catch { /* */ }
+        micScreenMixerRef.current = null;
       }
       setSharingScreen(false);
       // Восстанавливаем чистый набор: только мик-аудио + камера (если есть).
@@ -890,6 +958,106 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [socket]);
+
+  // --- Refresh-resilience: sessionStorage + auto-rejoin -----------------
+  // На reload теряются все треки и pcs, и пользователь оказывается в
+  // 'idle'. Сервер на disconnect помечает участника, но сама group-call-
+  // сессия не финализируется, пока есть хотя бы один живой участник или
+  // 5-минутное окно ожидания ещё не вышло. Если запомним groupId+
+  // withVideo в sessionStorage, на маунте можем сами вызвать join()
+  // заново — сервер примет, остальные получат peer-joined и mesh
+  // пересоберётся.
+  //
+  // Те же гонки, что и в useCall: read через useState-initializer
+  // СИНХРОННО, write-effect пропускает первый проход в state==='idle'.
+  const [initialSavedGroupCall] = useState(() => {
+    try {
+      const raw = sessionStorage.getItem(ACTIVE_GROUPCALL_STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || !parsed.group || typeof parsed.group.id !== 'number') return null;
+      if (Date.now() - (parsed.ts || 0) > REJOIN_MAX_AGE_MS) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  });
+
+  const persistInitDoneRef = useRef(false);
+  useEffect(() => {
+    if (!persistInitDoneRef.current) {
+      persistInitDoneRef.current = true;
+      if (state === 'idle') return;
+    }
+    try {
+      if (state === 'in-call' || state === 'joining') {
+        if (group && group.id) {
+          sessionStorage.setItem(
+            ACTIVE_GROUPCALL_STORAGE_KEY,
+            JSON.stringify({
+              group,
+              withVideo,
+              callId,
+              ts: Date.now(),
+            }),
+          );
+        }
+      } else if (state === 'idle') {
+        sessionStorage.removeItem(ACTIVE_GROUPCALL_STORAGE_KEY);
+      }
+    } catch { /* quota / disabled — игнор */ }
+  }, [state, group, withVideo, callId]);
+
+  const autoRejoinedRef = useRef(false);
+  const joinRef = useRef<any>(null);
+  useEffect(() => { joinRef.current = join; });
+
+  useEffect(() => {
+    if (!socket || !selfUser?.id) return undefined;
+    if (autoRejoinedRef.current) return undefined;
+    if (!initialSavedGroupCall) return undefined;
+    autoRejoinedRef.current = true;
+    const timer = setTimeout(() => {
+      if (stateRef.current !== 'idle') return;
+      const fn = joinRef.current;
+      if (typeof fn !== 'function') return;
+      toast?.info?.('Восстанавливаем звонок в группе…');
+      try {
+        void fn(initialSavedGroupCall.group, { withVideo: !!initialSavedGroupCall.withVideo });
+      } catch { /* */ }
+    }, 800);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket, selfUser?.id, initialSavedGroupCall]);
+
+  // --- Audio-pipeline resume при возврате во вкладку --------------------
+  // Та же история, что и в useCall: фоновая вкладка → AudioContext
+  // suspended → MediaStreamDestination отдаёт тишину → пиры перестают нас
+  // слышать, при этом мы их слышим спокойно (их аудио не зависит от нашего
+  // ctx). Явно резюмируем по visibility/focus/pageshow.
+  useEffect(() => {
+    if (state === 'idle') return undefined;
+    const tryResume = () => {
+      const pipeline = micPipelineRef.current;
+      const ctx = pipeline?.context;
+      if (!ctx) return;
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => { /* нет user activation — попробуем позже */ });
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') tryResume();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', tryResume);
+    window.addEventListener('pageshow', tryResume);
+    tryResume();
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', tryResume);
+      window.removeEventListener('pageshow', tryResume);
+    };
+  }, [state]);
 
   return {
     state,
