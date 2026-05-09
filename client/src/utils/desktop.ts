@@ -5,15 +5,27 @@
 //
 // На вебе window.electronAPI === undefined, и все методы тут возвращают
 // безопасные дефолты (null/false). UI, основанный на isDesktop(), должен
-// сам прятать соответствующие элементы (например, вкладку «Биндинги»).
+// сам прятать соответствующие элементы (например, вкладку «Горячие клавиши»).
 //
 // Действия (action) для shortcut'ов задаются строками. Когда добавляешь
 // новый — обнови:
 //   1) ShortcutAction-тип ниже,
 //   2) DEFAULT_KEYBINDS в SettingsContext (имя поля = action),
-//   3) UI с KeybindRecorder в SettingsPanel,
+//   3) UI с KeybindRecorder в settings/KeybindsTab,
 //   4) Слушатель в useCall/useGroupCall (window.addEventListener
 //      'owncord:shortcut').
+//
+// Мышь:
+//   Electron globalShortcut НЕ умеет ловить кнопки мыши на уровне ОС
+//   (это ограничение API — он принимает только клавиатурные acc'ы). Чтобы
+//   юзер мог хоть как-то использовать боковые кнопки мыши, мы:
+//   а) разрешаем записывать accelerator вида `Mouse3..Mouse5`/`MouseMiddle`
+//      (с опц. модификаторами Ctrl/Alt/Shift) в KeybindsTab;
+//   б) на стороне renderer'а (useKeybinds) подписываемся на window
+//      mousedown и сами диспатчим 'owncord:shortcut'. Так мышь работает
+//      ТОЛЬКО когда окно OwnCord в фокусе (в отличие от клавиатуры,
+//      которая через globalShortcut работает реально глобально). UI
+//      честно об этом сообщает.
 
 export type ShortcutAction = 'toggleMute' | 'toggleDeafen';
 
@@ -46,6 +58,7 @@ export type UpdateEvent =
 
 type ElectronApi = {
   isDesktop: true;
+  getVersion?: () => Promise<string>;
   getConfig: () => Promise<any>;
   setConfig: (patch: any) => Promise<any>;
   getShortcuts: () => Promise<Shortcuts>;
@@ -64,6 +77,29 @@ declare global {
 
 export function isDesktop(): boolean {
   return typeof window !== 'undefined' && !!window.electronAPI?.isDesktop;
+}
+
+/**
+ * Версия десктоп-приложения (из desktop/package.json через app.getVersion()).
+ * Возвращает null на вебе или если preload не выставил getVersion (старая
+ * сборка десктопа — graceful-fallback). Кэшируется на уровне модуля, чтобы
+ * не плодить IPC при каждом рендере.
+ */
+let _versionCache: string | null | undefined;
+export async function getDesktopVersion(): Promise<string | null> {
+  if (_versionCache !== undefined) return _versionCache;
+  if (!isDesktop() || !window.electronAPI?.getVersion) {
+    _versionCache = null;
+    return null;
+  }
+  try {
+    const v = await window.electronAPI.getVersion();
+    _versionCache = typeof v === 'string' && v ? v : null;
+    return _versionCache;
+  } catch {
+    _versionCache = null;
+    return null;
+  }
 }
 
 /**
@@ -209,6 +245,55 @@ export function keyEventToAccelerator(e: KeyboardEvent): string | null {
 }
 
 /**
+ * Утилита: берёт DOM MouseEvent и собирает наш «псевдо-accelerator» вида
+ * `Mouse4`/`Ctrl+Mouse5`. Это НЕ настоящий Electron-accelerator —
+ * globalShortcut такие не принимает; мы их обрабатываем сами в
+ * useKeybinds через window-listener (см. подробный комментарий в шапке
+ * файла, секция «Мышь»).
+ *
+ * Маппинг кнопок (DOM MouseEvent.button):
+ *   0 = ЛКМ      — пропускаем, это нормальный клик по UI
+ *   1 = Wheel    — `MouseMiddle`
+ *   2 = ПКМ      — пропускаем, контекстное меню
+ *   3 = Side1/X1 — `Mouse4` (исторически «Назад»)
+ *   4 = Side2/X2 — `Mouse5` (исторически «Вперёд»)
+ *   ≥5           — `MouseN` (некоторые игровые мыши умеют)
+ *
+ * Возвращает null для ЛКМ/ПКМ — их перехватывать в keybind-рекордере не
+ * стоит, иначе UI станет неюзабельным (любой клик по странице запишется
+ * как хоткей).
+ */
+export function mouseEventToAccelerator(e: MouseEvent): string | null {
+  const parts: string[] = [];
+  if (e.ctrlKey || e.metaKey) parts.push('CommandOrControl');
+  if (e.altKey) parts.push('Alt');
+  if (e.shiftKey) parts.push('Shift');
+
+  let key: string | null = null;
+  if (e.button === 0 || e.button === 2) {
+    // ЛКМ и ПКМ занимать нельзя — это базовая навигация по UI.
+    return null;
+  }
+  if (e.button === 1) key = 'MouseMiddle';
+  else if (e.button >= 3) key = `Mouse${e.button + 1}`; // 3 → Mouse4, 4 → Mouse5
+
+  if (!key) return null;
+  parts.push(key);
+  return parts.join('+');
+}
+
+/**
+ * true, если accelerator завершается на «мышиную» клавишу. Такие
+ * accelerator'ы Electron globalShortcut НЕ может зарегистрировать —
+ * useKeybinds обрабатывает их сам, слушая window mousedown.
+ */
+export function isMouseAccelerator(acc: string | null | undefined): boolean {
+  if (!acc) return false;
+  const last = acc.split('+').pop() || '';
+  return /^Mouse(Middle|[3-9]|\d{2})$/.test(last);
+}
+
+/**
  * Человеко-читаемое представление accelerator-строки для UI.
  * 'CommandOrControl+Shift+M' → 'Ctrl+Shift+M' (на macOS будет '⌘+Shift+M').
  */
@@ -226,6 +311,10 @@ export function formatAccelerator(acc: string | null | undefined): string {
       if (p === 'Shift') return isMac ? '⇧' : 'Shift';
       if (p === 'Esc') return 'Esc';
       if (p === 'Return') return 'Enter';
+      if (p === 'MouseMiddle') return 'СКМ';
+      if (p === 'Mouse4') return 'Mouse 4';
+      if (p === 'Mouse5') return 'Mouse 5';
+      if (/^Mouse\d+$/.test(p)) return p.replace('Mouse', 'Mouse ');
       return p;
     })
     .join(isMac ? '' : '+');

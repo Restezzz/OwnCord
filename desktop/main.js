@@ -206,6 +206,12 @@ ipcMain.handle('shortcuts:set', (_e, map) => {
 
 ipcMain.handle('shortcuts:get', () => cfg?.shortcuts || {});
 
+// Версия приложения. Источник правды — app.getVersion(), который читает
+// version из desktop/package.json при запаковке. Renderer показывает её
+// в сайдбаре настроек, чтобы пользователь видел, какой билд у него стоит
+// (особенно полезно при автообновлениях).
+ipcMain.handle('app:version', () => app.getVersion());
+
 // --- Lifecycle ---------------------------------------------------
 
 app.whenReady().then(() => {
