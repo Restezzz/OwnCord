@@ -122,6 +122,13 @@ sudo systemctl reload ssh
 После этого `owncord-publish` может только закидывать файлы по SFTP/SCP
 в `/var/www/owncord-updates/`, никаких команд выполнить не сможет.
 
+> **Важно (chroot меняет путь)**: внутри chroot-сессии юзер видит `/var/www`
+> как свой роот (`/`). Это значит, что с клиентской стороны (`scp`/`sftp`)
+> нужно указывать путь **`/owncord-updates/`** (НЕ `/var/www/owncord-updates/`).
+> Именно этот путь использует `desktop/scripts/release.ps1` по умолчанию.
+> Если отключишь chroot — переопредели с релизера:
+> `release.ps1 -RemoteDir /var/www/owncord-updates`.
+>
 > **Важно**: для `ChrootDirectory` папка-родитель (`/var/www`) должна
 > принадлежать `root` и иметь права не более 755. Это обычно так и есть
 > по умолчанию — проверь `ls -ld /var/www`.
@@ -255,6 +262,22 @@ ls -t *.blockmap | tail -n +6 | xargs -r rm
   `/home/owncord-publish/.ssh/authorized_keys`.
 - Проверь права: `.ssh` должна быть `700`, `authorized_keys` — `600`.
 - В `/var/log/auth.log` будет точная причина отказа.
+
+## «scp пишет "No such file or directory" при заливке»
+
+Скорее всего релизер указывает путь `/var/www/owncord-updates/`, но SSH-сессия
+юзера идёт внутри chroot в `/var/www`. Внутри chroot этот путь
+выглядит как `/owncord-updates/`. Проверь, что `release.ps1` использует
+дефолт `-RemoteDir /owncord-updates` (в версии 0.7.2+ это уже так). Если
+`-RemoteDir` был переопределён вручную — убери `/var/www` из начала.
+
+## «scp зависает на запросе passphrase»
+
+Причина: OpenSSH пытается все ключи из `~/.ssh/` перед тем, как использовать
+переданный `-i`. Если какой-то из них зашифрован паролем — сессия висит
+на промпте. Решение: в версии 0.7.2+ `release.ps1` автоматически добавляет
+`-o IdentitiesOnly=yes` при переданном `-SshKey` — пробоваться будет только
+указанный ключ. Если пользуешся scp вручную — добавляй также.
 
 ## «scp пишет sftp-server: command not found»
 
