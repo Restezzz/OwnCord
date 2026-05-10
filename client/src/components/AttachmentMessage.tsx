@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { File as FileIcon, Download, ExternalLink } from 'lucide-react';
 
 function formatBytes(b) {
@@ -59,40 +60,25 @@ function SingleAttachment({ attachment, mine, onZoom, isZoomed, onCloseZoom }) {
   if (kind === 'image') {
     return (
       <>
-        <div className="group relative inline-block max-w-xs rounded-lg overflow-hidden">
+        <div className="media-card group relative inline-block max-w-xs rounded-xl overflow-hidden bg-bg-3/60">
           <button type="button" className="block cursor-zoom-in" onClick={onZoom} title={fileName}>
             <img
               src={path}
               alt={fileName}
-              className="block max-h-64 w-auto object-contain"
+              className="block max-h-64 w-auto object-contain transition duration-200 ease-out group-hover:scale-[1.015]"
               loading="lazy"
             />
           </button>
           <MediaActions path={path} name={fileName} />
         </div>
-        {isZoomed && (
-          <div
-            className="fixed inset-0 z-[90] bg-black/85 grid place-items-center p-4 cursor-zoom-out"
-            onClick={onCloseZoom}
-            role="dialog"
-          >
-            <img src={path} alt={fileName} className="max-h-[90vh] max-w-[95vw] object-contain" />
-            <div
-              className="absolute top-4 right-4 flex items-center gap-2"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <OpenButton path={path} />
-              <DownloadButton path={path} name={fileName} />
-            </div>
-          </div>
-        )}
+        {isZoomed && <ImageZoomOverlay path={path} fileName={fileName} onClose={onCloseZoom} />}
       </>
     );
   }
 
   if (kind === 'video') {
     return (
-      <div className="group relative inline-block max-w-xs rounded-lg overflow-hidden">
+      <div className="media-card group relative inline-block max-w-xs rounded-xl overflow-hidden bg-bg-3/60">
         <video src={path} controls className="block max-h-72 max-w-xs bg-black">
           <track kind="captions" />
         </video>
@@ -107,13 +93,13 @@ function SingleAttachment({ attachment, mine, onZoom, isZoomed, onCloseZoom }) {
       download={fileName}
       target="_blank"
       rel="noopener noreferrer"
-      className={`flex items-center gap-3 rounded-lg px-3 py-2 max-w-[280px] no-underline transition-colors
-        ${mine ? 'bg-white/10 hover:bg-white/20' : 'bg-bg-3 hover:bg-bg-2'}`}
+      className={`media-card flex items-center gap-3 rounded-xl px-3 py-2 max-w-[280px] no-underline
+        ${mine ? 'bg-white/10 hover:bg-white/20' : 'bg-bg-3/90 hover:bg-bg-2'}`}
       title={mime || ''}
     >
       <span
-        className={`grid place-items-center w-9 h-9 rounded-md shrink-0
-        ${mine ? 'bg-white/15' : 'bg-bg-2'}`}
+        className={`grid place-items-center w-9 h-9 rounded-lg shrink-0
+        ${mine ? 'bg-white/15' : 'bg-bg-2/90'}`}
       >
         <FileIcon size={18} />
       </span>
@@ -133,12 +119,36 @@ function MediaActions({ path, name }) {
     <div
       className="absolute top-1.5 right-1.5 flex items-center gap-1
                  opacity-0 group-hover:opacity-100 focus-within:opacity-100
-                 transition-opacity"
+                 transition duration-150 ease-out"
       onClick={(e) => e.stopPropagation()}
     >
       <OpenButton path={path} />
       <DownloadButton path={path} name={name} />
     </div>
+  );
+}
+
+function ImageZoomOverlay({ path, fileName, onClose }) {
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[90] bg-black/85 backdrop-blur-sm grid place-items-center p-4 cursor-zoom-out"
+      onClick={onClose}
+      role="dialog"
+    >
+      <img
+        src={path}
+        alt={fileName}
+        className="max-h-[calc(100vh-2rem)] max-w-[calc(100vw-2rem)] object-contain"
+      />
+      <div
+        className="absolute top-4 right-4 flex items-center gap-2"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <OpenButton path={path} />
+        <DownloadButton path={path} name={fileName} />
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -149,7 +159,7 @@ function OpenButton({ path }) {
       target="_blank"
       rel="noopener noreferrer"
       title="Открыть в новой вкладке"
-      className="inline-grid place-items-center w-8 h-8 rounded-md bg-black/60 hover:bg-black/80 text-white"
+      className="interactive-scale inline-grid place-items-center w-8 h-8 rounded-lg bg-black/60 hover:bg-black/80 text-white backdrop-blur"
     >
       <ExternalLink size={14} />
     </a>
@@ -162,7 +172,7 @@ function DownloadButton({ path, name }) {
       href={path}
       download={name}
       title="Скачать"
-      className="inline-grid place-items-center w-8 h-8 rounded-md bg-black/60 hover:bg-black/80 text-white"
+      className="interactive-scale inline-grid place-items-center w-8 h-8 rounded-lg bg-black/60 hover:bg-black/80 text-white backdrop-blur"
     >
       <Download size={14} />
     </a>

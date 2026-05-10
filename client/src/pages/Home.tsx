@@ -814,19 +814,19 @@ export default function Home() {
   }, [unread]);
 
   return (
-    <div className="h-full w-full flex bg-bg-0 text-slate-100">
+    <div className="app-shell h-full w-full flex text-slate-100 overflow-hidden">
       {/* Sidebar */}
       <aside
         className={`
           ${sidebarOpen ? 'flex' : 'hidden'}
           md:flex flex-col w-full md:w-80 lg:w-96
-          bg-bg-1 border-r border-border
+          surface-panel border-r border-white/10
         `}
       >
-        <div className="flex items-center gap-2 p-3 border-b border-border">
+        <div className="flex items-center gap-2 p-3 border-b border-white/10 bg-white/[0.02]">
           <button
             onClick={() => setProfileId(selfUser.id)}
-            className="flex items-center gap-2 min-w-0 flex-1 text-left hover:opacity-90"
+            className="interactive-scale flex items-center gap-2 min-w-0 flex-1 text-left rounded-lg p-1 -m-1"
             title="Мой профиль"
           >
             <Avatar name={selfName} src={getAvatarUrl(selfUser)} size={36} />
@@ -864,11 +864,11 @@ export default function Home() {
       <main
         className={`
           ${sidebarOpen ? 'hidden' : 'flex'}
-          md:flex flex-col flex-1 min-w-0
+          md:flex flex-col flex-1 min-w-0 relative
         `}
       >
         {!selected && (
-          <div className="p-3 border-b border-border md:hidden flex items-center gap-2">
+          <div className="chat-header p-3 border-b border-white/10 md:hidden flex items-center gap-2">
             <button className="btn-ghost" onClick={() => setSidebarOpen(true)}>
               <Menu size={18} />
             </button>

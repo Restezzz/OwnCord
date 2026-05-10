@@ -69,8 +69,10 @@ function MessageList({
     const dayChanged = day !== lastDay;
     if (dayChanged) {
       out.push(
-        <div key={`d-${m.id}`} className="text-center text-xs text-slate-500 my-3">
-          {formatDay(m.createdAt)}
+        <div key={`d-${m.id}`} className="flex justify-center my-3 select-none">
+          <span className="rounded-full border border-white/10 bg-bg-2/70 px-3 py-1 text-xs text-slate-400 shadow-soft">
+            {formatDay(m.createdAt)}
+          </span>
         </div>,
       );
       lastDay = day;
@@ -80,11 +82,11 @@ function MessageList({
     if (!unreadShown && firstUnreadId && m.id === firstUnreadId && m.senderId !== selfId) {
       out.push(
         <div key={`unread-${m.id}`} className="flex items-center gap-2 my-2 select-none">
-          <div className="flex-1 h-px bg-red-500/60" />
+          <div className="flex-1 h-px bg-gradient-to-r from-transparent to-red-500/60" />
           <span className="text-[11px] uppercase tracking-wider text-red-400 font-semibold">
             новые сообщения
           </span>
-          <div className="flex-1 h-px bg-red-500/60" />
+          <div className="flex-1 h-px bg-gradient-to-l from-transparent to-red-500/60" />
         </div>,
       );
       unreadShown = true;
@@ -133,7 +135,7 @@ function MessageList({
     out.push(
       <div
         key={m.id}
-        className={`flex ${mine ? 'justify-end' : 'justify-start'} ${showSenderHeader ? 'mt-2' : ''}`}
+        className={`message-row flex ${mine ? 'justify-end' : 'justify-start'} ${showSenderHeader ? 'mt-2' : ''}`}
       >
         {isGroup && !mine && (
           <div className="w-8 mr-2 shrink-0 flex items-end">
@@ -153,13 +155,13 @@ function MessageList({
             <div className="text-[11px] text-slate-400 mb-0.5 ml-1">{senderName}</div>
           )}
           <div
-            className={`px-3 py-2 text-sm whitespace-pre-wrap break-words rounded-2xl
+            className={`message-bubble px-3 py-2 text-sm whitespace-pre-wrap break-words rounded-2xl
               ${
                 m.deleted
-                  ? 'bg-bg-2 text-slate-500 italic'
+                  ? 'message-bubble-deleted'
                   : mine
-                    ? 'bg-accent text-white'
-                    : 'bg-bg-2 text-slate-100'
+                    ? 'message-bubble-mine'
+                    : 'message-bubble-other'
               }
             `}
             title={new Date(m.createdAt).toLocaleString()}
@@ -203,7 +205,7 @@ function MessageList({
                           key={r.emoji}
                           type="button"
                           onClick={() => onReactionClick?.(m.id, r.emoji, hasReacted)}
-                          className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-sm border transition-colors ${
+                          className={`reaction-chip flex items-center gap-1.5 px-2 py-1 rounded-md text-sm border transition-colors ${
                             hasReacted
                               ? mine
                                 ? 'bg-white/20 border-white/30 text-white'

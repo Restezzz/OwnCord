@@ -240,10 +240,10 @@ export default function ChatPanel({
     // под ними.
     if (callSlot) {
       return (
-        <div className="flex flex-col h-full">
+        <div className="flex flex-col h-full chat-scroll">
           <div className="flex-1 min-h-[280px] flex flex-col">{callSlot}</div>
           <div className="flex-1 min-h-[200px] grid place-items-center text-slate-500 p-8 text-center">
-            <div>
+            <div className="card px-6 py-5 max-w-sm">
               <div className="text-lg mb-1">Выбери собеседника или группу слева</div>
               <div className="text-sm">Чат можно открывать прямо во время звонка.</div>
             </div>
@@ -252,8 +252,8 @@ export default function ChatPanel({
       );
     }
     return (
-      <div className="h-full grid place-items-center text-slate-500 p-8 text-center">
-        <div>
+      <div className="h-full grid place-items-center text-slate-500 p-8 text-center chat-scroll">
+        <div className="card px-6 py-5 max-w-sm">
           <div className="text-lg mb-1">Выбери собеседника или группу слева</div>
           <div className="text-sm">Можно писать или звонить любому пользователю.</div>
         </div>
@@ -449,14 +449,14 @@ export default function ChatPanel({
   return (
     <div
       ref={rootRef}
-      className={`flex flex-col h-full ${isDragging ? 'ring-2 ring-accent ring-inset' : ''} ${
+      className={`flex flex-col h-full bg-bg-0/20 ${isDragging ? 'ring-2 ring-accent ring-inset' : ''} ${
         resizing ? 'select-none' : ''
       }`}
       onDrop={handleDrop}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
     >
-      <header className="flex items-center gap-2 p-3 border-b border-border">
+      <header className="chat-header flex items-center gap-2 p-3 border-b border-white/10">
         {onBack && (
           <button className="btn-ghost md:hidden" onClick={onBack} aria-label="Назад">
             <ArrowLeft size={18} />
@@ -467,7 +467,7 @@ export default function ChatPanel({
             и НЕ дрожали при смене статуса «в сети» ↔ «печатает…». Длинные
             строки тримим через truncate. */}
         <button
-          className="flex items-center gap-3 min-w-0 text-left hover:opacity-90 shrink-0"
+          className="interactive-scale flex items-center gap-3 min-w-0 text-left shrink-0 rounded-xl p-1.5 -m-1.5"
           onClick={() => {
             if (isGroup) onShowGroupSettings?.(group.id);
             else onShowProfile?.(peer.id);
@@ -476,7 +476,7 @@ export default function ChatPanel({
         >
           {isGroup && !avatarUrl ? (
             <div
-              className="avatar grid place-items-center bg-bg-3 text-slate-200 shrink-0"
+              className="avatar grid place-items-center bg-bg-3/90 text-slate-200 shrink-0"
               style={{ width: 38, height: 38 }}
               aria-hidden
             >
@@ -512,7 +512,7 @@ export default function ChatPanel({
           {isGroup ? (
             <>
               <button
-                className="btn-icon bg-bg-3 hover:bg-bg-2 text-slate-100 disabled:opacity-40"
+                className="btn-icon bg-white/5 hover:bg-white/10 text-slate-100 disabled:opacity-40"
                 style={{ width: 36, height: 36 }}
                 onClick={() => onStartGroupCall?.(group, { withVideo: false })}
                 disabled={!onStartGroupCall}
@@ -522,7 +522,7 @@ export default function ChatPanel({
                 <Phone size={16} />
               </button>
               <button
-                className="btn-icon bg-bg-3 hover:bg-bg-2 text-slate-100 disabled:opacity-40"
+                className="btn-icon bg-white/5 hover:bg-white/10 text-slate-100 disabled:opacity-40"
                 style={{ width: 36, height: 36 }}
                 onClick={() => onStartGroupCall?.(group, { withVideo: true })}
                 disabled={!onStartGroupCall}
@@ -532,7 +532,7 @@ export default function ChatPanel({
                 <Video size={16} />
               </button>
               <button
-                className="btn-icon bg-bg-3 hover:bg-bg-2 text-slate-100"
+                className="btn-icon bg-white/5 hover:bg-white/10 text-slate-100"
                 style={{ width: 36, height: 36 }}
                 onClick={() => onShowGroupSettings?.(group.id)}
                 title="Настройки группы"
@@ -544,7 +544,7 @@ export default function ChatPanel({
           ) : peerDeleted ? null : (
             <>
               <button
-                className="btn-icon bg-bg-3 hover:bg-bg-2 text-slate-100 disabled:opacity-40"
+                className="btn-icon bg-white/5 hover:bg-white/10 text-slate-100 disabled:opacity-40"
                 style={{ width: 36, height: 36 }}
                 onClick={onCallAudio}
                 disabled={!peer.online}
@@ -554,7 +554,7 @@ export default function ChatPanel({
                 <Phone size={16} />
               </button>
               <button
-                className="btn-icon bg-bg-3 hover:bg-bg-2 text-slate-100 disabled:opacity-40"
+                className="btn-icon bg-white/5 hover:bg-white/10 text-slate-100 disabled:opacity-40"
                 style={{ width: 36, height: 36 }}
                 onClick={onCallVideo}
                 disabled={!peer.online}
@@ -595,8 +595,8 @@ export default function ChatPanel({
             aria-label="Изменить высоту окна звонка"
             aria-orientation="horizontal"
             onPointerDown={handleCallResizeStart}
-            className={`relative flex-shrink-0 cursor-row-resize bg-bg-1 border-y border-border transition-colors ${
-              resizing ? 'bg-accent/40' : 'hover:bg-bg-2'
+            className={`relative flex-shrink-0 cursor-row-resize bg-bg-1/70 border-y border-white/10 transition-colors ${
+              resizing ? 'bg-accent/40' : 'hover:bg-white/5'
             }`}
             style={{ height: 6 }}
           >
@@ -627,7 +627,7 @@ export default function ChatPanel({
 
       <div
         ref={scrollRef}
-        className={`flex-1 overflow-y-auto px-4 py-4 space-y-2 ${callSlot ? 'min-h-[200px]' : ''}`}
+        className={`chat-scroll flex-1 overflow-y-auto px-4 py-4 space-y-2 ${callSlot ? 'min-h-[200px]' : ''}`}
       >
         {loading && <div className="text-center text-slate-500 text-sm">Загрузка…</div>}
         {!loading && messages.length === 0 && (
@@ -656,7 +656,7 @@ export default function ChatPanel({
         />
       </div>
 
-      <div className="p-3 border-t border-border">
+      <div className="composer-panel p-3 border-t border-white/10">
         {peerDeleted ? (
           <div className="px-3 py-2 rounded-lg bg-bg-3 text-slate-400 text-sm text-center">
             Этот аккаунт был удалён. Написать или позвонить уже не получится — история остаётся
@@ -677,7 +677,7 @@ export default function ChatPanel({
             <button
               onClick={onPickFile}
               disabled={uploading}
-              className="btn-icon bg-bg-3 hover:bg-bg-2 text-slate-100"
+              className="btn-icon bg-white/5 hover:bg-white/10 text-slate-100"
               style={{ height: 40, width: 40 }}
               title={`Прикрепить файл (до ${formatLimit(maxFileBytes)})`}
               type="button"
@@ -708,7 +708,7 @@ export default function ChatPanel({
                 setRecording(true);
               }}
               disabled={uploading}
-              className="btn-icon bg-bg-3 hover:bg-bg-2 text-slate-100"
+              className="btn-icon bg-white/5 hover:bg-white/10 text-slate-100"
               style={{ height: 40, width: 40 }}
               title="Записать голосовое"
               type="button"
@@ -733,21 +733,21 @@ export default function ChatPanel({
               const isVideo = file.type.startsWith('video/');
               const previewUrl = isImage || isVideo ? URL.createObjectURL(file) : null;
               return (
-                <div key={index} className="relative group">
+                <div key={index} className="relative group message-row">
                   {isImage ? (
                     <button
                       type="button"
                       onClick={() => setPreviewZoom(previewUrl)}
-                      className="w-16 h-16 object-cover rounded-lg border border-border overflow-hidden"
+                      className="media-card w-16 h-16 object-cover rounded-xl overflow-hidden"
                     >
                       <img src={previewUrl} alt={file.name} className="w-16 h-16 object-cover" />
                     </button>
                   ) : isVideo ? (
-                    <div className="w-16 h-16 rounded-lg border border-border bg-bg-3 grid place-items-center overflow-hidden">
+                    <div className="media-card w-16 h-16 rounded-xl bg-bg-3 grid place-items-center overflow-hidden">
                       <video src={previewUrl} className="w-16 h-16 object-cover" muted />
                     </div>
                   ) : (
-                    <div className="w-16 h-16 rounded-lg border border-border bg-bg-3 grid place-items-center flex-col gap-0.5 p-1">
+                    <div className="media-card w-16 h-16 rounded-xl bg-bg-3/90 grid place-items-center flex-col gap-0.5 p-1">
                       <FileIcon size={16} className="text-slate-400 shrink-0" />
                       <div className="text-[9px] text-slate-400 truncate w-full text-center leading-tight">
                         {file.name.slice(0, 12)}
@@ -758,7 +758,7 @@ export default function ChatPanel({
                   <button
                     type="button"
                     onClick={() => removePendingAttachment(index)}
-                    className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                    className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity shadow-soft"
                     title="Удалить"
                   >
                     <X size={12} />
@@ -770,7 +770,7 @@ export default function ChatPanel({
         )}
         {previewZoom && (
           <div
-            className="fixed inset-0 z-[90] bg-black/85 grid place-items-center p-4 cursor-zoom-out"
+            className="fixed inset-0 z-[90] bg-black/85 backdrop-blur-sm grid place-items-center p-4 cursor-zoom-out"
             onClick={() => setPreviewZoom(null)}
             onKeyDown={(e) => {
               if (e.key === 'Escape') setPreviewZoom(null);
@@ -781,7 +781,7 @@ export default function ChatPanel({
             <img
               src={previewZoom}
               alt="Preview"
-              className="max-h-[90vh] max-w-[95vw] object-contain"
+              className="message-row max-h-[90vh] max-w-[95vw] object-contain rounded-xl shadow-soft"
             />
           </div>
         )}

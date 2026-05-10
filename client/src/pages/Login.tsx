@@ -25,10 +25,10 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-full grid place-items-center p-6">
-      <form onSubmit={onSubmit} className="card w-full max-w-sm p-6 space-y-4">
+    <div className="auth-shell min-h-full grid place-items-center p-6">
+      <form onSubmit={onSubmit} className="auth-card card w-full max-w-sm p-6 space-y-4">
         <div className="flex flex-col items-center gap-2 mb-2">
-          <div className="w-12 h-12 rounded-2xl bg-accent grid place-items-center shadow-soft">
+          <div className="brand-glow w-12 h-12 rounded-2xl bg-accent grid place-items-center shadow-soft">
             <LogIn size={22} />
           </div>
           <h1 className="text-xl font-semibold">Вход в OwnCord</h1>
