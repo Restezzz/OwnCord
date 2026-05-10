@@ -83,6 +83,27 @@ export default function SettingsPanel({ open, onClose }: { open: boolean; onClos
     updateState?.kind === 'progress';
   const updateReady = updateState?.kind === 'downloaded';
 
+  // Watchdog: если за 60 секунд после последнего in-flight-события не
+  // пришло никакого нового апдейта статуса — считаем, что main завис
+  // (нет сети, electron-updater молчит, latest.yml не отдаётся, etc.)
+  // и аварийно возвращаем UI в кликабельное состояние с понятной
+  // ошибкой. Без этого «Проверяю…» висит вечно — IPC ответил {ok:true},
+  // но broadcast 'update:event' так и не пришёл.
+  // Перезапускается на каждый новый event (зависимость от updateState),
+  // так что в норме (event'ы летят) таймер не успевает дотикать.
+  useEffect(() => {
+    if (!desktop) return;
+    if (!updateInFlight) return;
+    const t = setTimeout(() => {
+      setChecking(false);
+      setUpdateState({
+        kind: 'error',
+        message: 'Нет ответа от сервера обновлений (60 сек)',
+      });
+    }, 60_000);
+    return () => clearTimeout(t);
+  }, [desktop, updateInFlight, updateState]);
+
   const onUpdateButton = useCallback(async () => {
     if (updateReady) {
       void installUpdate();

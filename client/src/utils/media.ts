@@ -200,7 +200,327 @@ export async function captureDisplay(presetKey, includeAudio = false) {
     // когда стримим вкладку. Поведение по умолчанию `true` — звук падает
     // только в стрим, и юзер сам себя не слышит. Оставляем дефолт.
   };
-  return navigator.mediaDevices.getDisplayMedia(constraints);
+
+  const display = await navigator.mediaDevices.getDisplayMedia(constraints);
+
+  // На десктопе при шеринге ОКНА мы хотим звук ТОЛЬКО этого приложения,
+  // а не весь системный микшер. main-процесс уже сделал выбор:
+  //
+  //   • Если выбрано ОКНО + audio И per-process WASAPI loopback стартовал —
+  //     main параллельно с chromium-loopback стримит PCM в IPC. Здесь мы
+  //     удаляем chromium audio track (он несёт системный микшер) и
+  //     добавляем PCM-track через attachProcessAudioToDisplay.
+  //   • Иначе (экран целиком, или per-process loopback не стартовал —
+  //     macOS/Linux/окно закрылось) — chromium audio track уже даёт
+  //     системный звук, дополнительной обработки не нужно.
+  //
+  // Внимание: chromium ВСЕГДА даёт audio track при audio:true в callback'е
+  // main-а (это требование Electron'а — иначе getDisplayMedia падает,
+  // см. desktop/main.js). Поэтому мы не можем просто пропустить audio
+  // в getDisplayMedia при шеринге окна — приходится «подменять» track.
+  if (includeAudio) {
+    const api = (typeof window !== 'undefined' ? window.electronAPI : null) || null;
+    let procAudioActive = false;
+    try {
+      procAudioActive = !!(api?.procAudio && (await api.procAudio.isActive()));
+    } catch {
+      /* main мог не успеть зарегистрировать handler — не критично */
+    }
+    if (procAudioActive) {
+      // Удаляем системный (chromium) audio из display, освобождаем ресурсы.
+      for (const t of display.getAudioTracks()) {
+        try {
+          display.removeTrack(t);
+          t.stop();
+        } catch {
+          /* */
+        }
+      }
+      await attachProcessAudioToDisplay(display);
+    } else if (!api?.procAudio) {
+      // Веб-версия (или старая сборка десктопа без procAudio API).
+      // У Chromium на Windows при шеринге **окна** с галкой звука нет
+      // per-window audio capture: он отдаёт ВЕСЬ системный микшер. Если
+      // юзер при этом ожидал «звук этого приложения», результат ему
+      // совсем не нужен — и собеседнику тоже (Discord/Spotify/и т.п.
+      // польётся в звонок). Срезаем audio track и поднимаем флаг,
+      // useCall тостит юзеру про десктоп.
+      // Шер «всего экрана» (displaySurface === 'monitor') и «вкладки»
+      // (displaySurface === 'browser') трогать не надо: monitor — юзер
+      // явно понимает, что делится всем; browser — chromium даёт реальный
+      // per-tab audio.
+      const videoTrack = display.getVideoTracks()[0];
+      // displaySurface — стандартный screen-capture API (chromium 99+).
+      const surface = videoTrack && (videoTrack.getSettings() as any).displaySurface;
+      const audioTracks = display.getAudioTracks();
+      if (surface === 'window' && audioTracks.length > 0) {
+        for (const t of audioTracks) {
+          try {
+            display.removeTrack(t);
+            t.stop();
+          } catch {
+            /* */
+          }
+        }
+        // Метим стрим, чтобы useCall показал toast и не недоумевал
+        // насчёт пропавшего audio-track'а после captureDisplay.
+        (display as any).windowAudioStripped = true;
+      }
+    }
+  }
+
+  return display;
+}
+
+// --- Per-process audio (desktop only) ----------------------------------
+//
+// Когда main-процесс запустил WASAPI process-loopback для целевого окна,
+// он шлёт сырой PCM в renderer через IPC 'proc-audio:chunk'. Мы создаём
+// здесь маленький аудио-граф:
+//
+//   AudioWorkletNode (PCM in)  →  MediaStreamAudioDestinationNode (track out)
+//
+// AudioWorkletNode принимает чанки PCM (Float32, interleaved LRLRLR...)
+// через port.postMessage и пишет их в свои outputs планарно. Плеер
+// destination'а отдаёт обычный MediaStreamTrack, который мы добавляем
+// в displayStream — дальше работает обычный RTP-флоу WebRTC, как для
+// 'loopback'-аудио, без изменений в useCall.ts/useGroupCall.ts.
+
+const PROC_AUDIO_WORKLET_SRC = `
+class ProcAudioPlayer extends AudioWorkletProcessor {
+  constructor(opts) {
+    super();
+    this._channels = (opts && opts.processorOptions && opts.processorOptions.channels) || 2;
+    // Очередь сэмплов на канал. Каждый элемент — Float32Array длины N
+    // (frame count). process() сливает их по 128 фреймов (фиксированный
+    // размер блока WebAudio). Если данных не хватает — пишем тишину.
+    this._buf = [];
+    this._bufFrames = 0;
+    this.port.onmessage = (e) => {
+      const data = e.data;
+      if (!data) return;
+      if (data.type === 'pcm') {
+        // data.frames: Float32Array[channels], каждое — N сэмплов канала.
+        this._buf.push(data.frames);
+        this._bufFrames += data.frames[0].length;
+      } else if (data.type === 'flush') {
+        this._buf.length = 0;
+        this._bufFrames = 0;
+      }
+    };
+  }
+  process(_inputs, outputs) {
+    const out = outputs[0];
+    const need = out[0].length;  // 128
+    let written = 0;
+    while (written < need && this._buf.length) {
+      const head = this._buf[0];
+      const headLen = head[0].length;
+      const take = Math.min(headLen, need - written);
+      for (let ch = 0; ch < out.length; ch++) {
+        const src = head[Math.min(ch, head.length - 1)];
+        out[ch].set(src.subarray(0, take), written);
+      }
+      written += take;
+      if (take === headLen) {
+        this._buf.shift();
+        this._bufFrames -= headLen;
+      } else {
+        // Остаток в head — отрезаем consumed часть.
+        const remaining = [];
+        for (let ch = 0; ch < head.length; ch++) {
+          remaining.push(head[ch].subarray(take));
+        }
+        this._buf[0] = remaining;
+        this._bufFrames -= take;
+      }
+    }
+    // Тишина в хвост, если не хватило данных.
+    for (let ch = 0; ch < out.length; ch++) {
+      out[ch].fill(0, written);
+    }
+    return true;
+  }
+}
+registerProcessor('proc-audio-player', ProcAudioPlayer);
+`;
+
+// Кэш URL модуля worklet'а, чтобы не плодить Blob'ы при каждом шеринге.
+let _procWorkletUrl = null;
+function getProcWorkletUrl() {
+  if (_procWorkletUrl) return _procWorkletUrl;
+  const blob = new Blob([PROC_AUDIO_WORKLET_SRC], { type: 'application/javascript' });
+  _procWorkletUrl = URL.createObjectURL(blob);
+  return _procWorkletUrl;
+}
+
+/**
+ * Конвертирует interleaved Float32 PCM → planar Float32Array[channels].
+ * Например, для stereo: [L0, R0, L1, R1, L2, R2, ...] → [[L0, L1, L2], [R0, R1, R2]].
+ */
+function deinterleaveFloat32(interleaved, channels) {
+  const frames = (interleaved.length / channels) | 0;
+  const planar = new Array(channels);
+  for (let ch = 0; ch < channels; ch++) {
+    planar[ch] = new Float32Array(frames);
+  }
+  for (let i = 0; i < frames; i++) {
+    for (let ch = 0; ch < channels; ch++) {
+      planar[ch][i] = interleaved[i * channels + ch];
+    }
+  }
+  return planar;
+}
+
+/**
+ * Берёт displayStream (от getDisplayMedia без audio) и, если main активно
+ * шлёт per-process loopback, добавляет к нему audio-track из этого PCM.
+ *
+ * Безопасно вызывать ВНЕ desktop'а / без includeAudio — функция тихо
+ * вернётся. Если main не успел стартовать loopback (например, не нашёл
+ * PID окна) — chunk-ов просто не будет, audio-track будет тихим
+ * (silence), но звонок не сломается.
+ *
+ * Cleanup:
+ *   - Когда video track displayStream'а кончается (юзер нажал "Stop sharing"
+ *     в системном баннере или вручную остановил), мы:
+ *       a) просим main остановить loopback (procAudio.stop());
+ *       b) закрываем AudioContext, отписываемся от IPC, отзываем Blob URL.
+ */
+async function attachProcessAudioToDisplay(displayStream) {
+  const api = (typeof window !== 'undefined' ? window.electronAPI : null) || null;
+  if (!api?.procAudio) return; // не desktop / старая сборка
+  // Проверим хотя бы factually, что platform поддерживает (на macOS
+  // procAudio есть в API, но isSupported() вернёт false). Запрос делаем
+  // параллельно с format'ом.
+  let format;
+  try {
+    const [supported, fmt] = await Promise.all([
+      api.procAudio.isSupported(),
+      api.procAudio.getFormat(),
+    ]);
+    if (!supported) return;
+    format = fmt;
+  } catch (e) {
+    console.warn('procAudio bootstrap failed:', e);
+    return;
+  }
+  if (!format || !format.sampleRate) return;
+
+  const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+  const ctx = new Ctx({ sampleRate: format.sampleRate });
+
+  try {
+    await ctx.audioWorklet.addModule(getProcWorkletUrl());
+  } catch (e) {
+    console.warn('procAudio addModule failed:', e);
+    try {
+      await ctx.close();
+    } catch {
+      /* */
+    }
+    return;
+  }
+
+  const node = new AudioWorkletNode(ctx, 'proc-audio-player', {
+    numberOfInputs: 0,
+    numberOfOutputs: 1,
+    outputChannelCount: [format.channels],
+    processorOptions: { channels: format.channels },
+  });
+  const dst = ctx.createMediaStreamDestination();
+  node.connect(dst);
+
+  // Подписка на чанки. encoding: 'float32' → парсим напрямую,
+  // 'int16' → нормируем в [-1, 1].
+  const onChunk = (data) => {
+    try {
+      let interleaved;
+      if (format.encoding === 'int16') {
+        const i16 = new Int16Array(data.buffer, data.byteOffset, data.byteLength / 2);
+        interleaved = new Float32Array(i16.length);
+        for (let i = 0; i < i16.length; i++) {
+          interleaved[i] = i16[i] / 0x8000;
+        }
+      } else {
+        // float32 little-endian. Если byteOffset не выровнен по 4 —
+        // копируем (DataView), иначе zero-copy.
+        if ((data.byteOffset & 3) === 0) {
+          interleaved = new Float32Array(data.buffer, data.byteOffset, data.byteLength / 4);
+        } else {
+          const aligned = new ArrayBuffer(data.byteLength);
+          new Uint8Array(aligned).set(data);
+          interleaved = new Float32Array(aligned);
+        }
+      }
+      const planar = deinterleaveFloat32(interleaved, format.channels);
+      // Transferable: у Float32Array.buffer можно передать ownership,
+      // экономим копию. Но deinterleaveFloat32 уже отдал свежие
+      // буферы — их и transfer'им.
+      const transfer = planar.map((p) => p.buffer);
+      node.port.postMessage({ type: 'pcm', frames: planar }, transfer);
+    } catch (err) {
+      // одиночный битый chunk не должен валить весь стрим
+      console.warn('procAudio chunk parse failed:', err);
+    }
+  };
+  const offChunk = api.procAudio.onChunk(onChunk);
+
+  // Кладём audio-track в displayStream рядом с video. useCall/useGroupCall
+  // сразу подхватят его как обычный screen-audio через display.getAudioTracks()[0].
+  const audioTrack = dst.stream.getAudioTracks()[0];
+  if (audioTrack) {
+    displayStream.addTrack(audioTrack);
+  }
+
+  // Cleanup при остановке шеринга. videoTrack.onended срабатывает, когда
+  // юзер нажал "прекратить демонстрацию" в нашем UI или в баннере Chromium,
+  // или когда целевое окно закрылось.
+  const videoTrack = displayStream.getVideoTracks()[0];
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    try {
+      offChunk();
+    } catch {
+      /* */
+    }
+    try {
+      api.procAudio.stop();
+    } catch {
+      /* */
+    }
+    try {
+      audioTrack?.stop();
+    } catch {
+      /* */
+    }
+    try {
+      node.disconnect();
+    } catch {
+      /* */
+    }
+    try {
+      ctx.close();
+    } catch {
+      /* */
+    }
+  };
+  if (videoTrack) {
+    videoTrack.addEventListener('ended', cleanup, { once: true });
+  }
+  // На случай, если main внезапно завершил loopback (ApplicationLoopback.exe
+  // умер, целевой процесс закрылся), он шлёт 'proc-audio:ended'. Cleanup'имся,
+  // чтобы AudioContext не висел.
+  const offEnded = api.procAudio.onEnded(() => {
+    try {
+      offEnded();
+    } catch {
+      /* */
+    }
+    cleanup();
+  });
 }
 
 // Применить maxBitrate к video sender'у. Без этого WebRTC берёт

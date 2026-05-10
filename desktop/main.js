@@ -22,12 +22,22 @@
 //   - Только preload-bridged IPC: getConfig/setConfig, getShortcuts/
 //     setShortcuts, recordShortcut(toggle), onShortcutFired.
 
-const { app, BrowserWindow, ipcMain, shell, Menu } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  shell,
+  Menu,
+  session,
+  desktopCapturer,
+} = require('electron');
 const path = require('path');
 const config = require('./config');
 const shortcuts = require('./shortcuts');
 const mouseHook = require('./mouseHook');
 const autoUpdater = require('./autoUpdater');
+const screenPicker = require('./screenPicker/picker');
+const processAudio = require('./processAudio');
 
 // Закрепляем имя приложения ДО любых обращений к app.getPath('userData').
 // Иначе в dev (`electron .` из desktop/) Electron берёт name из package.json
@@ -38,6 +48,19 @@ const autoUpdater = require('./autoUpdater');
 // dev и прод-сборкой, и юзер видит «разлогин на каждом запуске».
 // setName('OwnCord') синхронизирует обе ветки.
 app.setName('OwnCord');
+
+// Dev-режим (`electron .` без packaging) кладём в отдельный профиль
+// `OwnCord-dev`, чтобы:
+//   1) если у юзера в фоне крутится установленный prod-OwnCord, его
+//      Cache/Cookies не были залочены под нашим chromium'ом (иначе в
+//      логе будет "Unable to move the cache: Отказано в доступе" и
+//      "Gpu Cache Creation failed", как сейчас);
+//   2) prod-сессия (логин, конфиг сервера) не путалась с dev-сессией;
+//   3) при тестах не пришлось бы каждый раз правой рукой удалять
+//      файлы профиля.
+if (!app.isPackaged) {
+  app.setPath('userData', path.join(app.getPath('appData'), 'OwnCord-dev'));
+}
 
 // Путь к иконке окна. На Windows electron-builder подставляет .ico из
 // сборки автоматически, но для dev-режима указываем вручную, иначе в
@@ -80,8 +103,21 @@ function createWindow() {
   });
 
   // Скрываем стандартное меню (File/Edit/...) — у нас своё UI.
-  // Контекстное меню (правая кнопка) и DevTools (F12) остаются доступны.
   Menu.setApplicationMenu(null);
+
+  // DevTools-хоткеи временно отключены: продакшен-юзеру они без надобности,
+  // а для разработки можно раскомментить блок ниже либо открывать консоль
+  // программно из main (`mainWindow.webContents.openDevTools()`).
+  //
+  // mainWindow.webContents.on('before-input-event', (_e, input) => {
+  //   if (input.type !== 'keyDown') return;
+  //   const isF12 = input.key === 'F12';
+  //   const isCtrlShiftI =
+  //     (input.control || input.meta) && input.shift && (input.key === 'I' || input.key === 'i');
+  //   if (isF12 || isCtrlShiftI) {
+  //     mainWindow.webContents.toggleDevTools();
+  //   }
+  // });
 
   loadServerUrl();
 
@@ -101,6 +137,11 @@ function createWindow() {
   });
 
   mainWindow.on('closed', () => {
+    // Окно закрылось — обязательно тушим per-process audio child .exe,
+    // иначе он висит как orphan-процесс с открытым WASAPI клиентом.
+    processAudio.capture.stop().catch(() => {
+      /* ignore */
+    });
     mainWindow = null;
   });
 }
@@ -230,10 +271,161 @@ ipcMain.handle('app:version', () => app.getVersion());
 app.whenReady().then(() => {
   cfg = config.load();
   createWindow();
+  registerDisplayMediaHandler();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+// Перехват navigator.mediaDevices.getDisplayMedia() из renderer'а.
+//
+// Без этого хендлера в Electron 23+ getDisplayMedia() сразу отклоняется
+// (или висит в Pending без UI) — Electron не показывает chromium'овский
+// системный picker, потому что он завязан на десктопного пользователя
+// chromium-shell'а, которого у нас нет. Решение — свой picker через
+// desktopCapturer.getSources, что мы и делаем в screenPicker/picker.js.
+//
+// Аудио-логика:
+//   - Renderer всегда вызывает getDisplayMedia с audio: <constraints>.
+//     Electron ТРЕБУЕТ, чтобы при request.audioRequested === true callback
+//     предоставил audio (либо 'loopback', либо MediaStreamTrack/Stream).
+//     Если вернуть audio: undefined при audio:true — chromium reject'ит
+//     promise, и юзер видит «не удалось начать демонстрацию». Поэтому:
+//
+//   - Шарим ЭКРАН + звук → audio: 'loopback' (системный микшер всех
+//     приложений; иначе быть не может — в одном экране много окон).
+//   - Шарим ОКНО + звук → audio: 'loopback' ВСЁ ЖЕ возвращаем (иначе
+//     chromium падает), но ПАРАЛЛЕЛЬНО запускаем WASAPI process-loopback
+//     по PID окна (processAudio.js). Renderer после getDisplayMedia
+//     спрашивает у main `proc-audio:is-active` — если true, удаляет
+//     chromium audio track из стрима и заменяет его на наш PCM-track.
+//     В итоге слышен ровно звук целевого приложения.
+//   - macOS / Linux без поддержки → audio: 'loopback' (на Windows) или
+//     undefined (на macOS, Chromium не поддерживает). Юзер видит toast,
+//     если в picker'е стояло «без звука» — звука не будет.
+//
+// Тонкости:
+//   - callback({}) = отказ (юзер закрыл picker / нет источников).
+//   - useSystemPicker: false — нативный (chromium) picker в Electron
+//     помечен как experimental и часто пуст, остаёмся на своём.
+function registerDisplayMediaHandler() {
+  session.defaultSession.setDisplayMediaRequestHandler(
+    async (request, callback) => {
+      try {
+        const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+        const choice = await screenPicker.pickScreenSource(parent, {
+          wantsAudio: !!request.audioRequested,
+          platform: process.platform,
+        });
+
+        // Юзер закрыл picker / выбрал «Отмена» / parent умер.
+        if (!choice || !choice.id) {
+          callback({});
+          return;
+        }
+
+        // Перед стартом нового шеринга всегда стопаем предыдущий
+        // process-loopback: юзер может закончить один шер и начать
+        // другой без явного «остановить» (re-share). Если этого не
+        // сделать, активный child .exe останется висеть.
+        await processAudio.capture.stop();
+
+        // Берём свежий source с того же id — между списком в picker'е и
+        // моментом callback'а окно могло, например, свернуться: thumbnail
+        // больше не нужен, нам нужен только sourceId для chromium'а.
+        const sources = await desktopCapturer.getSources({
+          types: ['screen', 'window'],
+          thumbnailSize: { width: 1, height: 1 },
+        });
+        const source = sources.find((s) => s.id === choice.id);
+        if (!source) {
+          // Окно/экран могли закрыться, пока юзер выбирал — отдаём
+          // пустой стрим, клиент покажет toast «не удалось начать».
+          callback({});
+          return;
+        }
+
+        // Audio-mode для callback'а. Главное правило: если renderer просил
+        // audio (request.audioRequested === true), мы ОБЯЗАНЫ что-то отдать,
+        // иначе chromium reject'ит весь getDisplayMedia.
+        //
+        // На non-darwin ОС у Electron'а есть 'loopback' (системный микшер).
+        // На macOS его нет — отдаём undefined, юзер увидит видео без звука.
+        let audioMode; // 'loopback' | undefined
+        if (choice.audio || request.audioRequested) {
+          audioMode = process.platform !== 'darwin' ? 'loopback' : undefined;
+        }
+
+        // Параллельно: для шеринга ОКНА с галкой звука пытаемся запустить
+        // per-process WASAPI loopback. Если получилось — renderer сам
+        // удалит chromium-audio (системный микшер) и заменит на наш PCM,
+        // спросив у main proc-audio:is-active. Если не получилось (окно
+        // закрылось, ОС не Windows и т.п.) — останется chromium-loopback.
+        if (choice.audio && choice.kind === 'window' && processAudio.capture.isSupported()) {
+          const pid = await processAudio.capture.findPidByHwnd(choice.hwnd);
+          if (pid) {
+            await processAudio.capture.start(pid);
+          }
+        }
+
+        callback({ video: source, audio: audioMode });
+      } catch (err) {
+        console.error('display media handler failed:', err);
+        try {
+          await processAudio.capture.stop();
+        } catch {
+          /* ignore */
+        }
+        callback({});
+      }
+    },
+    { useSystemPicker: false },
+  );
+}
+
+// --- Process-audio IPC + жизненный цикл --------------------------------
+
+// При каждом chunk'е PCM из ApplicationLoopback.exe пушим его в renderer.
+// Window'у достаточно одного активного — у нас в звонке всегда один
+// шеринг. Если mainWindow умер (refresh, F5), .send() выкинет ошибку —
+// глушим, на следующий раз renderer пере-подпишется.
+processAudio.capture.on('chunk', (data) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    mainWindow.webContents.send('proc-audio:chunk', data);
+  } catch {
+    /* окно закрылось между chunk-ами */
+  }
+});
+
+processAudio.capture.on('ended', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    mainWindow.webContents.send('proc-audio:ended');
+  } catch {
+    /* ignore */
+  }
+});
+
+// IPC: renderer спрашивает формат PCM — обычно сразу после старта стрима,
+// чтобы создать AudioContext с правильным sampleRate.
+ipcMain.handle('proc-audio:get-format', () => processAudio.capture.getFormat());
+
+// IPC: поддерживается ли per-process loopback. UI ScreenQualityModal
+// может это использовать, чтобы по-разному подписать чекбокс «звук».
+ipcMain.handle('proc-audio:is-supported', () => processAudio.capture.isSupported());
+
+// IPC: сейчас main активно стримит PCM? Renderer спрашивает сразу после
+// getDisplayMedia, чтобы решить: оставить chromium audio track (system
+// loopback / весь микшер) или удалить и заменить на наш per-process PCM.
+ipcMain.handle('proc-audio:is-active', () => processAudio.capture.isActive());
+
+// IPC: renderer останавливает screen-share и просит остановить захват.
+// Например, когда юзер нажал «прекратить демонстрацию» в звонке.
+ipcMain.handle('proc-audio:stop', async () => {
+  await processAudio.capture.stop();
+  return true;
 });
 
 app.on('window-all-closed', () => {
@@ -245,4 +437,9 @@ app.on('window-all-closed', () => {
 app.on('will-quit', () => {
   shortcuts.unregisterAll();
   mouseHook.unregisterAll();
+  // Завершаем per-process audio capture (если активен) синхронно,
+  // чтобы child .exe не пережил наш main-процесс.
+  processAudio.capture.stop().catch(() => {
+    /* ignore */
+  });
 });

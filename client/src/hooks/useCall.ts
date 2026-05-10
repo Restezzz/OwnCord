@@ -962,6 +962,15 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         const display = await captureDisplay(presetKey, includeAudio);
         const track = display.getVideoTracks()[0];
         if (!track) return;
+        // captureDisplay в браузере при шеринге окна срезает audio
+        // (chromium на Windows не умеет per-window audio — отдаёт системный
+        // микшер; см. media.ts). Юзеру говорим, что для звука одного
+        // приложения нужен desktop-клиент.
+        if ((display as any).windowAudioStripped) {
+          toast?.info?.(
+            'В браузере звук одного окна захватить нельзя. Откройте OwnCord для десктопа или поделитесь экраном целиком, чтобы передавать звук.',
+          );
+        }
         // Раньше тут был авто-setDeafened(true) при includeAudio — мол,
         // «избежать эха». Это было ошибкой: deafened глушит ВХОДЯЩЕЕ
         // аудио (см. <RemoteAudio> и mute=deafened), т.е. ты переставал

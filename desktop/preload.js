@@ -77,4 +77,59 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Ручная проверка обновлений (например, кнопка в настройках).
   // Возвращает { ok: boolean, version?: string, error?: string }.
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
+
+  // --- Per-process audio loopback ------------------------------------
+  // Когда юзер шарит ОКНО приложения с галкой «звук», main вместо
+  // chromium loopback запускает WASAPI process-loopback и шлёт сюда
+  // PCM-чанки. Renderer в media.ts собирает из них MediaStreamTrack и
+  // подцепляет к screen-share стриму. См. desktop/processAudio.js.
+  procAudio: {
+    // Поддерживается ли per-process loopback. Только Windows x64.
+    // Используется UI'ем, чтобы решать, что писать в подсказке у
+    // чекбокса «передавать звук» в picker'е/настройках.
+    isSupported: () => ipcRenderer.invoke('proc-audio:is-supported'),
+
+    // Сейчас идёт активный per-process захват? Renderer спрашивает это
+    // сразу после getDisplayMedia: если true → надо удалить chromium
+    // audio track (системный микшер) и заменить на наш PCM-track.
+    isActive: () => ipcRenderer.invoke('proc-audio:is-active'),
+
+    // { sampleRate, channels, encoding, bytesPerSample } — формат, в
+    // котором main отдаёт PCM. Renderer создаёт AudioContext с этим
+    // sampleRate, чтобы не было ресэмплинга.
+    getFormat: () => ipcRenderer.invoke('proc-audio:get-format'),
+
+    // Подписка на 'proc-audio:chunk'. handler получает Uint8Array с
+    // raw PCM. Возвращает unsubscribe-функцию.
+    onChunk: (handler) => {
+      const listener = (_e, data) => {
+        try {
+          handler(data);
+        } catch (err) {
+          console.warn('proc-audio chunk handler failed:', err);
+        }
+      };
+      ipcRenderer.on('proc-audio:chunk', listener);
+      return () => ipcRenderer.removeListener('proc-audio:chunk', listener);
+    },
+
+    // Подписка на 'proc-audio:ended' — main остановил захват
+    // (например, целевое приложение закрылось, или мы сами вызвали
+    // stop()). Renderer должен очистить аудио-граф. unsubscribe.
+    onEnded: (handler) => {
+      const listener = () => {
+        try {
+          handler();
+        } catch (err) {
+          console.warn('proc-audio ended handler failed:', err);
+        }
+      };
+      ipcRenderer.on('proc-audio:ended', listener);
+      return () => ipcRenderer.removeListener('proc-audio:ended', listener);
+    },
+
+    // Попросить main остановить активный захват. Используется, когда
+    // renderer завершает screen-share (track.onended / явный «стоп»).
+    stop: () => ipcRenderer.invoke('proc-audio:stop'),
+  },
 });

@@ -20,6 +20,16 @@
 //     логируем и пробуем в следующий раз.
 
 const { autoUpdater } = require('electron-updater');
+const log = require('electron-log');
+
+// Файловый лог auto-update в %APPDATA%\OwnCord\logs\main.log (Windows),
+// ~/Library/Logs/OwnCord/main.log (mac), ~/.config/OwnCord/logs/main.log
+// (linux). Без этого у юзеров «слепое пятно»: NSIS-сборка не пишет
+// stdout никуда (нет parent-консоли), и понять, почему «Проверяю…»
+// висит — невозможно. Размер файла ограничиваем, чтобы не пухло.
+log.transports.file.level = 'info';
+log.transports.file.maxSize = 1024 * 1024; // 1 MB
+log.transports.console.level = 'info';
 
 // Нет авто-инсталла при quit'е — иначе юзер может неожиданно поймать
 // рестарт при закрытии окна. Делаем явное действие через UI-кнопку.
@@ -28,10 +38,9 @@ autoUpdater.autoInstallOnAppQuit = false;
 // обновление с минимальным ожиданием. Скачивание идёт в фоне и не
 // блокирует UI; на медленном канале — viewing прогресс через тост.
 autoUpdater.autoDownload = true;
-// В логи main-процесса попадут стадии (полезно для дебага у юзера
-// через DevTools → Console main-процесса не видно, но в stdout/stderr —
-// да, плюс electron-updater умеет писать в файл, если подключить).
-autoUpdater.logger = console;
+// Все стадии auto-update идут в файл-лог. Поднять уровень логирования
+// до 'debug' можно при необходимости (видно весь network-flow).
+autoUpdater.logger = log;
 
 // Интервал фоновой проверки. 1 час = достаточно шустро для юзера
 // (увидит тост в течение часа после релиза, если окно открыто), и
@@ -58,9 +67,20 @@ function broadcast(window, kind, payload = {}) {
  */
 function setup(window, { app, ipcMain }) {
   if (setupDone) return;
-  // В dev электрон не упакован — пропускаем (electron-updater разнесёт
-  // приложение, потому что app-update.yml кладётся только в asar).
-  if (!app.isPackaged) return;
+  // В dev электрон не упакован — пропускаем сам auto-update flow
+  // (electron-updater разнесёт приложение, потому что app-update.yml
+  // кладётся только в asar). НО IPC-стабы регистрируем — иначе renderer
+  // ловит "No handler registered for 'update:check'" каждый раз, когда
+  // ScreenQualityModal/SettingsPanel дёргают checkForUpdates() при mount.
+  if (!app.isPackaged) {
+    setupDone = true;
+    ipcMain.handle('update:check', () => ({
+      ok: false,
+      error: 'Auto-update недоступен в dev-режиме',
+    }));
+    ipcMain.handle('update:install', () => false);
+    return;
+  }
 
   autoUpdater.on('checking-for-update', () => broadcast(window, 'checking'));
 
@@ -105,13 +125,22 @@ function setup(window, { app, ipcMain }) {
   });
 
   // IPC: ручная проверка по кнопке в настройках.
-  ipcMain.handle('update:check', async () => {
-    try {
-      const res = await autoUpdater.checkForUpdates();
-      return { ok: true, version: res?.updateInfo?.version };
-    } catch (e) {
-      return { ok: false, error: e?.message || String(e) };
-    }
+  //
+  // НЕ ждём resolve самого checkForUpdates(): при autoDownload=true этот
+  // promise висит ДО конца download'а полного installer'а (~100 MB), а
+  // в редких кейсах (порвалась сеть, сервер не отвечает после headers)
+  // не резолвится никогда. Раньше из-за этого UI «Проверяю…» висел до
+  // победы — IPC просто не возвращал response.
+  //
+  // Сейчас стартуем проверку в фоне и сразу отдаём { ok: true }. Все
+  // финальные стадии (available / progress / downloaded / none / error)
+  // прилетают в renderer через broadcast 'update:event' — их и слушает
+  // UI для перехода из 'checking' в терминальный стейт.
+  ipcMain.handle('update:check', () => {
+    autoUpdater.checkForUpdates().catch((e) => {
+      log.warn('manual update:check failed:', e?.message || e);
+    });
+    return { ok: true };
   });
 
   // Стартовая проверка с небольшой задержкой — пусть UI прогрузится,
