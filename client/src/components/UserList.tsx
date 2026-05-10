@@ -71,7 +71,7 @@ export default function UserList({
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-3 border-b border-border">
+      <div className="p-3 border-b border-white/10">
         <div className="relative">
           <Search
             size={16}
@@ -126,7 +126,7 @@ export default function UserList({
         </div>
 
         {/* Явный разделитель между группами и пользователями */}
-        <div className="mx-2 h-px bg-border" />
+        <div className="mx-2 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
 
         {/* --- Пользователи --- */}
         {online.length > 0 && (
@@ -226,7 +226,7 @@ function GroupRow({ group, active, onClick, unreadCount = 0, callActive = false,
           <Avatar name={name} src={group.avatarPath} size={36} />
         ) : (
           <div
-            className="avatar grid place-items-center bg-bg-3 text-slate-200"
+            className="avatar grid place-items-center bg-bg-3/90 text-slate-200"
             style={{ width: 36, height: 36 }}
             aria-hidden
           >
@@ -235,7 +235,7 @@ function GroupRow({ group, active, onClick, unreadCount = 0, callActive = false,
         )}
         {callActive && (
           <span
-            className="absolute -bottom-0.5 -right-0.5 grid place-items-center w-4 h-4 rounded-full bg-success text-white ring-2 ring-bg-1 animate-pulse"
+            className="status-dot absolute -bottom-0.5 -right-0.5 grid place-items-center w-4 h-4 rounded-full bg-success text-white animate-pulse"
             title="В этой группе сейчас идёт звонок"
             aria-label="Звонок"
           >

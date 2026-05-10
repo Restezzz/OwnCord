@@ -23,13 +23,13 @@ export default function Avatar({
         <img
           src={src}
           alt={name}
-          className="avatar object-cover"
+          className="avatar object-cover transition duration-150 ease-out"
           style={{ width: size, height: size }}
           draggable={false}
         />
       ) : (
         <div
-          className="avatar"
+          className="avatar transition duration-150 ease-out"
           style={{
             width: size,
             height: size,
@@ -42,7 +42,7 @@ export default function Avatar({
       )}
       {showStatus && (
         <span
-          className={`absolute bottom-0 right-0 rounded-full ring-2 ring-bg-1 ${
+          className={`status-dot absolute bottom-0 right-0 rounded-full ${
             online ? 'bg-success' : 'bg-slate-500'
           }`}
           style={{ width: Math.max(10, size * 0.28), height: Math.max(10, size * 0.28) }}
