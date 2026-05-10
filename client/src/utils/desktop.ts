@@ -116,10 +116,45 @@ export async function applyShortcuts(map: Shortcuts): Promise<void> {
 }
 
 /**
+ * Активация моста main → DOM-event для хоткеев.
+ *
+ * preload.js (см. desktop/preload.js) подписывается на ipcRenderer
+ * 'shortcut:fired' ТОЛЬКО когда renderer хотя бы раз вызовет
+ * electronAPI.onShortcut(). Без этого main-процесс честно шлёт IPC при
+ * срабатывании globalShortcut/uIOhook, но никто его не слушает, и
+ * window-event 'owncord:shortcut' никогда не диспатчится.
+ *
+ * Раньше клавиатурные хоткеи у нас не работали в принципе по этой же
+ * причине — а мышиные работали через костыльный window.mousedown
+ * listener в useKeybinds.ts. С 0.7.4 (мышь через uiohook) этот костыль
+ * убран, и баг с активацией стал виден на пустом месте: ни клавиатура,
+ * ни мышь не доходят до useCall/useGroupCall.
+ *
+ * Чиним идемпотентным module-level singleton'ом: при первом вызове
+ * onShortcutEvent (если мы в Electron'е) разово дёргаем onShortcut().
+ * Cleanup не нужен — bridge живёт всё время жизни процесса.
+ */
+let shortcutBridgeActive = false;
+function ensureShortcutBridge(): void {
+  if (shortcutBridgeActive) return;
+  const api = typeof window !== 'undefined' ? (window as any).electronAPI : null;
+  if (api && typeof api.onShortcut === 'function') {
+    // Без callback'а — preload всё равно сам диспатчит DOM-event,
+    // которого нам и достаточно (handler в onShortcut нужен только если
+    // хочется не-DOM путь; нам он не нужен).
+    api.onShortcut();
+    shortcutBridgeActive = true;
+  }
+}
+
+/**
  * Подписка на DOM-event 'owncord:shortcut', который preload.js шлёт в
- * ответ на срабатывание globalShortcut'а в main. Возвращает unsubscribe.
+ * ответ на срабатывание globalShortcut'а / uiohook'а в main. Возвращает
+ * unsubscribe. При первом вызове (ленивая активация) включает мост
+ * preload'а — см. ensureShortcutBridge выше.
  */
 export function onShortcutEvent(handler: (action: ShortcutAction) => void): () => void {
+  ensureShortcutBridge();
   const listener = (ev: Event) => {
     const detail = (ev as CustomEvent).detail;
     const action = detail?.action as ShortcutAction | undefined;

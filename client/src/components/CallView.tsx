@@ -309,6 +309,7 @@ export default function CallView({
                   speaking={peerSpeaking}
                   dim={waiting}
                   micOff={state === 'in-call' && peerMedia && !peerMedia.mic}
+                  deafenedOff={state === 'in-call' && !!peerMedia?.deafened}
                 />
                 <AvatarTile
                   user={selfUser}
@@ -316,6 +317,7 @@ export default function CallView({
                   selfLabel
                   speaking={selfSpeaking}
                   micOff={muted}
+                  deafenedOff={deafened}
                 />
               </div>
               <div>
@@ -374,6 +376,7 @@ export default function CallView({
             <div className="px-3 py-1.5 text-xs rounded-full bg-black/60 backdrop-blur border border-white/10 flex items-center gap-2">
               <Avatar name={getDisplayName(peer) || '?'} src={getAvatarUrl(peer)} size={20} />
               <span>{getDisplayName(peer)}</span>
+              {peerMedia?.deafened && <VolumeX size={12} className="text-amber-400" />}
               {!peerMedia?.mic && <MicOff size={12} className="text-amber-400" />}
             </div>
           )}
@@ -563,6 +566,7 @@ function AvatarTile({
   dim = false,
   selfLabel = false,
   micOff = false,
+  deafenedOff = false,
 }: {
   user: any;
   fallbackName: string;
@@ -570,6 +574,7 @@ function AvatarTile({
   dim?: boolean;
   selfLabel?: boolean;
   micOff?: boolean;
+  deafenedOff?: boolean;
 }) {
   const name = getDisplayName(user) || fallbackName;
   return (
@@ -592,6 +597,20 @@ function AvatarTile({
             title="Микрофон выключен"
           >
             <MicOff size={14} className="text-amber-400" />
+          </div>
+        )}
+        {deafenedOff && (
+          // Слева от mic-off, чуть наезжая на аватар (right=22 вместо -4 =
+          // бадж mic-off·28px ширины + 6px перекрытие). Если mic-off нет —
+          // deafen всё равно рисуется в своём месте (визуально ок, подразумевается
+          // что mic-бадж «бы был» справа).
+          <div
+            className="absolute -bottom-1 grid place-items-center rounded-full bg-bg-1 border border-border"
+            style={{ width: 28, height: 28, right: micOff ? 22 : -4 }}
+            aria-label="Наушники выключены"
+            title="Наушники выключены"
+          >
+            <VolumeX size={14} className="text-amber-400" />
           </div>
         )}
       </div>

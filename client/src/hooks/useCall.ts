@@ -89,8 +89,12 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   const [muted, setMuted] = useState(false);
   // Локальный «глухой режим»: заставляет наш <audio> НЕ воспроизводить
   // входящий звук. Микрофон продолжает работать — собеседник слышит нас
-  // как обычно. На серверной/WebRTC-стороне ничего не меняется.
+  // как обычно. На серверной/WebRTC-стороне ничего не меняется. Пиру
+  // всё же сообщаем через media:state, чтобы его UI нарисовал иконку
+  // «наушники выключены» (Discord-like). deafenedRef — без closure-stale
+  // внутри emitMyMedia (он мемоизирован на [socket]).
   const [deafened, setDeafened] = useState(false);
+  const deafenedRef = useRef(false);
   const [cameraOn, setCameraOn] = useState(false);
   const [sharingScreen, setSharingScreen] = useState(false);
 
@@ -100,6 +104,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     camera: false,
     screen: false,
     screenAudio: false,
+    deafened: false,
   });
 
   // state-ref для доступа из обработчиков сокета (closures).
@@ -180,6 +185,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
     camera: !!cameraTrackRef.current && videoSenderRef.current?.track === cameraTrackRef.current,
     screen: !!screenTrackRef.current && videoSenderRef.current?.track === screenTrackRef.current,
     screenAudio: !!screenAudioTrackRef.current,
+    deafened: deafenedRef.current,
   });
 
   const emitMyMedia = useCallback(() => {
@@ -279,10 +285,17 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       setPeer(null);
       setMuted(false);
       setDeafened(false);
+      deafenedRef.current = false;
       setCameraOn(false);
       setSharingScreen(false);
       setWithVideo(false);
-      setPeerMedia({ mic: true, camera: false, screen: false, screenAudio: false });
+      setPeerMedia({
+        mic: true,
+        camera: false,
+        screen: false,
+        screenAudio: false,
+        deafened: false,
+      });
       setWaitingUntil(null);
       setSelfLeft(false);
       setState('idle');
@@ -321,7 +334,13 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       videoSenderRef.current = null;
       pendingOfferRef.current = null;
       setRemoteStream(null);
-      setPeerMedia({ mic: false, camera: false, screen: false, screenAudio: false });
+      setPeerMedia({
+        mic: false,
+        camera: false,
+        screen: false,
+        screenAudio: false,
+        deafened: false,
+      });
       setWaitingUntil(Date.now() + WAIT_WINDOW_MS);
       setSelfLeft(bySelf);
       setState('waiting');
@@ -760,18 +779,20 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   // <audio muted={deafened}> без затрагивания входящего трека, поэтому
   // ре-подписывания WebRTC не требуется.
   const toggleDeafen = useCallback(() => {
-    setDeafened((d) => {
-      const next = !d;
-      // Играем ДО того, как state применится — но сами звуки идут через
-      // отдельный AudioContext useSounds, не через тот <audio>, который
-      // мы сейчас замьютим; так что пользователь услышит их даже если
-      // включается deafen. Это ожидаемое поведение: UI-пип — не «звук
-      // собеседника», его глушить deafen'ом не надо.
-      if (next) sounds?.playDeafen?.();
-      else sounds?.playUndeafen?.();
-      return next;
-    });
-  }, [sounds]);
+    const next = !deafenedRef.current;
+    deafenedRef.current = next;
+    setDeafened(next);
+    // Играем ДО того, как state применится — но сами звуки идут через
+    // отдельный AudioContext useSounds, не через тот <audio>, который
+    // мы сейчас замьютим; так что пользователь услышит их даже если
+    // включается deafen. Это ожидаемое поведение: UI-пип — не «звук
+    // собеседника», его глушить deafen'ом не надо.
+    if (next) sounds?.playDeafen?.();
+    else sounds?.playUndeafen?.();
+    // Сообщаем пиру — он покажет иконку «наушники выключены» у нашей
+    // аватарки. WebRTC-трафик никак не меняется — просто сигналинг.
+    setTimeout(emitMyMedia, 0);
+  }, [emitMyMedia, sounds]);
 
   // Глобальные хоткеи десктопа (Electron globalShortcut). Срабатывают
   // даже когда окно OwnCord не в фокусе — для этого мы тут вешаемся
@@ -1248,6 +1269,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         camera: !!st?.camera,
         screen: !!st?.screen,
         screenAudio: !!st?.screenAudio,
+        deafened: !!st?.deafened,
       });
     };
 
