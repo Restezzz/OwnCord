@@ -5,18 +5,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import {
-  Bell,
-  Download,
-  Headphones,
-  KeyRound,
-  Keyboard,
-  Lock,
-  RefreshCw,
-  ShieldCheck,
-  User,
-  X,
-} from 'lucide-react';
+import { Bell, Headphones, KeyRound, Keyboard, Lock, ShieldCheck, User, X } from 'lucide-react';
 import { modalVariants, overlayVariants, reducedVariants } from '../../utils/motion';
 import { useAuth } from '../../context/AuthContext';
 import {
@@ -182,51 +171,48 @@ export default function SettingsPanel({ open, onClose }: { open: boolean; onClos
                 );
               })}
               {/* Подвал сайдбара — только в Electron'е, прибит к низу.
-                  Содержит: версию приложения, кнопку ручной проверки
-                  обновлений и короткий статус. На вебе/мобильном горизонтальном
-                  скролле скрыт через hidden md:flex. */}
+                  Содержит: версию приложения и ссылку-текст для ручной
+                  проверки обновлений (без иконок/фона, стилизована как
+                  неявный link). На вебе/мобильном горизонтальном скролле
+                  скрыт через hidden md:flex. */}
               {desktop && (
-                <div className="hidden md:flex mt-auto pt-3 px-2 flex-col gap-1.5">
+                <div className="hidden md:flex mt-auto pt-3 px-2 flex-col gap-0.5">
                   {desktopVersion && (
                     <div className="text-[10px] text-slate-500 select-text">
                       OwnCord {desktopVersion}
                     </div>
                   )}
+                  {/* Во время in-flight (checking/available/progress) сам
+                      текст строки отражает статус — так пользователь видит
+                      прогресс без отдельной второй строки. Статус 'none'/
+                      'error' показываем в отдельной строке под ссылкой,
+                      чтобы ссылка оставалась кликабельной («Проверить
+                      снова»). */}
                   <button
                     type="button"
                     onClick={onUpdateButton}
                     disabled={updateInFlight && !updateReady}
-                    className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] transition-colors ${
+                    className={`text-left text-[10px] w-fit transition-colors ${
                       updateReady
-                        ? 'bg-accent text-white hover:bg-accent-hover'
-                        : 'bg-bg-3 text-slate-200 hover:bg-bg-3/70'
-                    } disabled:opacity-60 disabled:cursor-not-allowed`}
+                        ? 'text-accent hover:text-accent-hover cursor-pointer'
+                        : 'text-slate-500 hover:text-slate-300 cursor-pointer'
+                    } disabled:cursor-default disabled:hover:text-slate-500`}
                     title={
                       updateReady
                         ? 'Перезапустить и применить обновление'
                         : 'Проверить наличие обновлений сейчас'
                     }
                   >
-                    {updateReady ? (
-                      <Download size={12} className="flex-shrink-0" />
-                    ) : (
-                      <RefreshCw
-                        size={12}
-                        className={`flex-shrink-0 ${updateInFlight ? 'animate-spin' : ''}`}
-                      />
-                    )}
-                    <span>
-                      {updateReady ? 'Перезапустить и обновить' : 'Проверить обновления'}
-                    </span>
+                    {updateReady
+                      ? 'Перезапустить и обновить'
+                      : updateInFlight
+                        ? updateStatusText || 'Проверяю…'
+                        : 'Проверить обновления'}
                   </button>
-                  {updateStatusText && (
+                  {!updateInFlight && !updateReady && updateStatusText && (
                     <div
                       className={`text-[10px] leading-snug break-words ${
-                        updateState?.kind === 'error'
-                          ? 'text-danger'
-                          : updateState?.kind === 'downloaded'
-                            ? 'text-success'
-                            : 'text-slate-500'
+                        updateState?.kind === 'error' ? 'text-danger' : 'text-slate-600'
                       }`}
                     >
                       {updateStatusText}

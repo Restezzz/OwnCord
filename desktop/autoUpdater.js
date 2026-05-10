@@ -33,7 +33,11 @@ autoUpdater.autoDownload = true;
 // да, плюс electron-updater умеет писать в файл, если подключить).
 autoUpdater.logger = console;
 
-const SIX_HOURS = 6 * 60 * 60 * 1000;
+// Интервал фоновой проверки. 1 час = достаточно шустро для юзера
+// (увидит тост в течение часа после релиза, если окно открыто), и
+// одновременно не спамит latest.yml с сотен клиентов. latest.yml весит
+// ~350 байт + HTTP-оверхед, так что сеть не напрягается.
+const ONE_HOUR = 60 * 60 * 1000;
 const STARTUP_DELAY = 8000;
 
 let setupDone = false;
@@ -124,7 +128,7 @@ function setup(window, { app, ipcMain }) {
     autoUpdater.checkForUpdates().catch(() => {
       /* swallow */
     });
-  }, SIX_HOURS);
+  }, ONE_HOUR);
 
   setupDone = true;
 }
