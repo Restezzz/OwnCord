@@ -1,6 +1,6 @@
 {
   "name": "@owncord/desktop",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "private": true,
   "description": "OwnCord desktop shell (Electron). Loads the OwnCord web client into a native window and adds OS-level features (global keybinds, tray, autostart).",
   "main": "main.js",
@@ -38,13 +38,18 @@
     "directories": {
       "output": "dist"
     },
+    "npmRebuild": false,
     "files": [
       "main.js",
       "preload.js",
       "config.js",
       "shortcuts.js",
+      "mouseHook.js",
       "autoUpdater.js",
       "assets/**/*"
+    ],
+    "asarUnpack": [
+      "**/node_modules/uiohook-napi/**"
     ],
     "publish": [
       {
@@ -93,6 +98,7 @@
     }
   },
   "dependencies": {
-    "electron-updater": "^6.8.3"
+    "electron-updater": "^6.8.3",
+    "uiohook-napi": "^1.5.5"
   }
 }

@@ -17,15 +17,14 @@
 //
 // Мышь:
 //   Electron globalShortcut НЕ умеет ловить кнопки мыши на уровне ОС
-//   (это ограничение API — он принимает только клавиатурные acc'ы). Чтобы
-//   юзер мог хоть как-то использовать боковые кнопки мыши, мы:
-//   а) разрешаем записывать accelerator вида `Mouse3..Mouse5`/`MouseMiddle`
-//      (с опц. модификаторами Ctrl/Alt/Shift) в KeybindsTab;
-//   б) на стороне renderer'а (useKeybinds) подписываемся на window
-//      mousedown и сами диспатчим 'owncord:shortcut'. Так мышь работает
-//      ТОЛЬКО когда окно OwnCord в фокусе (в отличие от клавиатуры,
-//      которая через globalShortcut работает реально глобально). UI
-//      честно об этом сообщает.
+//   (это ограничение API — он принимает только клавиатурные acc'ы). Поэтому
+//   в desktop-обёртке мы подключаем uiohook-napi — N-API биндинги к
+//   libuiohook (кросс-платформенные ОС-уровневые input hooks). См.
+//   `desktop/mouseHook.js`. Мышиные acc'ы вида `Mouse3..Mouse5`/`MouseMiddle`
+//   регистрируются так же глобально, как клавиатурные, и срабатывают
+//   вне фокуса OwnCord — в играх, fullscreen-приложениях и т.п.
+//   На вебе этого нет вся UI-вкладка «Горячие клавиши» прячется через
+//   desktopOnly в SettingsPanel.
 
 export type ShortcutAction = 'toggleMute' | 'toggleDeafen';
 
@@ -284,8 +283,10 @@ export function mouseEventToAccelerator(e: MouseEvent): string | null {
 
 /**
  * true, если accelerator завершается на «мышиную» клавишу. Такие
- * accelerator'ы Electron globalShortcut НЕ может зарегистрировать —
- * useKeybinds обрабатывает их сам, слушая window mousedown.
+ * accelerator'ы Electron globalShortcut НЕ может зарегистрировать, поэтому
+ * мы обрабатываем их в main-процессе через uiohook-napi (см.
+ * `desktop/mouseHook.js`). На renderer-стороне эта функция осталась
+ * только для UI-логики (как показывать acc в KeybindRecorder).
  */
 export function isMouseAccelerator(acc: string | null | undefined): boolean {
   if (!acc) return false;

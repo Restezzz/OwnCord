@@ -26,6 +26,7 @@ const { app, BrowserWindow, ipcMain, shell, Menu } = require('electron');
 const path = require('path');
 const config = require('./config');
 const shortcuts = require('./shortcuts');
+const mouseHook = require('./mouseHook');
 const autoUpdater = require('./autoUpdater');
 
 // Закрепляем имя приложения ДО любых обращений к app.getPath('userData').
@@ -85,10 +86,13 @@ function createWindow() {
   loadServerUrl();
 
   // Перерегистрируем shortcut'ы после готовности окна — иначе webContents
-  // может оказаться не готов к send().
+  // может оказаться не готов к send(). Регистрируем И клавиатурные
+  // (через Electron globalShortcut), И мышиные (через uiohook-napi) —
+  // оба модуля сами фильтруют свой тип acc'а из общей карты.
   mainWindow.webContents.once('did-finish-load', () => {
     if (cfg.hotkeysEnabled) {
       shortcuts.register(cfg.shortcuts || {}, mainWindow);
+      mouseHook.register(cfg.shortcuts || {}, mainWindow);
     }
     // Автообновление: настраиваем после готовности webContents,
     // чтобы первые события (checking/available) долетели до renderer'а.
@@ -184,12 +188,15 @@ ipcMain.handle('config:set', (_e, patch) => {
   if ('serverUrl' in patch && mainWindow) {
     setTimeout(() => loadServerUrl(), 50);
   }
-  // shortcuts изменились — перерегистрируем.
+  // shortcuts изменились — перерегистрируем оба слоя (клавиатурный
+  // globalShortcut и мышиный uIOhook). Каждый сам отфильтрует свой тип.
   if ('shortcuts' in patch || 'hotkeysEnabled' in patch) {
     if (cfg.hotkeysEnabled) {
       shortcuts.register(cfg.shortcuts || {}, mainWindow);
+      mouseHook.register(cfg.shortcuts || {}, mainWindow);
     } else {
       shortcuts.unregisterAll();
+      mouseHook.unregisterAll();
     }
   }
   return cfg;
@@ -199,7 +206,13 @@ ipcMain.handle('shortcuts:set', (_e, map) => {
   cfg.shortcuts = { ...(cfg.shortcuts || {}), ...(map || {}) };
   config.save(cfg);
   if (cfg.hotkeysEnabled && mainWindow) {
-    return shortcuts.register(cfg.shortcuts, mainWindow);
+    // Сначала клавиатура (быстрее регится), потом мышь (запускает
+    // фоновый поток uIOhook при необходимости). Возвращаем объединённый
+    // список реально зарегистрированных acc'ов — UI это игнорирует, но
+    // полезно для отладки.
+    const kb = shortcuts.register(cfg.shortcuts, mainWindow);
+    const mouse = mouseHook.register(cfg.shortcuts, mainWindow);
+    return [...kb, ...mouse];
   }
   return [];
 });
@@ -225,9 +238,11 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   shortcuts.unregisterAll();
+  mouseHook.unregisterAll();
   if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('will-quit', () => {
   shortcuts.unregisterAll();
+  mouseHook.unregisterAll();
 });
