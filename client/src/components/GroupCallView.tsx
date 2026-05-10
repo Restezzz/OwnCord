@@ -131,6 +131,7 @@ function Tile({
   user,
   self = false,
   muted = false,
+  deafened = false,
   mirror = false,
   className = '',
   onClick,
@@ -246,6 +247,7 @@ function Tile({
           {name}
           {self && <span className="text-slate-400"> (вы)</span>}
         </span>
+        {deafened && <VolumeX size={12} className="text-amber-400 shrink-0" />}
         {muted && <MicOff size={12} className="text-amber-400 shrink-0" />}
         {pinned && <Pin size={12} className="text-accent shrink-0" />}
       </div>
@@ -351,6 +353,7 @@ export default function GroupCallView({
           user={selfUser || { displayName: 'Вы' }}
           self
           muted={muted}
+          deafened={deafened}
           mirror={cameraOn}
           onClick={onTileClick}
           pinned={isPinned}
@@ -369,11 +372,18 @@ export default function GroupCallView({
       e.preventDefault();
       setStreamVolumeMenu({ x: e.clientX, y: e.clientY, userId: t.userId });
     };
+    const peerM = peersMedia?.[t.userId];
     return (
       <Tile
         key={`tile-${t.userId}${opts.suffix || ''}`}
         stream={remotes[t.userId]}
         user={u}
+        // Мьют микрофона и глушение наушников у собеседника — из сигналинга
+        // groupcall:media:state. peerM может быть undefined на первых рендерах,
+        // пока пир ещё не скинул state — рисуем без иконок (по дефолту
+        // считаем что микрофон включён и наушники работают).
+        muted={peerM ? !peerM.mic : false}
+        deafened={!!peerM?.deafened}
         onClick={onTileClick}
         onContextMenu={onTileContextMenu}
         pinned={isPinned}

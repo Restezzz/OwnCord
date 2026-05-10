@@ -62,8 +62,12 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
   const [peersMedia, setPeersMedia] = useState({});
   const [muted, setMuted] = useState(false);
   // Локальный «глухой режим» — только для UI: все <audio> получают
-  // muted=true, микрофон при этом продолжает идти в сеть.
+  // muted=true, микрофон при этом продолжает идти в сеть. Пирам сообщаем
+  // через groupcall:media:state, чтобы их UI рисовал иконку «наушники
+  // выключены» у нашей плитки. deafenedRef — без closure-stale в emitMyMedia
+  // (он мемоизирован на [socket]).
   const [deafened, setDeafened] = useState(false);
+  const deafenedRef = useRef(false);
   const [cameraOn, setCameraOn] = useState(false);
   const [sharingScreen, setSharingScreen] = useState(false);
   const [withVideo, setWithVideo] = useState(false);
@@ -154,7 +158,8 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
 
   // Текущее состояние моих медиа для рассылки пирам. Берём enabled-флаг
   // прямо с трека — это источник истины (toggleMute/toggleCamera пишут
-  // именно в track.enabled).
+  // именно в track.enabled). deafened берём из ref — useState внутри
+  // мемоизированного на [socket] callback'а был бы stale.
   const emitMyMedia = useCallback(() => {
     const gid = groupRef.current?.id;
     const cid = callIdRef.current;
@@ -167,6 +172,7 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
         camera: !!videoTrackRef.current && !!videoTrackRef.current.enabled,
         screen: !!screenTrackRef.current,
         screenAudio: !!screenAudioTrackRef.current,
+        deafened: deafenedRef.current,
       },
     });
   }, [socket]);
@@ -277,6 +283,7 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
     setPeersMedia({});
     setMuted(false);
     setDeafened(false);
+    deafenedRef.current = false;
     setCameraOn(false);
     setWithVideo(false);
     setGroup(null);
@@ -631,17 +638,19 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
   ]);
 
   const toggleDeafen = useCallback(() => {
-    setDeafened((d) => {
-      const next = !d;
-      // UI-пип проходит через отдельный AudioContext useSounds,
-      // а не через <RemoteAudio>, который мы замьютим этим
-      // тогглом — так что звук deafen-уведомления будет слышен
-      // вне зависимости от направления переключения.
-      if (next) sounds?.playDeafen?.();
-      else sounds?.playUndeafen?.();
-      return next;
-    });
-  }, [sounds]);
+    const next = !deafenedRef.current;
+    deafenedRef.current = next;
+    setDeafened(next);
+    // UI-пип проходит через отдельный AudioContext useSounds,
+    // а не через <RemoteAudio>, который мы замьютим этим
+    // тогглом — так что звук deafen-уведомления будет слышен
+    // вне зависимости от направления переключения.
+    if (next) sounds?.playDeafen?.();
+    else sounds?.playUndeafen?.();
+    // Сообщаем пирам — они покажут иконку «наушники выключены»
+    // у нашей плитки. WebRTC-трафик никак не меняется — это чистый сигналинг.
+    setTimeout(emitMyMedia, 0);
+  }, [emitMyMedia, sounds]);
 
   // Глобальные хоткеи десктопа. Подписка зеркалит useCall.ts —
   // см. там подробный комментарий.
@@ -985,6 +994,7 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
           camera: !!st?.camera,
           screen: !!st?.screen,
           screenAudio: !!st?.screenAudio,
+          deafened: !!st?.deafened,
         },
       }));
     };

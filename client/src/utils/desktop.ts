@@ -17,15 +17,14 @@
 //
 // Мышь:
 //   Electron globalShortcut НЕ умеет ловить кнопки мыши на уровне ОС
-//   (это ограничение API — он принимает только клавиатурные acc'ы). Чтобы
-//   юзер мог хоть как-то использовать боковые кнопки мыши, мы:
-//   а) разрешаем записывать accelerator вида `Mouse3..Mouse5`/`MouseMiddle`
-//      (с опц. модификаторами Ctrl/Alt/Shift) в KeybindsTab;
-//   б) на стороне renderer'а (useKeybinds) подписываемся на window
-//      mousedown и сами диспатчим 'owncord:shortcut'. Так мышь работает
-//      ТОЛЬКО когда окно OwnCord в фокусе (в отличие от клавиатуры,
-//      которая через globalShortcut работает реально глобально). UI
-//      честно об этом сообщает.
+//   (это ограничение API — он принимает только клавиатурные acc'ы). Поэтому
+//   в desktop-обёртке мы подключаем uiohook-napi — N-API биндинги к
+//   libuiohook (кросс-платформенные ОС-уровневые input hooks). См.
+//   `desktop/mouseHook.js`. Мышиные acc'ы вида `Mouse3..Mouse5`/`MouseMiddle`
+//   регистрируются так же глобально, как клавиатурные, и срабатывают
+//   вне фокуса OwnCord — в играх, fullscreen-приложениях и т.п.
+//   На вебе этого нет вся UI-вкладка «Горячие клавиши» прячется через
+//   desktopOnly в SettingsPanel.
 
 export type ShortcutAction = 'toggleMute' | 'toggleDeafen';
 
@@ -117,10 +116,45 @@ export async function applyShortcuts(map: Shortcuts): Promise<void> {
 }
 
 /**
+ * Активация моста main → DOM-event для хоткеев.
+ *
+ * preload.js (см. desktop/preload.js) подписывается на ipcRenderer
+ * 'shortcut:fired' ТОЛЬКО когда renderer хотя бы раз вызовет
+ * electronAPI.onShortcut(). Без этого main-процесс честно шлёт IPC при
+ * срабатывании globalShortcut/uIOhook, но никто его не слушает, и
+ * window-event 'owncord:shortcut' никогда не диспатчится.
+ *
+ * Раньше клавиатурные хоткеи у нас не работали в принципе по этой же
+ * причине — а мышиные работали через костыльный window.mousedown
+ * listener в useKeybinds.ts. С 0.7.4 (мышь через uiohook) этот костыль
+ * убран, и баг с активацией стал виден на пустом месте: ни клавиатура,
+ * ни мышь не доходят до useCall/useGroupCall.
+ *
+ * Чиним идемпотентным module-level singleton'ом: при первом вызове
+ * onShortcutEvent (если мы в Electron'е) разово дёргаем onShortcut().
+ * Cleanup не нужен — bridge живёт всё время жизни процесса.
+ */
+let shortcutBridgeActive = false;
+function ensureShortcutBridge(): void {
+  if (shortcutBridgeActive) return;
+  const api = typeof window !== 'undefined' ? (window as any).electronAPI : null;
+  if (api && typeof api.onShortcut === 'function') {
+    // Без callback'а — preload всё равно сам диспатчит DOM-event,
+    // которого нам и достаточно (handler в onShortcut нужен только если
+    // хочется не-DOM путь; нам он не нужен).
+    api.onShortcut();
+    shortcutBridgeActive = true;
+  }
+}
+
+/**
  * Подписка на DOM-event 'owncord:shortcut', который preload.js шлёт в
- * ответ на срабатывание globalShortcut'а в main. Возвращает unsubscribe.
+ * ответ на срабатывание globalShortcut'а / uiohook'а в main. Возвращает
+ * unsubscribe. При первом вызове (ленивая активация) включает мост
+ * preload'а — см. ensureShortcutBridge выше.
  */
 export function onShortcutEvent(handler: (action: ShortcutAction) => void): () => void {
+  ensureShortcutBridge();
   const listener = (ev: Event) => {
     const detail = (ev as CustomEvent).detail;
     const action = detail?.action as ShortcutAction | undefined;
@@ -284,8 +318,10 @@ export function mouseEventToAccelerator(e: MouseEvent): string | null {
 
 /**
  * true, если accelerator завершается на «мышиную» клавишу. Такие
- * accelerator'ы Electron globalShortcut НЕ может зарегистрировать —
- * useKeybinds обрабатывает их сам, слушая window mousedown.
+ * accelerator'ы Electron globalShortcut НЕ может зарегистрировать, поэтому
+ * мы обрабатываем их в main-процессе через uiohook-napi (см.
+ * `desktop/mouseHook.js`). На renderer-стороне эта функция осталась
+ * только для UI-логики (как показывать acc в KeybindRecorder).
  */
 export function isMouseAccelerator(acc: string | null | undefined): boolean {
   if (!acc) return false;
