@@ -192,15 +192,57 @@ export function onShortcutEvent(handler: (action: ShortcutAction) => void): () =
 }
 
 /**
+ * Активация моста main → DOM-event для update-событий.
+ *
+ * preload.js (см. desktop/preload.js) подписывается на ipcRenderer
+ * 'update:event' ТОЛЬКО когда renderer хотя бы раз вызовет
+ * electronAPI.onUpdateEvent(). Без этого main-процесс честно шлёт IPC
+ * (autoUpdater эмитит 'checking-for-update' / 'update-available' /
+ * 'download-progress' / 'update-downloaded' / ...), но ipcRenderer.on
+ * никем не повешен, и window-event 'owncord:update' никогда не
+ * диспатчится. UI слушает только DOM-event — значит UpdateToast никогда
+ * не показывает плашку, а кнопка «Проверить обновления» в настройках
+ * после нажатия ВСЕГДА падает в 60-секундный watchdog с ошибкой «Нет
+ * ответа от сервера обновлений», даже если main отработал штатно.
+ *
+ * Чиним идемпотентным module-level singleton'ом: при первом вызове
+ * onUpdateEvent (если мы в Electron'е) разово дёргаем
+ * electronAPI.onUpdateEvent() — это и подвешивает ipcRenderer.on в
+ * preload. Cleanup не нужен — bridge живёт всё время жизни процесса.
+ *
+ * Аналогичный механизм для shortcuts давно существует
+ * (ensureShortcutBridge выше). Для updates его забыли — оттуда и
+ * происходили все «60 сек ошибка» во всех 0.8.x.
+ */
+let updateBridgeActive = false;
+function ensureUpdateBridge(): void {
+  if (updateBridgeActive) return;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const api = typeof window !== 'undefined' ? (window as any).electronAPI : null;
+  if (api && typeof api.onUpdateEvent === 'function') {
+    // Без callback'а — preload сам диспатчит DOM-event, которого нам и
+    // достаточно (handler в onUpdateEvent нужен только если хочется
+    // не-DOM путь; нам он не нужен — все listener'ы сидят на DOM).
+    api.onUpdateEvent();
+    updateBridgeActive = true;
+  }
+}
+
+/**
  * Подписка на события автообновления (см. UpdateEvent выше).
  * На вебе — no-op (вернёт пустой unsubscribe), что позволяет UI
  * звать его безусловно при mount'е.
+ *
+ * При первом вызове (ленивая активация) включает мост preload → DOM —
+ * см. ensureUpdateBridge выше. Без этого моста main-broadcast'ы
+ * летели в пустоту.
  */
 export function onUpdateEvent(handler: (e: UpdateEvent) => void): () => void {
   if (!isDesktop())
     return () => {
       /* noop */
     };
+  ensureUpdateBridge();
   const listener = (ev: Event) => {
     const detail = (ev as CustomEvent).detail as UpdateEvent | undefined;
     if (!detail?.kind) return;
