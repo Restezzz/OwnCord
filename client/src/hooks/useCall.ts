@@ -15,6 +15,7 @@ import {
   type MicScreenMixer,
 } from '../utils/audioProcessing';
 import { onShortcutEvent } from '../utils/desktop';
+import { startRtcDiag, buildRtcConfig } from '../utils/rtcDiag';
 
 /**
  * useCall — один активный звонок между двумя пользователями.
@@ -122,6 +123,10 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   const audioSenderRef = useRef(null);
   const videoSenderRef = useRef(null);
   const iceServersRef = useRef(null);
+  // Стоп-функция текущего rtc-diag цикла. Создаётся в createPeerConnection,
+  // снимается в enterWaiting/cleanup. Помогает не наплодить параллельных
+  // setInterval'ов при реджойне (createPeerConnection вызывается заново).
+  const rtcDiagStopRef = useRef<null | (() => void)>(null);
   // Watchdog: если ICE/connection не пришёл в 'connected' за разумное время,
   // принудительно роняем звонок. Без этого мобильные браузеры (Safari iOS,
   // Yandex) могут «висеть» в connecting на симметричном NAT/CGNAT'е без
@@ -207,6 +212,14 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       if (iceTimeoutRef.current) {
         clearTimeout(iceTimeoutRef.current);
         iceTimeoutRef.current = null;
+      }
+      if (rtcDiagStopRef.current) {
+        try {
+          rtcDiagStopRef.current();
+        } catch {
+          /* */
+        }
+        rtcDiagStopRef.current = null;
       }
 
       try {
@@ -317,6 +330,14 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
         clearTimeout(iceTimeoutRef.current);
         iceTimeoutRef.current = null;
       }
+      if (rtcDiagStopRef.current) {
+        try {
+          rtcDiagStopRef.current();
+        } catch {
+          /* */
+        }
+        rtcDiagStopRef.current = null;
+      }
       try {
         if (pcRef.current) {
           pcRef.current.ontrack = null;
@@ -362,10 +383,22 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   // прикреплять и связь пойдёт в одну сторону.
   const createPeerConnection = useCallback(
     (_role) => {
-      const pc = new RTCPeerConnection({
-        iceServers: iceServersRef.current || [{ urls: 'stun:stun.l.google.com:19302' }],
-      });
+      const pc = new RTCPeerConnection(
+        buildRtcConfig(iceServersRef.current, {
+          forceTurnRelay: !!settings?.forceTurnRelay,
+        }),
+      );
       pcRef.current = pc;
+      // Снимаем предыдущий diag-цикл, если был (реджойн внутри той же сессии).
+      if (rtcDiagStopRef.current) {
+        try {
+          rtcDiagStopRef.current();
+        } catch {
+          /* */
+        }
+        rtcDiagStopRef.current = null;
+      }
+      rtcDiagStopRef.current = startRtcDiag(pc, 'dm');
 
       // ontrack/onice/onstate ставим ДО addTrack — на старых браузерах
       // addTrack может синхронно срабатывать как изменение состояния.
@@ -495,7 +528,7 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
 
       return pc;
     },
-    [emitMyMedia, socket, sounds],
+    [emitMyMedia, socket, sounds, settings?.forceTurnRelay],
   );
 
   // --- Локальный медиа-стрим --------------------------------------------
