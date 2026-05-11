@@ -772,6 +772,14 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
       }
       const track = display.getVideoTracks()[0];
       if (!track) return;
+      // captureDisplay в браузере при шеринге окна срезает audio (chromium
+      // на Windows не умеет per-window audio — отдаёт системный микшер;
+      // см. media.ts). Сообщаем юзеру про десктоп-клиент.
+      if ((display as any).windowAudioStripped) {
+        toast?.info?.(
+          'В браузере звук одного окна захватить нельзя. Откройте OwnCord для десктопа или поделитесь экраном целиком, чтобы передавать звук.',
+        );
+      }
       screenTrackRef.current = track;
 
       // Добавляем аудио трек из стрима экрана

@@ -77,6 +77,33 @@ addColumn('messages', 'attachment_size', 'INTEGER');
 addColumn('messages', 'attachment_mime', 'TEXT');
 // Дополнительные данные для системных сообщений (например, call_*) — JSON-строка.
 addColumn('messages', 'payload', 'TEXT');
+// Отметка о прочтении сообщения получателем (для DM 1:1). NULL = ещё не прочитано.
+// Используется UI клиента для рендера галочек: одна галка = доставлено сервером
+// (есть запись в БД), две галки = прочитано (read_at != NULL). Для группы пока
+// не используем — там было бы N статусов на каждого участника.
+addColumn('messages', 'read_at', 'INTEGER');
+// Пересылка сообщений: ссылка на оригинал, чтобы UI рисовал плашку
+// «Переслано от X». Файлы/payload не дублируются — копируем ссылку
+// attachment_path, тот же физический файл в /uploads/. forwarded_from_user_id
+// FK с ON DELETE SET NULL: если автор оригинала удалит аккаунт, плашка
+// останется, но имя автора не подставим (UI покажет «Удалённый пользователь»).
+// forwarded_from_message_id и forwarded_from_created_at — без FK, потому что
+// оригинальное сообщение могло быть удалено владельцем; нам важна только
+// ссылка для отображения, а не каскадная целостность.
+addColumn(
+  'messages',
+  'forwarded_from_user_id',
+  'INTEGER REFERENCES users(id) ON DELETE SET NULL',
+);
+addColumn('messages', 'forwarded_from_message_id', 'INTEGER');
+addColumn('messages', 'forwarded_from_created_at', 'INTEGER');
+// Ответ на сообщение (reply). Ссылается на id оригинала в этом же чате.
+// ON DELETE SET NULL: если оригинал жёстко удалили (hide_on_delete у автора),
+// ссылка обнуляется, но текст ответа остаётся видимым. Soft-delete оригинала
+// (deleted=1) на ссылку не влияет — UI покажет «удалённое сообщение» в
+// плашке-цитате, что соответствует поведению Telegram.
+addColumn('messages', 'reply_to_message_id', 'INTEGER REFERENCES messages(id) ON DELETE SET NULL');
+db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages (reply_to_message_id);`);
 
 // Серверные мьюты (отключение уведомлений и звонков от конкретного юзера).
 db.exec(`

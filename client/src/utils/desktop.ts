@@ -55,6 +55,26 @@ export type UpdateEvent =
   | { kind: 'downloaded'; version?: string; releaseDate?: string }
   | { kind: 'error'; message: string };
 
+// Формат PCM, в котором main отдаёт чанки per-process loopback'а.
+// Renderer создаёт AudioContext с этим sampleRate, конвертит байты в
+// Float32 и пишет в MediaStreamAudioDestinationNode. См.
+// `desktop/processAudio.js` для main-стороны.
+export type ProcAudioFormat = {
+  sampleRate: number;
+  channels: number;
+  encoding: 'float32' | 'int16';
+  bytesPerSample: number;
+};
+
+type ProcAudioApi = {
+  isSupported: () => Promise<boolean>;
+  isActive: () => Promise<boolean>;
+  getFormat: () => Promise<ProcAudioFormat>;
+  onChunk: (handler: (data: Uint8Array) => void) => () => void;
+  onEnded: (handler: () => void) => () => void;
+  stop: () => Promise<true>;
+};
+
 type ElectronApi = {
   isDesktop: true;
   getVersion?: () => Promise<string>;
@@ -66,6 +86,11 @@ type ElectronApi = {
   onUpdateEvent?: (handler?: (e: UpdateEvent) => void) => () => void;
   installUpdate?: () => Promise<true>;
   checkForUpdates?: () => Promise<{ ok: boolean; version?: string; error?: string }>;
+  // procAudio — опционален, потому что старые сборки десктопа без этого
+  // API всё ещё могут существовать в природе (постепенный rollout
+  // обновления). Renderer должен делать optional-chain ко всем
+  // методам и graceful'но скипать, если не поддерживается.
+  procAudio?: ProcAudioApi;
 };
 
 declare global {

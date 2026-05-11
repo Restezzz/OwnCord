@@ -39,17 +39,26 @@ function configPath() {
 }
 
 function load() {
+  let merged;
   try {
     const raw = fs.readFileSync(configPath(), 'utf8');
     const parsed = JSON.parse(raw);
-    return {
+    merged = {
       ...DEFAULTS,
       ...parsed,
       shortcuts: { ...DEFAULTS.shortcuts, ...(parsed?.shortcuts || {}) },
     };
   } catch {
-    return { ...DEFAULTS, shortcuts: { ...DEFAULTS.shortcuts } };
+    merged = { ...DEFAULTS, shortcuts: { ...DEFAULTS.shortcuts } };
   }
+  // В dev-режиме env OWNCORD_SERVER_URL ВСЕГДА бьёт сохранённый URL.
+  // Это нужно, чтобы `npm run desktop:dev` смотрел на локальный сервер
+  // независимо от того, остался ли в dev-профиле прежний URL прод-сервера.
+  // В prod (app.isPackaged) env обычно не задана, и ничего не меняется.
+  if (!app.isPackaged && process.env.OWNCORD_SERVER_URL) {
+    merged.serverUrl = process.env.OWNCORD_SERVER_URL;
+  }
+  return merged;
 }
 
 function save(cfg) {

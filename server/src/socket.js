@@ -22,6 +22,9 @@ import {
 } from './groupCallRegistry.js';
 import { pushToUser, pushToUsers } from './push.js';
 import { buildSocketCorsOptions } from './security.js';
+// validateReplyTo — общая проверка для DM/group reply. rowToMessage и
+// MSG_COLS — единый формат сообщения с replyTo/forwardedFrom для UI.
+import { validateReplyTo, rowToMessage, MSG_COLS } from './routes/messages.js';
 
 export function attachSocket(httpServer) {
   const io = new IOServer(httpServer, {
@@ -45,34 +48,6 @@ export function attachSocket(httpServer) {
   }
   function dropSockets(callId) {
     sockets.delete(callId);
-  }
-
-  // Быстрая сборка текстового сообщения в формате, которого ждёт клиент.
-  function makeTextMessage({
-    id,
-    senderId,
-    receiverId = null,
-    groupId = null,
-    content,
-    createdAt,
-  }) {
-    return {
-      id,
-      senderId,
-      receiverId,
-      groupId,
-      content,
-      createdAt,
-      editedAt: null,
-      deleted: false,
-      kind: 'text',
-      attachmentPath: null,
-      durationMs: null,
-      attachmentName: null,
-      attachmentSize: null,
-      attachmentMime: null,
-      payload: null,
-    };
   }
 
   io.use((socket, next) => {
@@ -262,15 +237,35 @@ export function attachSocket(httpServer) {
       }
     });
 
-    socket.on('dm:send', ({ to, groupId, content }, ack) => {
+    socket.on('dm:send', ({ to, groupId, content, clientId, replyToId }, ack) => {
       if (typeof content !== 'string') return ack?.({ error: 'bad payload' });
       const trimmed = content.trim();
       if (!trimmed) return ack?.({ error: 'empty' });
       if (trimmed.length > 4000) return ack?.({ error: 'too long' });
+      // clientId — опциональный UUID от клиента для связки optimistic-плейсхолдера
+      // с реальной записью. Пропускаем обратно в dm:new/ack. Длину ограничиваем,
+      // чтобы не тащить ерунду в трансляцию.
+      const safeClientId =
+        typeof clientId === 'string' && clientId.length > 0 && clientId.length <= 64
+          ? clientId
+          : null;
 
       const toGroup = typeof groupId === 'number';
       const toUser = typeof to === 'number';
       if (toGroup === toUser) return ack?.({ error: 'need exactly one target' });
+
+      // replyToId — опционален. Проверяем валидность ДО INSERT, чтобы не
+      // плодить мусор. ctx зависит от типа чата: для группы — groupId,
+      // для DM — me+peer.
+      const replyCtx = toGroup
+        ? { groupId, me: me.id }
+        : { me: me.id, peerId: to };
+      const replyCheck = validateReplyTo(
+        replyToId === undefined || replyToId === null ? null : Number(replyToId),
+        replyCtx,
+      );
+      if (replyCheck.error) return ack?.({ error: replyCheck.error });
+      const resolvedReplyId = replyCheck.id;
 
       const now = Date.now();
 
@@ -281,19 +276,18 @@ export function attachSocket(httpServer) {
         if (!membership) return ack?.({ error: 'not a member' });
         const info = db
           .prepare(
-            `INSERT INTO messages (sender_id, group_id, content, created_at, kind)
-             VALUES (?, ?, ?, ?, 'text')`,
+            `INSERT INTO messages (sender_id, group_id, content, created_at, kind, reply_to_message_id)
+             VALUES (?, ?, ?, ?, 'text', ?)`,
           )
-          .run(me.id, groupId, trimmed, now);
+          .run(me.id, groupId, trimmed, now, resolvedReplyId);
         db.prepare('UPDATE groups SET updated_at = ? WHERE id = ?').run(now, groupId);
-        const msg = makeTextMessage({
-          id: info.lastInsertRowid,
-          senderId: me.id,
-          receiverId: null,
-          groupId,
-          content: trimmed,
-          createdAt: now,
-        });
+        const fullRow = db
+          .prepare(`SELECT ${MSG_COLS} FROM messages WHERE id = ?`)
+          .get(info.lastInsertRowid);
+        const msg = {
+          ...rowToMessage(fullRow),
+          ...(safeClientId ? { clientId: safeClientId } : {}),
+        };
         // Все участники подписаны на group:<id> при connect и при join,
         // поэтому одного emit достаточно. Дублирование в личные комнаты
         // приводило к тому, что у клиента счётчик непрочитанных рос на 2.
@@ -323,18 +317,17 @@ export function attachSocket(httpServer) {
 
       const info = db
         .prepare(
-          `INSERT INTO messages (sender_id, receiver_id, content, created_at, kind)
-           VALUES (?, ?, ?, ?, 'text')`,
+          `INSERT INTO messages (sender_id, receiver_id, content, created_at, kind, reply_to_message_id)
+           VALUES (?, ?, ?, ?, 'text', ?)`,
         )
-        .run(me.id, to, trimmed, now);
-      const msg = makeTextMessage({
-        id: info.lastInsertRowid,
-        senderId: me.id,
-        receiverId: to,
-        groupId: null,
-        content: trimmed,
-        createdAt: now,
-      });
+        .run(me.id, to, trimmed, now, resolvedReplyId);
+      const fullRow = db
+        .prepare(`SELECT ${MSG_COLS} FROM messages WHERE id = ?`)
+        .get(info.lastInsertRowid);
+      const msg = {
+        ...rowToMessage(fullRow),
+        ...(safeClientId ? { clientId: safeClientId } : {}),
+      };
 
       io.to(roomOf(to)).emit('dm:new', msg);
       io.to(roomOf(me.id)).emit('dm:new', msg);
@@ -351,6 +344,51 @@ export function attachSocket(httpServer) {
       }).catch(() => {
         /* logged inside */
       });
+    });
+
+    // --- Галочки «прочитано» (read receipts) для DM 1:1 --------------------
+    //
+    // Клиент шлёт `dm:read { peerId, lastMessageId }` когда открывает чат
+    // с peerId и хочет пометить все его сообщения (id <= lastMessageId)
+    // как прочитанные. Сервер:
+    //   1) проставляет read_at = now для таких сообщений (где sender=peerId,
+    //      receiver=me, read_at IS NULL);
+    //   2) уведомляет отправителя (peerId), какой максимальный id теперь
+    //      прочитан, чтобы UI у него перевёл галочки в «две галки».
+    //
+    // Группы сознательно не поддерживаются: per-user read матрица стоит
+    // отдельной таблицы, и UX галочек для N>2 участников не стандартен.
+    socket.on('dm:read', (payload) => {
+      const peerId = payload?.peerId;
+      const lastMessageId = payload?.lastMessageId;
+      if (typeof peerId !== 'number') return;
+      if (typeof lastMessageId !== 'number' || lastMessageId <= 0) return;
+      const now = Date.now();
+      const info = db
+        .prepare(
+          `UPDATE messages
+             SET read_at = ?
+           WHERE sender_id = ?
+             AND receiver_id = ?
+             AND group_id IS NULL
+             AND id <= ?
+             AND read_at IS NULL`,
+        )
+        .run(now, peerId, me.id, lastMessageId);
+      // Если ничего не обновилось (всё уже прочитано) — не шумим в эфир:
+      // клиент-отправитель и так уже в состоянии «read».
+      if (info.changes === 0) return;
+      // Уведомляем отправителя (peerId) в его личной комнате. Кому-то ещё
+      // (включая нас самих на другом устройстве) читающему этот чат — тоже
+      // полезно, но это делается через соседний emit в свою комнату: так
+      // multi-device сессии синхронизируются.
+      const payloadOut = { peerId: me.id, lastMessageId, readAt: now };
+      io.to(roomOf(peerId)).emit('dm:read', payloadOut);
+      // В свою комнату — чтобы все наши открытые сессии тоже обнулили
+      // локальный счётчик непрочитанных в этом DM. peerId в payload для
+      // отправителя = наш id, а для «другого моего устройства» это id
+      // собеседника — перепутать нельзя, потому что шлём разные события:
+      io.to(roomOf(me.id)).emit('dm:read:self', { peerId, lastMessageId, readAt: now });
     });
 
     // --- WebRTC сигналинг ---------------------------------------------------

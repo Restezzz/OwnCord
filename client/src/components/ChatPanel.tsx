@@ -13,6 +13,9 @@ import {
   X,
   File as FileIcon,
   Smile,
+  Forward as ForwardIcon,
+  Reply as ReplyIcon,
+  CheckSquare,
 } from 'lucide-react';
 import Avatar from './Avatar';
 import ContextMenu from './ContextMenu';
@@ -60,6 +63,7 @@ export default function ChatPanel({
   onSendFile,
   onEditMessage,
   onDeleteMessage,
+  onRequestForward = null,
   onRejoinCall,
   onCallAudio,
   onCallVideo,
@@ -89,6 +93,16 @@ export default function ChatPanel({
   const [pendingAttachments, setPendingAttachments] = useState([]);
   const [previewZoom, setPreviewZoom] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
+  // Сообщение, на которое сейчас отвечаем (preview-бар над composer).
+  // null — обычный режим. При отправке кладём replyTo.id в payload и
+  // сбрасываем. Esc / крестик в preview закрывают.
+  const [replyingTo, setReplyingTo] = useState(null);
+  // Режим мульти-выбора сообщений. При активации обычные клики/контекст-
+  // меню заменяются на toggle выделения, а внизу появляется bottom-bar
+  // с действиями (Переслать N, Отмена). Сделано на Set<number> чтобы
+  // быстро было toggle'ить и считать size.
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set());
   const scrollRef = useRef(null);
   const fileInputRef = useRef(null);
   const dropZoneRef = useRef(null);
@@ -201,14 +215,60 @@ export default function ChatPanel({
     el.scrollTop = el.scrollHeight;
   }, [messages.length, target?.id]);
 
-  // При смене собеседника сбрасываем редактирование/запись и pending attachments
+  // При смене собеседника сбрасываем редактирование/запись/pending/режим
+  // выделения/preview ответа: всё это контекстно для конкретного чата.
   useEffect(() => {
     setEditingId(null);
     setEditDraft('');
     setRecording(false);
     setMenu(null);
     setPendingAttachments([]);
+    setReplyingTo(null);
+    setSelectionMode(false);
+    setSelectedIds(new Set());
   }, [target?.id, isGroup]);
+
+  // Toggle одного id в режиме мульти-выбора. Если последний удаляется —
+  // автоматически выходим из режима. Этим решаем UX-проблему «забыл выйти
+  // из выделения и теперь обычные клики не открывают меню».
+  const toggleSelected = useCallback((id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      if (next.size === 0) {
+        // Откладываем выход в setSelectionMode чтобы не делать setState
+        // во время другого setState (React не любит).
+        queueMicrotask(() => setSelectionMode(false));
+      }
+      return next;
+    });
+  }, []);
+
+  const exitSelection = useCallback(() => {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  }, []);
+
+  // Esc глобально: закрывает preview-бар ответа (если не редактируем) и
+  // выходит из режима выделения. Не вешаем на input — там Esc вообще не
+  // обрабатывается (textarea без замечательных шорткатов).
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      if (replyingTo) {
+        setReplyingTo(null);
+        e.stopPropagation();
+        return;
+      }
+      if (selectionMode) {
+        exitSelection();
+        e.stopPropagation();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [replyingTo, selectionMode, exitSelection]);
 
   const stopTyping = useCallback(() => {
     if (!typingActiveRef.current) return;
@@ -265,14 +325,19 @@ export default function ChatPanel({
     const trimmed = text.trim();
     const hasAttachments = pendingAttachments.length > 0;
     if ((!trimmed && !hasAttachments) || sending) return;
+    // Если есть активный preview-бар ответа — берём его id и сбрасываем
+    // ДО await, чтобы повторная отправка по случайному двойному Enter не
+    // прицепила тот же reply дважды.
+    const replyToId = replyingTo?.id ?? null;
+    setReplyingTo(null);
     setSending(true);
     try {
       if (hasAttachments) {
         // Отправляем все attachment'ы в одном сообщении
-        await onSendFile?.(pendingAttachments, { caption: trimmed });
+        await onSendFile?.(pendingAttachments, { caption: trimmed, replyToId });
         setPendingAttachments([]);
       } else {
-        await onSend(trimmed);
+        await onSend(trimmed, replyToId);
       }
       setText('');
       stopTyping();
@@ -317,16 +382,50 @@ export default function ChatPanel({
     setEditDraft('');
   };
 
+  // Правый клик по сообщению — единое контекстное меню: «Реакция» выводит
+  // ReactionPicker в той же точке для чужих; «Ответить»/«Переслать»/
+  // «Выделить» всегда; для своих текстовых добавляются «Редактировать» и
+  // «Удалить». Для удалённых/системных/звонковых меню не показываем — их
+  // нечего пересылать и под ними нет осмысленных действий.
+  //
+  // В режиме мульти-выбора правый клик НЕ показывает меню, а используется
+  // как ещё один способ toggle'нуть выделение (обычный левый клик тоже
+  // работает — см. onMessageClick).
   const onMessageContext = (e, m) => {
-    if (m.deleted || m.kind === 'call') return;
+    if (m.deleted || m.kind === 'call' || m.kind === 'system' || m.kind === 'groupcall') return;
     e.preventDefault();
-    if (m.senderId === selfId) {
-      // Свое сообщение - показать редактирование/удаление
-      setMenu({ messageId: m.id, x: e.clientX, y: e.clientY });
-    } else {
-      // Чужое сообщение - показать реакции
-      setReactionPicker({ messageId: m.id, x: e.clientX, y: e.clientY });
+    if (selectionMode) {
+      toggleSelected(m.id);
+      return;
     }
+    setMenu({ messageId: m.id, x: e.clientX, y: e.clientY });
+  };
+
+  // Левый клик по сообщению используется ТОЛЬКО в режиме выделения —
+  // иначе он бы конфликтовал со ссылками/реакциями в нормальном режиме.
+  const onMessageClick = (e, m) => {
+    if (!selectionMode) return;
+    if (m.deleted || m.kind === 'call' || m.kind === 'system' || m.kind === 'groupcall') return;
+    e.preventDefault();
+    toggleSelected(m.id);
+  };
+
+  // «Выделить» — вход в режим мульти-выбора с уже отмеченным первым
+  // сообщением. Закрывает контекстное меню.
+  const startSelectionFrom = (m) => {
+    setMenu(null);
+    setSelectionMode(true);
+    setSelectedIds(new Set([m.id]));
+  };
+
+  // «Переслать N сообщений» из bottom-bar. Передаём наверх массив выделенных
+  // сообщений (UI там сам решит — открыть ForwardModal со списком).
+  const requestForwardSelection = () => {
+    if (selectedIds.size === 0) return;
+    const list = messages.filter((m) => selectedIds.has(m.id));
+    if (list.length === 0) return;
+    onRequestForward?.(list.length === 1 ? list[0] : list);
+    exitSelection();
   };
 
   const onPickFile = () => {
@@ -645,6 +744,7 @@ export default function ChatPanel({
           commitEdit={commitEdit}
           cancelEdit={cancelEdit}
           onMessageContext={onMessageContext}
+          onMessageClick={onMessageClick}
           onReactionClick={onReactionClick}
           onRejoinCall={onRejoinCall}
           onJoinGroupCall={onJoinGroupCall}
@@ -653,10 +753,58 @@ export default function ChatPanel({
           group={group}
           sendersById={sendersById}
           onShowGroupMemberProfile={onShowGroupMemberProfile}
+          selectionMode={selectionMode}
+          selectedIds={selectedIds}
         />
       </div>
 
+      {/* Bottom-bar режима мульти-выбора. Замещает обычный composer-panel,
+          но рендерится на том же месте, чтобы не ломать раскладку. Кнопки:
+          «Переслать N» и «Отмена». Эта панель видна только пока
+          selectionMode=true и есть хотя бы одно выделение (см. toggleSelected
+          выше — при опустошении автоматически выходим из режима). */}
+      {selectionMode && selectedIds.size > 0 ? (
+        <div className="composer-panel p-3 border-t border-white/10 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={exitSelection}
+            className="btn-icon bg-white/10 hover:bg-white/20 text-white"
+            style={{ height: 40, width: 40 }}
+            title="Отмена (Esc)"
+          >
+            <X size={16} />
+          </button>
+          <div className="flex-1 text-sm text-slate-200">
+            Выбрано {selectedIds.size}{' '}
+            {selectedIds.size === 1
+              ? 'сообщение'
+              : selectedIds.size < 5
+                ? 'сообщения'
+                : 'сообщений'}
+          </div>
+          <button
+            type="button"
+            onClick={requestForwardSelection}
+            className="btn-primary h-10 px-4 flex items-center gap-2"
+            title="Переслать выделенные"
+          >
+            <ForwardIcon size={16} />
+            <span>Переслать</span>
+          </button>
+        </div>
+      ) : (
       <div className="composer-panel p-3 border-t border-white/10">
+        {/* Preview-бар «Ответ на …» — рендерится ВНУТРИ composer-panel,
+            над input'ом, чтобы пользователь сразу видел контекст ответа.
+            Клик по крестику или Esc снимает выбор. */}
+        {replyingTo && !peerDeleted && (
+          <ReplyPreviewBar
+            message={replyingTo}
+            sendersById={sendersById}
+            selfId={selfId}
+            onCancel={() => setReplyingTo(null)}
+          />
+        )}
         {peerDeleted ? (
           <div className="px-3 py-2 rounded-lg bg-bg-3 text-slate-400 text-sm text-center">
             Этот аккаунт был удалён. Написать или позвонить уже не получится — история остаётся
@@ -665,7 +813,9 @@ export default function ChatPanel({
         ) : recording ? (
           <VoiceRecorder
             onSend={async (blob, durationMs) => {
-              await onSendVoice?.(blob, durationMs);
+              const replyToId = replyingTo?.id ?? null;
+              setReplyingTo(null);
+              await onSendVoice?.(blob, durationMs, replyToId);
               setRecording(false);
             }}
             onCancel={() => setRecording(false)}
@@ -786,14 +936,56 @@ export default function ChatPanel({
           </div>
         )}
       </div>
+      )}
 
       {menu && menuMessage && (
         <ContextMenu
           anchor={{ x: menu.x, y: menu.y }}
           onClose={() => setMenu(null)}
           items={[
-            ...(menuMessage.kind === 'text'
+            // «Ответить» — всегда (включая свои сообщения: можно процитировать
+            // и себя). Закрывает меню и поднимает preview-бар над composer.
+            {
+              label: 'Ответить',
+              icon: <ReplyIcon size={14} />,
+              onClick: () => setReplyingTo(menuMessage),
+            },
+            // «Реакция» — только для чужих (сервер не разрешает реагировать
+            // на собственные сообщения). Закрываем текущее меню и открываем
+            // ReactionPicker в той же точке.
+            ...(menuMessage.senderId !== selfId
               ? [
+                  {
+                    label: 'Реакция',
+                    icon: <Smile size={14} />,
+                    onClick: () => {
+                      const x = menu.x;
+                      const y = menu.y;
+                      const id = menuMessage.id;
+                      setMenu(null);
+                      setReactionPicker({ messageId: id, x, y });
+                    },
+                  },
+                ]
+              : []),
+            // «Переслать» — для всех типов, кроме deleted/system/call/groupcall
+            // (контекстное меню для них уже не открывается).
+            {
+              label: 'Переслать',
+              icon: <ForwardIcon size={14} />,
+              onClick: () => onRequestForward?.(menuMessage),
+            },
+            // «Выделить» — переход в режим мульти-выбора. Дальше пользователь
+            // докликает остальные сообщения и через bottom-bar пересылает.
+            {
+              label: 'Выделить',
+              icon: <CheckSquare size={14} />,
+              onClick: () => startSelectionFrom(menuMessage),
+            },
+            // Действия владельца сообщения.
+            ...(menuMessage.senderId === selfId && menuMessage.kind === 'text'
+              ? [
+                  { divider: true },
                   {
                     label: 'Редактировать',
                     icon: <Pencil size={14} />,
@@ -801,12 +993,17 @@ export default function ChatPanel({
                   },
                 ]
               : []),
-            {
-              label: 'Удалить',
-              icon: <Trash2 size={14} />,
-              danger: true,
-              onClick: () => onDeleteMessage?.(menuMessage.id),
-            },
+            ...(menuMessage.senderId === selfId
+              ? [
+                  ...(menuMessage.kind === 'text' ? [] : [{ divider: true }]),
+                  {
+                    label: 'Удалить',
+                    icon: <Trash2 size={14} />,
+                    danger: true,
+                    onClick: () => onDeleteMessage?.(menuMessage.id),
+                  },
+                ]
+              : []),
           ]}
         />
       )}
@@ -817,6 +1014,50 @@ export default function ChatPanel({
           onClose={() => setReactionPicker(null)}
         />
       )}
+    </div>
+  );
+}
+
+// Превью «Ответ на …» над composer'ом. Содержит вертикальную акцентную
+// полоску, автора и краткое содержание оригинала, плюс крестик отмены.
+// Тип контента (voice/image/video/file) показываем мини-иконкой,
+// иначе берём первые 200 символов content (он уже обрезан на сервере
+// при выдаче истории / dm:new, но и здесь truncate'им через CSS).
+function ReplyPreviewBar({ message, sendersById, selfId, onCancel }) {
+  // Имя автора — если это сам юзер, пишем «Себе» (Telegram-стайл),
+  // иначе ищем в sendersById.
+  let authorName;
+  if (message.senderId === selfId) {
+    authorName = 'Себе';
+  } else {
+    const author = sendersById?.get(message.senderId);
+    authorName = author ? getDisplayName(author) : `Пользователь #${message.senderId}`;
+  }
+  const preview = (() => {
+    if (message.deleted) return 'удалённое сообщение';
+    if (message.kind === 'voice') return 'голосовое сообщение';
+    if (message.kind === 'image') return message.content || 'изображение';
+    if (message.kind === 'video') return message.content || 'видео';
+    if (message.kind === 'file') return message.content || message.attachmentName || 'файл';
+    return message.content || '';
+  })();
+  return (
+    <div className="flex items-stretch gap-2 mb-2 rounded-md bg-bg-3/60 border border-white/10 px-2 py-1.5">
+      <ReplyIcon size={16} className="self-center text-accent shrink-0" aria-hidden />
+      <span aria-hidden className="w-[3px] rounded-full bg-accent self-stretch" />
+      <div className="flex-1 min-w-0">
+        <div className="text-[11px] font-semibold text-accent truncate">{authorName}</div>
+        <div className="text-[12px] text-slate-300 truncate">{preview}</div>
+      </div>
+      <button
+        type="button"
+        onClick={onCancel}
+        className="btn-icon bg-transparent hover:bg-white/10 text-slate-300 self-center"
+        style={{ width: 28, height: 28 }}
+        title="Отменить ответ (Esc)"
+      >
+        <X size={14} />
+      </button>
     </div>
   );
 }

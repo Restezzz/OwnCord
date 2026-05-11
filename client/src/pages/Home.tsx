@@ -33,11 +33,13 @@ import { useGroupCall } from '../hooks/useGroupCall';
 import { useSounds } from '../hooks/useSounds';
 import { useKeybinds } from '../hooks/useKeybinds';
 import { getAvatarUrl, getDisplayName, isDeletedUser } from '../utils/user';
+import type { Message } from '../types';
 
 const SettingsPanel = lazy(() => import('../components/SettingsPanel'));
 const ProfileModal = lazy(() => import('../components/ProfileModal'));
 const GroupModal = lazy(() => import('../components/GroupModal'));
 const ConfirmModal = lazy(() => import('../components/ConfirmModal'));
+const ForwardModal = lazy(() => import('../components/ForwardModal'));
 
 // --- helpers ------------------------------------------------------------
 // Ключ чата в хеш-словарях (сообщения, unread и т.п.).
@@ -130,6 +132,10 @@ export default function Home() {
   // Окно подтверждения logout. Случайный клик по иконке двери в углу
   // сайдбара не должен мгновенно вышвыривать юзера: попросим подтверждение.
   const [confirmLogoutOpen, setConfirmLogoutOpen] = useState(false);
+  // Список сообщений, которые сейчас пересылаются (открыт ForwardModal).
+  // null = модалка закрыта. Длина >= 1. Для одного сообщения держим массив
+  // из одного элемента — это упрощает логику в ForwardModal (не два пути).
+  const [forwardingMessages, setForwardingMessages] = useState<null | Message[]>(null);
   // Set<groupId> — в каких группах сейчас активный звонок (по событиям сервера).
   const [activeGroupCalls, setActiveGroupCalls] = useState(() => new Set());
 
@@ -232,7 +238,20 @@ export default function Home() {
       }
       setMessagesByChat((prev) => {
         const cur = prev[key] || [];
+        // 1) Идемпотентность по серверному id: если уже есть — игнор.
         if (cur.some((m) => m.id === msg.id)) return prev;
+        // 2) Если это echo нашего optimistic-сообщения (msg.clientId совпадает
+        //    с плейсхолдером, который мы поставили при отправке) — заменяем
+        //    плейсхолдер на серверную версию. Это переводит галочку из
+        //    «часов» (sending) в «одну галку» (delivered).
+        if (msg.clientId) {
+          const idx = cur.findIndex((m) => m.clientId === msg.clientId);
+          if (idx !== -1) {
+            const next = cur.slice();
+            next[idx] = { ...msg, status: undefined };
+            return { ...prev, [key]: next };
+          }
+        }
         return { ...prev, [key]: [...cur, msg] };
       });
 
@@ -329,6 +348,54 @@ export default function Home() {
       });
     };
 
+    // Галочка «прочитано» для DM. Сервер шлёт {peerId: <кто прочитал>,
+    // lastMessageId}. Проставляем readAt у своих сообщений с id <=
+    // lastMessageId в ленте с этим peer'ом, чтобы UI перевёл их в «две
+    // галки». Не трогаем статусы 'sending'/'error' у более новых
+    // (отправленных, но ещё не ack'нутых) сообщений.
+    const onDmRead = ({ peerId, lastMessageId, readAt }) => {
+      const key = `u:${peerId}`;
+      setMessagesByChat((prev) => {
+        const cur = prev[key];
+        if (!cur) return prev;
+        let changed = false;
+        const next = cur.map((m) => {
+          if (
+            m.senderId === selfUser.id &&
+            m.receiverId === peerId &&
+            typeof m.id === 'number' &&
+            m.id > 0 &&
+            m.id <= lastMessageId &&
+            !m.readAt
+          ) {
+            changed = true;
+            return { ...m, readAt, status: undefined };
+          }
+          return m;
+        });
+        return changed ? { ...prev, [key]: next } : prev;
+      });
+    };
+
+    // Мульти-девайс эхо наших собственных dm:read. Пришло с другого
+    // устройства этого же юзера: сбрасываем локальный счётчик непрочитанных
+    // и убираем разделитель «новые» в этом DM, чтобы UI не расходился.
+    const onDmReadSelf = ({ peerId }) => {
+      const key = `u:${peerId}`;
+      setUnread((prev) => {
+        if (!prev[key]) return prev;
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      setFirstUnreadByChat((fu) => {
+        if (!fu[key]) return fu;
+        const next = { ...fu };
+        delete next[key];
+        return next;
+      });
+    };
+
     // Активные групповые звонки: глобальный индикатор по событиям сервера.
     const onGroupcallActive = ({ groupId }) => {
       setActiveGroupCalls((prev) => {
@@ -355,6 +422,8 @@ export default function Home() {
     socket.on('dm:delete', onDmDelete);
     socket.on('dm:remove', onDmRemove);
     socket.on('dm:reaction', onDmReaction);
+    socket.on('dm:read', onDmRead);
+    socket.on('dm:read:self', onDmReadSelf);
     socket.on('chat:typing', onChatTyping);
     socket.on('profile:self', onProfileSelf);
     socket.on('groupcall:active', onGroupcallActive);
@@ -369,6 +438,8 @@ export default function Home() {
       socket.off('dm:delete', onDmDelete);
       socket.off('dm:remove', onDmRemove);
       socket.off('dm:reaction', onDmReaction);
+      socket.off('dm:read', onDmRead);
+      socket.off('dm:read:self', onDmReadSelf);
       socket.off('chat:typing', onChatTyping);
       socket.off('profile:self', onProfileSelf);
       socket.off('groupcall:active', onGroupcallActive);
@@ -513,6 +584,33 @@ export default function Home() {
     return () => window.removeEventListener('owncord:open-chat', onOpenChat);
   }, [selectChat]);
 
+  // --- dm:read (галочки «прочитано») --------------------------------------
+  // Когда юзер открывает DM-чат (или в открытый DM прилетает новое сообщение
+  // от пира), шлём серверу `dm:read { peerId, lastMessageId }`, чтобы он
+  // проставил read_at и уведомил пира для перевода галочек в «две галки».
+  //
+  // Повторно не шлём: хранимся по peerId максимальный id, за который уже
+  // отчитались. Это защищает от лавины emit'ов при быстром скролле истории.
+  const lastReadSentRef = useRef<Record<number, number>>({});
+  useEffect(() => {
+    if (!socket || !selected || selected.kind !== 'user') return;
+    const key = chatKey(selected);
+    const msgs = messagesByChat[key];
+    if (!msgs || msgs.length === 0) return;
+    // Максимальный id сообщения, пришедшего ОТ peer'а (чужие сообщения).
+    let maxId = 0;
+    for (const m of msgs) {
+      if (m.senderId === selected.id && typeof m.id === 'number' && m.id > maxId) {
+        maxId = m.id;
+      }
+    }
+    if (maxId <= 0) return;
+    const prev = lastReadSentRef.current[selected.id] || 0;
+    if (maxId <= prev) return;
+    lastReadSentRef.current[selected.id] = maxId;
+    socket.emit('dm:read', { peerId: selected.id, lastMessageId: maxId });
+  }, [socket, selected, messagesByChat]);
+
   // Как только история для чата с pendingUnread появилась — фиксируем разделитель.
   useEffect(() => {
     const keys = Object.keys(pendingUnread);
@@ -537,31 +635,132 @@ export default function Home() {
   }, [messagesByChat, pendingUnread, computeFirstUnread]);
 
   // --- send actions -------------------------------------------------------
+  // Оптимистичная отправка текста:
+  //   1) сразу кладём плейсхолдер в messagesByChat (status='sending', отрицательный id);
+  //   2) шлём dm:send с clientId → сервер echo'нёт dm:new c этим clientId;
+  //   3) по ack:ok помечаем 'delivered'; onDm сам заменит плейсхолдер на серверную
+  //      версию по clientId (либо не найдёт — и просто добавит новое сообщение);
+  //   4) по ack:error — 'error' (красный !), юзер увидит, что не ушло.
   const handleSend = useCallback(
-    async (content) => {
+    async (content, replyToId = null) => {
       if (!socket || !selected) return;
+      const clientId =
+        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `c-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      const now = Date.now();
+      const key = chatKey(selected);
+      // Если это ответ — соберём preview оригинала для optimistic-плейсхолдера,
+      // чтобы пользователь сразу видел цитату в баблe ещё до ack от сервера.
+      // Сервер при echo пришлёт свой полноценный preview, и onDm заменит.
+      let optimisticReplyPreview = null;
+      if (replyToId) {
+        const curMsgs = messagesByChat[key] || [];
+        const orig = curMsgs.find((mm) => mm.id === replyToId);
+        if (orig) {
+          optimisticReplyPreview = {
+            id: orig.id,
+            senderId: orig.senderId,
+            content: orig.deleted ? '' : (orig.content || '').slice(0, 200),
+            kind: orig.kind,
+            deleted: !!orig.deleted,
+            attachmentPath: orig.attachmentPath || null,
+          };
+        }
+      }
+      const optimistic = {
+        // Отрицательный id, чтобы не конфликтовать с серверными id и было
+        // легко отличать плейсхолдер от реальной записи при dedup'е.
+        id: -now,
+        senderId: selfUser.id,
+        receiverId: selected.kind === 'user' ? selected.id : null,
+        groupId: selected.kind === 'group' ? selected.id : null,
+        content,
+        createdAt: now,
+        editedAt: null,
+        deleted: false,
+        kind: 'text',
+        attachmentPath: null,
+        durationMs: null,
+        attachmentName: null,
+        attachmentSize: null,
+        attachmentMime: null,
+        payload: null,
+        readAt: null,
+        clientId,
+        status: 'sending',
+        replyTo: optimisticReplyPreview,
+      };
+      setMessagesByChat((prev) => {
+        const cur = prev[key] || [];
+        return { ...prev, [key]: [...cur, optimistic] };
+      });
+      setLastActivityByChat((prev) => setActivity(prev, key, now));
+
+      const payload =
+        selected.kind === 'group'
+          ? { groupId: selected.id, content, clientId, replyToId: replyToId || undefined }
+          : { to: selected.id, content, clientId, replyToId: replyToId || undefined };
+
+      const applyResult = (patch) => {
+        setMessagesByChat((prev) => {
+          const cur = prev[key];
+          if (!cur) return prev;
+          let found = false;
+          const next = cur.map((m) => {
+            if (m.clientId === clientId) {
+              found = true;
+              return { ...m, ...patch };
+            }
+            return m;
+          });
+          return found ? { ...prev, [key]: next } : prev;
+        });
+      };
+
       await new Promise((resolve) => {
-        const payload =
-          selected.kind === 'group'
-            ? { groupId: selected.id, content }
-            : { to: selected.id, content };
+        let settled = false;
+        // Страховка: если сеть умерла и ack никогда не придёт, через 20с
+        // помечаем как ошибку, чтобы юзер увидел красный «!» вместо
+        // вечно крутящихся часиков.
+        const timeout = window.setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          applyResult({ status: 'error' });
+          toast.error('Не удалось отправить: таймаут');
+          resolve(undefined);
+        }, 20000);
+
         socket.emit('dm:send', payload, (ack) => {
-          if (ack && 'error' in ack) toast.error(`Не удалось отправить: ${ack.error}`);
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timeout);
+          if (!ack) {
+            applyResult({ status: 'error' });
+            toast.error('Не удалось отправить');
+          } else if ('error' in ack) {
+            applyResult({ status: 'error' });
+            toast.error(`Не удалось отправить: ${ack.error}`);
+          } else if ('ok' in ack && ack.message) {
+            // onDm заменит плейсхолдер по clientId сам; но если dm:new ещё
+            // не пришёл, заполним реальный id/поля сейчас — снимет «часы».
+            applyResult({ ...ack.message, status: undefined });
+          }
           resolve(ack);
         });
       });
     },
-    [socket, selected, toast],
+    [socket, selected, selfUser.id, toast, messagesByChat],
   );
 
   const handleSendVoice = useCallback(
-    async (blob, durationMs) => {
+    async (blob, durationMs, replyToId = null) => {
       if (!selected) return;
       try {
         if (selected.kind === 'group') {
-          await api.sendGroupVoice(token, selected.id, blob, durationMs);
+          await api.sendGroupVoice(token, selected.id, blob, durationMs, replyToId);
         } else {
-          await api.sendVoice(token, selected.id, blob, durationMs);
+          await api.sendVoice(token, selected.id, blob, durationMs, replyToId);
         }
       } catch (e) {
         toast.error(e.message || 'Не удалось отправить голосовое');
@@ -593,10 +792,75 @@ export default function Home() {
     [token, toast],
   );
 
+  // ChatPanel дёргает это из пункта «Переслать» в контекстном меню сообщения
+  // ИЛИ из bottom-bar мульти-выбора. Принимает либо одно сообщение, либо
+  // массив. Нормализуем в массив, чтобы дальше иметь единый путь.
+  const handleRequestForward = useCallback((messageOrList) => {
+    if (!messageOrList) return;
+    const list = Array.isArray(messageOrList) ? messageOrList : [messageOrList];
+    if (list.length === 0) return;
+    setForwardingMessages(list);
+  }, []);
+
+  // Коллбэк из ForwardModal: target = {kind, id}, caption — опциональный
+  // комментарий, который пользователь добавил на втором шаге модалки.
+  // Логика:
+  //   1) Пересылаем все сообщения по очереди (api.forwardMessage сериально,
+  //      чтобы серверный порядок в чате-приёмнике совпадал с порядком
+  //      выделения у источника).
+  //   2) Если есть caption — после всех пересылок шлём отдельное текстовое
+  //      сообщение в целевой чат (Telegram-стайл). Используем socket dm:send
+  //      напрямую: api.forwardMessage уже использует HTTP, а dm:send даёт
+  //      нам optimistic-плейсхолдер у себя.
+  //   3) onDm в этом же компоненте дорисует новые сообщения. Тут только
+  //      показываем тост.
+  const handleForwardTo = useCallback(
+    async (target, caption) => {
+      const list = forwardingMessages || [];
+      if (list.length === 0) return;
+      try {
+        for (const src of list as { id: number }[]) {
+          await api.forwardMessage(token, src.id, target);
+        }
+        if (caption && socket) {
+          // Шлём caption как обычное сообщение в целевой чат.
+          const payload =
+            target.kind === 'group'
+              ? { groupId: target.id, content: caption }
+              : { to: target.id, content: caption };
+          await new Promise<void>((resolve) => {
+            socket.emit('dm:send', payload, () => resolve());
+          });
+        }
+        const targetName =
+          target.kind === 'user'
+            ? (() => {
+                const u = users.find((x) => x.id === target.id);
+                return u ? getDisplayName(u) : 'собеседнику';
+              })()
+            : (() => {
+                const g = groups.find((x) => x.id === target.id);
+                return g ? `в «${g.name}»` : 'в группу';
+              })();
+        const prefix = list.length === 1 ? 'Переслано' : `Переслано ${list.length} сообщений`;
+        toast.info?.(`${prefix} ${target.kind === 'user' ? '→ ' + targetName : targetName}`);
+      } catch (e) {
+        toast.error(e.message || 'Не удалось переслать');
+        throw e; // чтобы модалка отметила ошибку и не закрылась
+      }
+    },
+    [forwardingMessages, token, users, groups, toast, socket],
+  );
+
   const handleSendFile = useCallback(
     async (
       files: File | File[] | null,
-      opts: { error?: string; limit?: number; caption?: string } = {},
+      opts: {
+        error?: string;
+        limit?: number;
+        caption?: string;
+        replyToId?: number | null;
+      } = {},
     ) => {
       if (!selected) return;
       if (!files) {
@@ -608,10 +872,11 @@ export default function Home() {
         return;
       }
       try {
+        const replyToId = opts.replyToId ?? null;
         if (selected.kind === 'group') {
-          await api.sendGroupFile(token, selected.id, files, opts.caption || '');
+          await api.sendGroupFile(token, selected.id, files, opts.caption || '', replyToId);
         } else {
-          await api.sendFile(token, selected.id, files, opts.caption || '');
+          await api.sendFile(token, selected.id, files, opts.caption || '', replyToId);
         }
       } catch (e) {
         toast.error(e.message || 'Не удалось отправить файл');
@@ -891,6 +1156,7 @@ export default function Home() {
           onSendFile={handleSendFile}
           onEditMessage={handleEditMessage}
           onDeleteMessage={handleDeleteMessage}
+          onRequestForward={handleRequestForward}
           onRejoinCall={handleRejoinCall}
           onCallAudio={() => handleCallAudio()}
           onCallVideo={() => handleCallVideo()}
@@ -1075,6 +1341,24 @@ export default function Home() {
             logout();
           }}
           onClose={() => setConfirmLogoutOpen(false)}
+        />
+      </Suspense>
+
+      {/* Пересылка сообщения(й). Рендерим всегда, внутри ForwardModal сам
+          решает показывать себя или нет по props.open. AnimatePresence
+          внутри ForwardModal — поэтому снаружи обёртка не нужна. messages
+          — массив (для multi-select), на втором шаге пользователь может
+          добавить caption. */}
+      <Suspense fallback={null}>
+        <ForwardModal
+          open={!!forwardingMessages}
+          messages={forwardingMessages || []}
+          users={users}
+          groups={groups}
+          selfId={selfUser.id}
+          lastActivityByChat={lastActivityByChat}
+          onClose={() => setForwardingMessages(null)}
+          onForward={handleForwardTo}
         />
       </Suspense>
     </div>
