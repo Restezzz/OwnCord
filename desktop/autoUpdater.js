@@ -52,10 +52,30 @@ const STARTUP_DELAY = 8000;
 let setupDone = false;
 let pollTimer = null;
 
+// Кэш последнего значимого update-event'а. Используется, чтобы решить
+// race condition: фоновая проверка может скачать installer ДО того, как
+// renderer полностью загрузил веб-фронт и навесил listener на 'update:event'.
+// В этом случае broadcast'нутый 'downloaded' event просто теряется, и в UI
+// никогда не появляется кнопка «Перезапустить и обновить».
+//
+// С кэшем renderer на mount запрашивает текущее состояние через IPC
+// 'update:get-state' и сразу подхватывает 'downloaded', если он уже был.
+// Также при ручной проверке мы можем сразу переэмитить кэш, не запуская
+// заново checkForUpdates() (который для уже-скачанного файла молчит).
+let lastUpdateState = null;
+
 function broadcast(window, kind, payload = {}) {
+  const state = { kind, ...payload };
+  // Сохраняем терминальные/значимые состояния. 'checking' и 'progress'
+  // не кэшируем — они слишком быстро устаревают; кэш интересен для тех
+  // случаев, когда renderer пропустил event и хочет узнать «что вообще
+  // происходит с апдейтом прямо сейчас».
+  if (kind === 'available' || kind === 'downloaded' || kind === 'error' || kind === 'none') {
+    lastUpdateState = state;
+  }
   if (!window || window.isDestroyed()) return;
   try {
-    window.webContents.send('update:event', { kind, ...payload });
+    window.webContents.send('update:event', state);
   } catch {
     // окно могло закрыться между проверкой и send
   }
@@ -130,6 +150,7 @@ function setup(window, { app, ipcMain }) {
       error: 'Auto-update недоступен в dev-режиме',
     }));
     ipcMain.handle('update:install', () => false);
+    ipcMain.handle('update:get-state', () => null);
     return;
   }
 
@@ -188,11 +209,28 @@ function setup(window, { app, ipcMain }) {
   // прилетают в renderer через broadcast 'update:event' — их и слушает
   // UI для перехода из 'checking' в терминальный стейт.
   ipcMain.handle('update:check', () => {
+    // Если уже есть кэшированный 'downloaded' — сразу переэмитим его в
+    // renderer (он мог потерять оригинальный event из-за гонки при boot'е),
+    // и не запускаем повторный checkForUpdates() — он для файла, лежащего
+    // в pending, молчит и кнопка зависает в watchdog'е на 60 сек.
+    if (lastUpdateState && lastUpdateState.kind === 'downloaded') {
+      broadcast(window, 'downloaded', {
+        version: lastUpdateState.version,
+        releaseDate: lastUpdateState.releaseDate,
+      });
+      return { ok: true };
+    }
     safeCheckForUpdates(autoUpdater, window, app).catch((e) => {
       log.warn('manual update:check failed:', e?.message || e);
     });
     return { ok: true };
   });
+
+  // IPC: запрос текущего состояния auto-update. Renderer вызывает на
+  // mount (UpdateToast/SettingsPanel), чтобы догнать пропущенные event'ы.
+  // Возвращает либо последний кэшированный state, либо null если ничего
+  // значимого не происходило в этой сессии.
+  ipcMain.handle('update:get-state', () => lastUpdateState);
 
   // Стартовая проверка с небольшой задержкой — пусть UI прогрузится,
   // window-listener'ы навесятся, потом начинаем шуметь сетью.
