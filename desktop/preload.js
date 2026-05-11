@@ -78,6 +78,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Возвращает { ok: boolean, version?: string, error?: string }.
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
 
+  // Запросить текущее закэшированное состояние auto-update (последний
+  // значимый event: 'available' | 'downloaded' | 'error' | 'none').
+  // Renderer вызывает на mount, чтобы догнать event'ы, которые могли
+  // прилететь до того, как он успел подписаться через onUpdateEvent.
+  // Возвращает state | null.
+  getUpdateState: () => ipcRenderer.invoke('update:get-state'),
+
   // --- Per-process audio loopback ------------------------------------
   // Когда юзер шарит ОКНО приложения с галкой «звук», main вместо
   // chromium loopback запускает WASAPI process-loopback и шлёт сюда

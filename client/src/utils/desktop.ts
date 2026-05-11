@@ -86,6 +86,7 @@ type ElectronApi = {
   onUpdateEvent?: (handler?: (e: UpdateEvent) => void) => () => void;
   installUpdate?: () => Promise<true>;
   checkForUpdates?: () => Promise<{ ok: boolean; version?: string; error?: string }>;
+  getUpdateState?: () => Promise<UpdateEvent | null>;
   // procAudio — опционален, потому что старые сборки десктопа без этого
   // API всё ещё могут существовать в природе (постепенный rollout
   // обновления). Renderer должен делать optional-chain ко всем
@@ -237,6 +238,25 @@ export async function checkForUpdates(): Promise<{
     return (await window.electronAPI!.checkForUpdates?.()) || null;
   } catch (e) {
     return { ok: false, error: (e as Error)?.message || String(e) };
+  }
+}
+
+/**
+ * Текущее закэшированное состояние auto-update (последний значимый
+ * event). Renderer вызывает на mount, чтобы догнать event'ы, которые
+ * могли прилететь до того, как он успел подписаться через onUpdateEvent.
+ *
+ * Возможные kind'ы: 'available' | 'downloaded' | 'error' | 'none' или null
+ * если в этой сессии ничего значимого не происходило. На вебе вернёт null.
+ * На старых десктопах без getUpdateState в preload — тоже null (graceful).
+ */
+export async function getUpdateState(): Promise<UpdateEvent | null> {
+  if (!isDesktop()) return null;
+  try {
+    return (await window.electronAPI!.getUpdateState?.()) ?? null;
+  } catch (e) {
+    console.warn('getUpdateState failed:', e);
+    return null;
   }
 }
 

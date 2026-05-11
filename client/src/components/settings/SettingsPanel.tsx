@@ -14,6 +14,7 @@ import {
   checkForUpdates,
   installUpdate,
   onUpdateEvent,
+  getUpdateState,
   type UpdateEvent,
 } from '../../utils/desktop';
 import { ProfileTab } from './ProfileTab';
@@ -67,13 +68,28 @@ export default function SettingsPanel({ open, onClose }: { open: boolean; onClos
   const [checking, setChecking] = useState(false);
   useEffect(() => {
     if (!desktop) return;
-    return onUpdateEvent((ev) => {
+    // На mount подтягиваем закэшированный state у main-процесса — нужно
+    // для случая, когда фоновая проверка скачала installer ДО открытия
+    // настроек (тогда оригинальный 'downloaded' event прошёл мимо, а
+    // повторный checkForUpdates() для уже-скачанного файла молчит и UI
+    // зависает в watchdog'е на 60 сек). Если кэш есть и пользователь
+    // ещё не получал свежий event — применим cached.
+    let cancelled = false;
+    void getUpdateState().then((cached) => {
+      if (cancelled || !cached) return;
+      setUpdateState((prev) => prev ?? cached);
+    });
+    const off = onUpdateEvent((ev) => {
       setUpdateState(ev);
       // 'checking' приходит от main и снаружи (фоновая периодическая
       // проверка). Сбросим локальный флаг только на терминальных
       // состояниях, чтобы кнопка не разблокировалась раньше времени.
       if (ev.kind !== 'checking') setChecking(false);
     });
+    return () => {
+      cancelled = true;
+      off();
+    };
   }, [desktop]);
 
   const updateInFlight =

@@ -1,7 +1,13 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Download, RefreshCw, X, AlertCircle, CheckCircle2 } from 'lucide-react';
-import { isDesktop, onUpdateEvent, installUpdate, type UpdateEvent } from '../utils/desktop';
+import {
+  isDesktop,
+  onUpdateEvent,
+  installUpdate,
+  getUpdateState,
+  type UpdateEvent,
+} from '../utils/desktop';
 
 // Внутреннее состояние тоста: один из стейтов жизненного цикла апдейта,
 // плюс null когда нет ничего / юзер закрыл.
@@ -29,13 +35,29 @@ export default function UpdateToast() {
 
   useEffect(() => {
     if (!isDesktop()) return;
+    // На mount запрашиваем закэшированный state у main-процесса. Это
+    // решает race condition: фоновая проверка через 8 сек после старта
+    // могла скачать installer и эмитнуть 'downloaded' ДО того, как
+    // renderer успел догрузить веб-фронт и навесить onUpdateEvent. Без
+    // этого тост «Обновление готово» появлялся бы только при следующем
+    // checkForUpdates() — то есть не появлялся бы никогда без действий
+    // юзера.
+    let cancelled = false;
+    void getUpdateState().then((cached) => {
+      if (cancelled || !cached) return;
+      if (cached.kind === 'checking' || cached.kind === 'none') return;
+      setState((prev) => prev ?? cached);
+    });
     const off = onUpdateEvent((ev) => {
       // 'checking' и 'none' — silent. Если юзер уже закрыл крестиком тост
       // для конкретной версии, не показываем его снова до следующей.
       if (ev.kind === 'checking' || ev.kind === 'none') return;
       setState(ev);
     });
-    return off;
+    return () => {
+      cancelled = true;
+      off();
+    };
   }, []);
 
   if (!isDesktop()) return null;
