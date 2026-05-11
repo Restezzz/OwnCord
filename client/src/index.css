@@ -210,6 +210,34 @@
   .message-bubble-deleted {
     @apply bg-bg-2/70 border-white/5 text-slate-500 italic;
   }
+  /* Подсветка после скролла к оригиналу из reply-цитаты. Добавляется JS-кодом
+     в MessageList.scrollToMessage() и снимается через 1.4с. Ring накладываем
+     на сам message-row, чтобы он окружал и аватарку, и бабл. */
+  .message-flash .message-bubble {
+    animation: owncord-flash 1.4s ease-out both;
+  }
+  @keyframes owncord-flash {
+    0% {
+      box-shadow:
+        0 0 0 0 rgb(124 108 255 / 0.0),
+        0 0 0 4px rgb(124 108 255 / 0.0);
+    }
+    20% {
+      box-shadow:
+        0 0 24px 6px rgb(124 108 255 / 0.5),
+        0 0 0 3px rgb(124 108 255 / 0.6);
+    }
+    100% {
+      box-shadow:
+        0 0 0 0 rgb(124 108 255 / 0.0),
+        0 0 0 0 rgb(124 108 255 / 0.0);
+    }
+  }
+  /* Reply-цитата сверху бабла: компактный hover-эффект, чтобы было ясно
+     что это интерактивный элемент (клик прыгает к оригиналу). */
+  .reply-quote {
+    transition: background-color 0.12s ease-out;
+  }
   .reaction-chip {
     @apply transition duration-150 ease-out;
   }

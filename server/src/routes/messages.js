@@ -10,8 +10,38 @@ import {
   sniff,
 } from '../uploads.js';
 import { emitToPair, emitToGroup } from '../ioHub.js';
+import { pushToUser, pushToUsers } from '../push.js';
 
 const router = Router();
+
+// Резолвит превью оригинального сообщения по id. Используется для поля
+// replyTo: UI рисует в верху бабла цитату «<автор>: <текст/тип>». Превью
+// содержит только то, что нужно для отрисовки — id, автора, краткий
+// content, kind, флаг deleted, attachmentPath (для превью медиа). Если
+// оригинал жёстко удалён (hard-delete или FK ON DELETE SET NULL) —
+// возвращаем null, UI покажет «удалённое сообщение». Soft-delete
+// (deleted=1) пробрасывается отдельным флагом, чтобы UI отличал «удалено
+// автором» от «не найдено».
+function resolveReplyPreview(replyToId) {
+  if (!replyToId) return null;
+  const r = db
+    .prepare(
+      `SELECT id, sender_id, content, kind, deleted, attachment_path
+         FROM messages WHERE id = ?`,
+    )
+    .get(replyToId);
+  if (!r) return null;
+  return {
+    id: r.id,
+    senderId: r.sender_id,
+    // Обрезаем превью: 200 символов хватает для подсветки в цитате, не
+    // раздуваем payload при доставке через сокеты.
+    content: r.deleted ? '' : (r.content || '').slice(0, 200),
+    kind: r.kind || 'text',
+    deleted: !!r.deleted,
+    attachmentPath: r.attachment_path || null,
+  };
+}
 
 function rowToMessage(row) {
   if (!row) return null;
@@ -24,6 +54,7 @@ function rowToMessage(row) {
       /* ignore */
     }
   }
+  const replyToId = row.reply_to_message_id ?? row.replyToMessageId ?? null;
   return {
     id: row.id,
     senderId: row.sender_id ?? row.senderId,
@@ -40,12 +71,62 @@ function rowToMessage(row) {
     attachmentSize: row.attachment_size ?? row.attachmentSize ?? null,
     attachmentMime: row.attachment_mime ?? row.attachmentMime ?? null,
     payload,
+    // Только для DM. Для group_id всегда null (галочки в группах не показываем).
+    readAt: row.read_at ?? row.readAt ?? null,
+    // Пересылка: если был проставлен источник — вернём {senderId, messageId, createdAt}
+    // для плашки «Переслано от X» в UI. Иначе null.
+    forwardedFrom:
+      row.forwarded_from_user_id != null || row.forwardedFromUserId != null
+        ? {
+            senderId: row.forwarded_from_user_id ?? row.forwardedFromUserId ?? null,
+            messageId: row.forwarded_from_message_id ?? row.forwardedFromMessageId ?? null,
+            createdAt: row.forwarded_from_created_at ?? row.forwardedFromCreatedAt ?? null,
+          }
+        : null,
+    // Ответ на сообщение: превью оригинала для UI-цитаты.
+    replyTo: resolveReplyPreview(replyToId),
   };
 }
 
 const MSG_COLS = `id, sender_id, receiver_id, group_id, content, created_at, edited_at, deleted,
               kind, attachment_path, duration_ms, attachment_name, attachment_size, attachment_mime,
-              payload`;
+              payload, read_at, forwarded_from_user_id, forwarded_from_message_id,
+              forwarded_from_created_at, reply_to_message_id`;
+
+// Проверяет валидность replyToId и возвращает либо корректный id, либо
+// объект ошибки. Правила:
+//   - replyToId необязателен (null/undefined) → null;
+//   - должен быть целым числом;
+//   - оригинал должен существовать;
+//   - оригинал должен быть в ТОМ ЖЕ чате, что и новое сообщение
+//     (нельзя ответить на сообщение из чужой переписки);
+// Это валидируется отдельно от прав на отправку, поэтому вызывается
+// после проверки доступа к целевому чату.
+export function validateReplyTo(replyToId, ctx) {
+  if (replyToId === undefined || replyToId === null) return { id: null };
+  if (!Number.isInteger(replyToId)) return { error: 'bad replyToId' };
+  const orig = db
+    .prepare('SELECT sender_id, receiver_id, group_id FROM messages WHERE id = ?')
+    .get(replyToId);
+  if (!orig) return { error: 'reply target not found' };
+  // Для группы: оригинал должен принадлежать той же группе.
+  if (ctx.groupId != null) {
+    if (orig.group_id !== ctx.groupId) return { error: 'reply target in another chat' };
+    return { id: replyToId };
+  }
+  // Для DM: оригинал должен быть DM-сообщением и быть в переписке
+  // между me и peer (в любую сторону).
+  const me = ctx.me;
+  const peer = ctx.peerId;
+  if (orig.group_id != null) return { error: 'reply target in another chat' };
+  const isOk =
+    (orig.sender_id === me && orig.receiver_id === peer) ||
+    (orig.sender_id === peer && orig.receiver_id === me);
+  if (!isOk) return { error: 'reply target in another chat' };
+  return { id: replyToId };
+}
+
+export { rowToMessage, MSG_COLS };
 
 // Универсальный emit обновления сообщения — либо в пару, либо в группу
 // (в зависимости от того, что у него установлено). Все участники подписаны
@@ -111,7 +192,7 @@ router.get('/:peerId', authRequired, (req, res) => {
   res.json({ messages });
 });
 
-// Отправка голосового сообщения (multipart/form-data: file=voice, to=peerId, durationMs?).
+// Отправка голосового сообщения (multipart/form-data: file=voice, to=peerId, durationMs?, replyToId?).
 router.post('/voice', authRequired, uploadVoice.single('voice'), sniff('audio'), (req, res) => {
   const to = Number(req.body.to);
   const durationMs = Number(req.body.durationMs) || null;
@@ -120,21 +201,29 @@ router.post('/voice', authRequired, uploadVoice.single('voice'), sniff('audio'),
   const peer = db.prepare('SELECT id FROM users WHERE id = ?').get(to);
   if (!peer) return res.status(404).json({ error: 'no such user' });
 
+  // replyToId опционален: голосовое может быть ответом на сообщение в DM.
+  // FormData всё кодирует строкой → парсим, если строка задана.
+  const rawReply = req.body.replyToId;
+  const replyToIdRaw = rawReply === '' || rawReply === undefined ? null : Number(rawReply);
+  const replyCheck = validateReplyTo(replyToIdRaw, { me: req.user.id, peerId: to });
+  if (replyCheck.error) return res.status(400).json({ error: replyCheck.error });
+  const replyToId = replyCheck.id;
+
   const pubPath = publicPathFor(req.file.path);
   const now = Date.now();
   const info = db
     .prepare(
-      `INSERT INTO messages (sender_id, receiver_id, content, created_at, kind, attachment_path, duration_ms)
-       VALUES (?, ?, '', ?, 'voice', ?, ?)`,
+      `INSERT INTO messages (sender_id, receiver_id, content, created_at, kind, attachment_path, duration_ms, reply_to_message_id)
+       VALUES (?, ?, '', ?, 'voice', ?, ?, ?)`,
     )
-    .run(req.user.id, to, now, pubPath, durationMs);
+    .run(req.user.id, to, now, pubPath, durationMs, replyToId);
 
   const msg = rowToMessage(getMessage(info.lastInsertRowid));
   emitToPair(req.user.id, to, 'dm:new', msg);
   res.json({ ok: true, message: msg });
 });
 
-// Отправка вложения произвольного типа (multipart/form-data: file, to, content?).
+// Отправка вложения произвольного типа (multipart/form-data: file, to, content?, replyToId?).
 // Поддерживает multiple files через files[] array.
 router.post('/file', authRequired, uploadAttachment.array('files', 10), sniff(), (req, res) => {
   const to = Number(req.body.to);
@@ -146,6 +235,11 @@ router.post('/file', authRequired, uploadAttachment.array('files', 10), sniff(),
 
   const caption =
     typeof req.body.content === 'string' ? req.body.content.trim().slice(0, 4000) : '';
+  const rawReply = req.body.replyToId;
+  const replyToIdRaw = rawReply === '' || rawReply === undefined ? null : Number(rawReply);
+  const replyCheck = validateReplyTo(replyToIdRaw, { me: req.user.id, peerId: to });
+  if (replyCheck.error) return res.status(400).json({ error: replyCheck.error });
+  const replyToId = replyCheck.id;
   const now = Date.now();
 
   // Первый файл идёт в основные колонки, остальные - в payload
@@ -175,8 +269,9 @@ router.post('/file', authRequired, uploadAttachment.array('files', 10), sniff(),
     .prepare(
       `INSERT INTO messages (
          sender_id, receiver_id, content, created_at, kind,
-         attachment_path, attachment_name, attachment_size, attachment_mime, payload
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         attachment_path, attachment_name, attachment_size, attachment_mime, payload,
+         reply_to_message_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       req.user.id,
@@ -189,10 +284,133 @@ router.post('/file', authRequired, uploadAttachment.array('files', 10), sniff(),
       firstFile.size,
       mime,
       payload ? JSON.stringify(payload) : null,
+      replyToId,
     );
 
   const msg = rowToMessage(getMessage(info.lastInsertRowid));
   emitToPair(req.user.id, to, 'dm:new', msg);
+  res.json({ ok: true, message: msg });
+});
+
+// --- Пересылка сообщения ----------------------------------------------------
+//
+// POST /api/messages/:id/forward { to?: peerId, groupId?: gid }
+//
+// Создаёт КОПИЮ сообщения в указанном чате. Источник остаётся на месте.
+// Файлы/payload не дублируем физически — копируем ссылку attachment_path.
+// Это безопасно, потому что /uploads/* отдаются всем авторизованным юзерам
+// (см. uploads.js): любой member нового чата всё равно увидит вложение.
+//
+// Пересылать НЕ разрешаем:
+//   - удалённые сообщения (`deleted = 1`);
+//   - системные / звонки (`kind in ('system','call','groupcall')`) — они
+//     описывают событие конкретного чата, в другом контексте бессмысленны.
+//
+// В новой записи проставляются `forwarded_from_*`, чтобы UI показал
+// «Переслано от <автор оригинала>». Если оригинал сам был пересланным,
+// всё равно ссылаемся на ИСХОДНОГО автора (origin sender), а не на
+// промежуточное звено — иначе цепочка пересылок размывает атрибуцию.
+router.post('/:id/forward', authRequired, (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
+  const me = req.user.id;
+
+  const src = getMessage(id);
+  if (!src) return res.status(404).json({ error: 'not found' });
+  if (!canAccessRow(me, src)) return res.status(403).json({ error: 'forbidden' });
+  if (src.deleted) return res.status(400).json({ error: 'cannot forward deleted' });
+  if (src.kind === 'system' || src.kind === 'call' || src.kind === 'groupcall') {
+    return res.status(400).json({ error: 'cannot forward system message' });
+  }
+
+  // Цель: ровно одна — DM или группа.
+  const to = req.body?.to;
+  const groupId = req.body?.groupId;
+  const toUser = Number.isInteger(to);
+  const toGroup = Number.isInteger(groupId);
+  if (toUser === toGroup) return res.status(400).json({ error: 'need exactly one target' });
+
+  if (toUser) {
+    const peer = db.prepare('SELECT id FROM users WHERE id = ?').get(to);
+    if (!peer) return res.status(404).json({ error: 'no such user' });
+  } else {
+    const member = db
+      .prepare('SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?')
+      .get(groupId, me);
+    if (!member) return res.status(403).json({ error: 'not a group member' });
+  }
+
+  // Резолвим origin: если src уже переслан кем-то — ссылаемся на самого
+  // первого автора (он же кладётся в forwarded_from_user_id), чтобы цепочка
+  // пересылок «X→Y→Z» в плашке всегда показывала первоисточник X.
+  const originUserId = src.forwarded_from_user_id ?? src.sender_id;
+  const originMessageId = src.forwarded_from_message_id ?? src.id;
+  const originCreatedAt = src.forwarded_from_created_at ?? src.created_at;
+
+  const now = Date.now();
+  const info = db
+    .prepare(
+      `INSERT INTO messages (
+         sender_id, receiver_id, group_id, content, created_at, kind,
+         attachment_path, duration_ms, attachment_name, attachment_size, attachment_mime,
+         payload, forwarded_from_user_id, forwarded_from_message_id, forwarded_from_created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      me,
+      toUser ? to : null,
+      toGroup ? groupId : null,
+      src.content || '',
+      now,
+      src.kind,
+      src.attachment_path,
+      src.duration_ms,
+      src.attachment_name,
+      src.attachment_size,
+      src.attachment_mime,
+      src.payload,
+      originUserId,
+      originMessageId,
+      originCreatedAt,
+    );
+
+  // Бамп updated_at у группы, чтобы порядок чатов в сайдбаре поднялся.
+  if (toGroup) {
+    db.prepare('UPDATE groups SET updated_at = ? WHERE id = ?').run(now, groupId);
+  }
+
+  const newRow = getMessage(info.lastInsertRowid);
+  const msg = rowToMessage(newRow);
+  emitMessage('dm:new', newRow, msg);
+
+  // Web Push, как у обычной отправки.
+  if (toUser) {
+    const sender = db.prepare('SELECT username FROM users WHERE id = ?').get(me);
+    pushToUser(to, {
+      kind: 'dm',
+      title: sender?.username || 'Сообщение',
+      body: (src.content || 'Вложение').slice(0, 140),
+      tag: `dm:${me}`,
+      url: `/?dm=${me}`,
+    }).catch(() => {});
+  } else {
+    const group = db.prepare('SELECT name FROM groups WHERE id = ?').get(groupId);
+    const sender = db.prepare('SELECT username FROM users WHERE id = ?').get(me);
+    const memberIds = db
+      .prepare('SELECT user_id FROM group_members WHERE group_id = ? AND user_id != ?')
+      .all(groupId, me)
+      .map((r) => r.user_id);
+    if (memberIds.length) {
+      pushToUsers(memberIds, {
+        kind: 'group',
+        title: group?.name || 'Группа',
+        body: `${sender?.username || ''}: ${(src.content || 'Вложение').slice(0, 120)}`,
+        tag: `group:${groupId}`,
+        url: `/?group=${groupId}`,
+      }).catch(() => {});
+    }
+  }
+
   res.json({ ok: true, message: msg });
 });
 

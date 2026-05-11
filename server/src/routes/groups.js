@@ -11,6 +11,9 @@ import {
   sniff,
 } from '../uploads.js';
 import { emitToGroup, emitToUsers, joinUserToGroup, leaveUserFromGroup } from '../ioHub.js';
+// rowToMessage/MSG_COLS/validateReplyTo — единые с DM-роутами (включают
+// поля forwardedFrom, replyTo, reply_to_message_id и т.п.).
+import { rowToMessage, MSG_COLS, validateReplyTo } from './messages.js';
 
 const router = Router();
 
@@ -78,39 +81,6 @@ function isOwner(groupId, userId) {
   const row = db.prepare('SELECT owner_id FROM groups WHERE id = ?').get(groupId);
   return !!row && row.owner_id === userId;
 }
-
-function rowToMessage(row) {
-  if (!row) return null;
-  let payload = null;
-  if (row.payload) {
-    try {
-      payload = JSON.parse(row.payload);
-    } catch {
-      /* ignore */
-    }
-  }
-  return {
-    id: row.id,
-    senderId: row.sender_id,
-    receiverId: row.receiver_id,
-    groupId: row.group_id,
-    content: row.deleted ? '' : row.content || '',
-    createdAt: row.created_at,
-    editedAt: row.edited_at || null,
-    deleted: !!row.deleted,
-    kind: row.kind || 'text',
-    attachmentPath: row.attachment_path || null,
-    durationMs: row.duration_ms || null,
-    attachmentName: row.attachment_name || null,
-    attachmentSize: row.attachment_size || null,
-    attachmentMime: row.attachment_mime || null,
-    payload,
-  };
-}
-
-const MSG_COLS = `id, sender_id, receiver_id, group_id, content, created_at,
-  edited_at, deleted, kind, attachment_path, duration_ms,
-  attachment_name, attachment_size, attachment_mime, payload`;
 
 function getMessage(id) {
   return db.prepare(`SELECT ${MSG_COLS} FROM messages WHERE id = ?`).get(id);
@@ -577,19 +547,22 @@ router.post('/:id/messages/text', authRequired, (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
   if (!isMember(id, req.user.id)) return res.status(403).json({ error: 'not a member' });
-  const { content } = req.body || {};
+  const { content, replyToId: rawReply } = req.body || {};
   if (typeof content !== 'string') return res.status(400).json({ error: 'bad content' });
   const trimmed = content.trim();
   if (!trimmed) return res.status(400).json({ error: 'empty' });
   if (trimmed.length > 4000) return res.status(400).json({ error: 'too long' });
 
+  const replyCheck = validateReplyTo(rawReply ?? null, { me: req.user.id, groupId: id });
+  if (replyCheck.error) return res.status(400).json({ error: replyCheck.error });
+
   const now = Date.now();
   const info = db
     .prepare(
-      `INSERT INTO messages (sender_id, group_id, content, created_at, kind)
-       VALUES (?, ?, ?, ?, 'text')`,
+      `INSERT INTO messages (sender_id, group_id, content, created_at, kind, reply_to_message_id)
+       VALUES (?, ?, ?, ?, 'text', ?)`,
     )
-    .run(req.user.id, id, trimmed, now);
+    .run(req.user.id, id, trimmed, now, replyCheck.id);
   db.prepare('UPDATE groups SET updated_at = ? WHERE id = ?').run(now, id);
 
   const msg = rowToMessage(getMessage(info.lastInsertRowid));
@@ -609,14 +582,19 @@ router.post(
     if (!isMember(id, req.user.id)) return res.status(403).json({ error: 'not a member' });
     if (!req.file) return res.status(400).json({ error: 'no file' });
 
+    const rawReply = req.body.replyToId;
+    const replyToIdRaw = rawReply === '' || rawReply === undefined ? null : Number(rawReply);
+    const replyCheck = validateReplyTo(replyToIdRaw, { me: req.user.id, groupId: id });
+    if (replyCheck.error) return res.status(400).json({ error: replyCheck.error });
+
     const pubPath = publicPathFor(req.file.path);
     const now = Date.now();
     const info = db
       .prepare(
-        `INSERT INTO messages (sender_id, group_id, content, created_at, kind, attachment_path, duration_ms)
-       VALUES (?, ?, '', ?, 'voice', ?, ?)`,
+        `INSERT INTO messages (sender_id, group_id, content, created_at, kind, attachment_path, duration_ms, reply_to_message_id)
+       VALUES (?, ?, '', ?, 'voice', ?, ?, ?)`,
       )
-      .run(req.user.id, id, now, pubPath, durationMs);
+      .run(req.user.id, id, now, pubPath, durationMs, replyCheck.id);
     db.prepare('UPDATE groups SET updated_at = ? WHERE id = ?').run(now, id);
 
     const msg = rowToMessage(getMessage(info.lastInsertRowid));
@@ -639,6 +617,10 @@ router.post(
 
     const caption =
       typeof req.body.content === 'string' ? req.body.content.trim().slice(0, 4000) : '';
+    const rawReply = req.body.replyToId;
+    const replyToIdRaw = rawReply === '' || rawReply === undefined ? null : Number(rawReply);
+    const replyCheck = validateReplyTo(replyToIdRaw, { me: req.user.id, groupId: id });
+    if (replyCheck.error) return res.status(400).json({ error: replyCheck.error });
     const now = Date.now();
 
     // Первый файл идёт в основные колонки, остальные - в payload
@@ -668,8 +650,9 @@ router.post(
       .prepare(
         `INSERT INTO messages (
          sender_id, group_id, content, created_at, kind,
-         attachment_path, attachment_name, attachment_size, attachment_mime, payload
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         attachment_path, attachment_name, attachment_size, attachment_mime, payload,
+         reply_to_message_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         req.user.id,
@@ -682,6 +665,7 @@ router.post(
         firstFile.size,
         mime,
         payload ? JSON.stringify(payload) : null,
+        replyCheck.id,
       );
     db.prepare('UPDATE groups SET updated_at = ? WHERE id = ?').run(now, id);
 

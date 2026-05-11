@@ -133,11 +133,18 @@ export const api = {
   user: (token: string, id: number) => request<{ user: User }>(`/api/users/${id}`, { token }),
   history: (token: string, peerId: number) =>
     request<{ messages: Message[] }>(`/api/messages/${peerId}`, { token }),
-  sendVoice: (token: string, to: number, blob: Blob, durationMs: number) => {
+  sendVoice: (
+    token: string,
+    to: number,
+    blob: Blob,
+    durationMs: number,
+    replyToId?: number | null,
+  ) => {
     const fd = new FormData();
     fd.append('to', String(to));
     fd.append('durationMs', String(durationMs || 0));
     fd.append('voice', blob, `voice-${Date.now()}.webm`);
+    if (replyToId != null) fd.append('replyToId', String(replyToId));
     return requestMultipart<{ ok: true; message: Message }>('/api/messages/voice', {
       token,
       formData: fd,
@@ -154,10 +161,29 @@ export const api = {
       method: 'DELETE',
       token,
     }),
-  sendFile: (token: string, to: number, files: File | File[], content = '') => {
+  // Переслать сообщение в DM (target.kind='user') или в группу (target.kind='group').
+  // Сервер копирует content/attachment в новый чат и проставляет forwarded_from_*.
+  forwardMessage: (
+    token: string,
+    id: number,
+    target: { kind: 'user'; id: number } | { kind: 'group'; id: number },
+  ) =>
+    request<{ ok: true; message: Message }>(`/api/messages/${id}/forward`, {
+      method: 'POST',
+      body: target.kind === 'user' ? { to: target.id } : { groupId: target.id },
+      token,
+    }),
+  sendFile: (
+    token: string,
+    to: number,
+    files: File | File[],
+    content = '',
+    replyToId?: number | null,
+  ) => {
     const fd = new FormData();
     fd.append('to', String(to));
     if (content) fd.append('content', content);
+    if (replyToId != null) fd.append('replyToId', String(replyToId));
     if (Array.isArray(files)) {
       for (const file of files) {
         fd.append('files', file, file.name);
@@ -288,18 +314,32 @@ export const api = {
     }),
   revokeInvite: (token: string, code: string) =>
     request<ApiOk>(`/api/invites/${encodeURIComponent(code)}`, { method: 'DELETE', token }),
-  sendGroupVoice: (token: string, id: number, blob: Blob, durationMs: number) => {
+  sendGroupVoice: (
+    token: string,
+    id: number,
+    blob: Blob,
+    durationMs: number,
+    replyToId?: number | null,
+  ) => {
     const fd = new FormData();
     fd.append('durationMs', String(durationMs || 0));
     fd.append('voice', blob, `voice-${Date.now()}.webm`);
+    if (replyToId != null) fd.append('replyToId', String(replyToId));
     return requestMultipart<{ ok: true; message: Message }>(`/api/groups/${id}/messages/voice`, {
       token,
       formData: fd,
     });
   },
-  sendGroupFile: (token: string, id: number, files: File | File[], content = '') => {
+  sendGroupFile: (
+    token: string,
+    id: number,
+    files: File | File[],
+    content = '',
+    replyToId?: number | null,
+  ) => {
     const fd = new FormData();
     if (content) fd.append('content', content);
+    if (replyToId != null) fd.append('replyToId', String(replyToId));
     if (Array.isArray(files)) {
       for (const file of files) {
         fd.append('files', file, file.name);

@@ -120,7 +120,7 @@ function inline(input, keyPrefix = 'i') {
                 href={url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="underline hover:text-accent break-all"
+                className="text-sky-400 hover:text-sky-300 underline break-all transition-colors"
               >
                 {inline(text, `${keyPrefix}l${counter}`)}
               </a>,

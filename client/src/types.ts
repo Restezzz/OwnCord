@@ -72,6 +72,16 @@ export type MessageReaction = {
   users: number[];
 };
 
+// Статус доставки/прочтения для ИСХОДЯЩИХ сообщений (рендерим галочки только
+// у своих). Для входящих поле игнорируется.
+//   - 'sending'    — optimistic-плейсхолдер, ack от сервера ещё не пришёл;
+//   - 'delivered'  — есть запись в БД (ack ok), получатель ещё не прочитал;
+//   - 'read'       — получатель открыл чат (readAt проставлен сервером);
+//   - 'error'      — socket ack вернул error или отвалилась отправка.
+// Для multi-target рассылки (группа) используем только 'sending' / 'error':
+// галочки в группах не показываем (см. серверный комментарий в dm:read).
+export type MessageStatus = 'sending' | 'delivered' | 'read' | 'error';
+
 export type Message = {
   id: number;
   senderId: number;
@@ -89,6 +99,40 @@ export type Message = {
   attachmentMime: string | null;
   payload: CallPayload | GroupCallPayload | SystemPayload | null;
   reactions?: MessageReaction[];
+  // Отметка о прочтении получателем (DM 1:1). NULL для групп и для ещё не
+  // прочитанных сообщений.
+  readAt?: number | null;
+  // UUID optimistic-плейсхолдера, ставится клиентом при отправке. Сервер
+  // пропускает его обратно в dm:new / ack для сопоставления. На читающей
+  // стороне отсутствует.
+  clientId?: string;
+  // UI-состояние отправки. Вычисляется клиентом, не хранится на сервере
+  // (для прочитанных сообщений = f(readAt); для своих не-прочитанных с id =
+  // 'delivered'; для optimistic без id = 'sending'; для ошибок = 'error').
+  status?: MessageStatus;
+  // Если сообщение переслано — ссылка на оригинал. senderId может быть null,
+  // если автор оригинала удалил аккаунт (FK ON DELETE SET NULL). messageId
+  // и createdAt — informational; UI ими не пользуется напрямую, кроме
+  // подсказки времени оригинала в title-атрибуте плашки.
+  forwardedFrom?: {
+    senderId: number | null;
+    messageId: number | null;
+    createdAt: number | null;
+  } | null;
+  // Превью оригинального сообщения для функции «Ответить». Сервер сам
+  // резолвит превью при выдаче истории и dm:new, чтобы UI мог отрисовать
+  // мини-цитату в верху бабла без дополнительных запросов. null если
+  // сообщение не является ответом или оригинал был жёстко удалён (FK
+  // ON DELETE SET NULL). При soft-delete оригинала придёт превью с
+  // deleted=true и пустым content — UI покажет «удалённое сообщение».
+  replyTo?: {
+    id: number;
+    senderId: number;
+    content: string;
+    kind: MessageKind;
+    deleted: boolean;
+    attachmentPath: string | null;
+  } | null;
 };
 
 export type AuthSession = {
@@ -154,9 +198,18 @@ export type GroupCallState = 'idle' | 'joining' | 'in-call';
 export type ClientToServerEvents = {
   'chat:typing': (payload: { to?: number; groupId?: number; typing: boolean }) => void;
   'dm:send': (
-    payload: { to?: number; groupId?: number; content: string },
+    payload: {
+      to?: number;
+      groupId?: number;
+      content: string;
+      clientId?: string;
+      replyToId?: number | null;
+    },
     ack?: (ack: ApiAck<{ message?: Message }>) => void,
   ) => void;
+  // Отметить сообщения DM «прочитанными»: в ленте с peerId все сообщения
+  // (sender=peerId, receiver=me) c id <= lastMessageId получают read_at=now.
+  'dm:read': (payload: { peerId: number; lastMessageId: number }) => void;
   'call:invite': (payload: { to: number; callId: string; withVideo: boolean }) => void;
   'call:accept': (payload: { to: number; callId: string }) => void;
   'call:reject': (payload: { to: number; callId: string; reason?: string }) => void;
@@ -231,6 +284,13 @@ export type ServerToClientEvents = {
     groupId: number | null;
   }) => void;
   'dm:reaction': (payload: { messageId: number; reactions: MessageReaction[] }) => void;
+  // Пир прочитал наши сообщения в DM до lastMessageId включительно (см. dm:read).
+  // peerId здесь = id пира (кто прочитал), readAt — timestamp сервера.
+  'dm:read': (payload: { peerId: number; lastMessageId: number; readAt: number }) => void;
+  // Эхо нашего собственного dm:read с другого устройства этого же юзера.
+  // peerId здесь = id собеседника (кого мы прочитали). Используется для
+  // синхронизации счётчика непрочитанных между сессиями.
+  'dm:read:self': (payload: { peerId: number; lastMessageId: number; readAt: number }) => void;
   'chat:typing': (payload: { from: number; groupId?: number; typing: boolean }) => void;
   'profile:self': (user: User) => void;
   'mutes:update': (payload: { ids: number[] }) => void;
