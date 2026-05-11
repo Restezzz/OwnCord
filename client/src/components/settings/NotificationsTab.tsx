@@ -11,6 +11,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useSounds } from '../../hooks/useSounds';
 import { ToggleRow, SliderRow, Switch } from './shared';
+import InstallPrompt from '../InstallPrompt';
 
 type PushStatus = {
   configured?: boolean;
@@ -69,6 +70,9 @@ export function NotificationsTab() {
 
   return (
     <section className="space-y-5">
+      {/* PWA install (выше push: сначала устанавливаем, потом подписываемся) */}
+      <InstallPrompt />
+
       {/* Web Push */}
       <PushBlock status={pushStatus} busy={pushBusy} onToggle={onTogglePush} />
 
