@@ -61,6 +61,57 @@ function broadcast(window, kind, payload = {}) {
   }
 }
 
+// Сравнение semver-версий "X.Y.Z". Возвращает true, если remote строго
+// новее, чем local. Простая поэлементная разбивка по точкам — suffix'ов
+// типа "-rc1" у нас в релизах нет, городить semver-пакет не нужно.
+function isVersionNewer(remote, local) {
+  const r = String(remote || '')
+    .split('.')
+    .map((x) => Number.parseInt(x, 10) || 0);
+  const l = String(local || '')
+    .split('.')
+    .map((x) => Number.parseInt(x, 10) || 0);
+  const len = Math.max(r.length, l.length);
+  for (let i = 0; i < len; i++) {
+    const a = r[i] || 0;
+    const b = l[i] || 0;
+    if (a > b) return true;
+    if (a < b) return false;
+  }
+  return false;
+}
+
+// Обёртка над autoUpdater.checkForUpdates() с фиксом для случая, когда
+// installer уже лежит в %LOCALAPPDATA%\@owncorddesktop-updater\pending от
+// прошлой сессии (например, пользователь скачал апдейт, но не нажал
+// «Перезапустить и обновить», а потом перезагрузил машину).
+//
+// В таком кейсе electron-updater при checkForUpdates():
+//   1) эмитит 'checking-for-update' и 'update-available' как обычно,
+//   2) видит файл в pending, возвращает result с downloadPromise = null,
+//   3) НЕ эмитит повторного 'update-downloaded' event'а.
+//
+// UI в SettingsPanel завязан на event'ы: после 'available' ждёт 'progress'
+// или 'downloaded'. Не получая ничего, через 60 сек срабатывает watchdog
+// и показывает «Нет ответа от сервера обновлений (60 сек)» — хотя файл
+// УЖЕ готов к установке.
+//
+// Здесь мы вручную эмитим 'downloaded' broadcast, если updateInfo.version
+// новее текущей и downloadPromise null.
+async function safeCheckForUpdates(updater, window, app) {
+  const result = await updater.checkForUpdates();
+  if (!result || !result.updateInfo) return result;
+  const remoteVer = result.updateInfo.version;
+  const localVer = app.getVersion();
+  if (!result.downloadPromise && isVersionNewer(remoteVer, localVer)) {
+    broadcast(window, 'downloaded', {
+      version: remoteVer,
+      releaseDate: result.updateInfo.releaseDate,
+    });
+  }
+  return result;
+}
+
 /**
  * Подключает autoUpdater к окну. Вызывать один раз после createWindow.
  * Безопасен к повторному вызову (idempotent).
@@ -137,7 +188,7 @@ function setup(window, { app, ipcMain }) {
   // прилетают в renderer через broadcast 'update:event' — их и слушает
   // UI для перехода из 'checking' в терминальный стейт.
   ipcMain.handle('update:check', () => {
-    autoUpdater.checkForUpdates().catch((e) => {
+    safeCheckForUpdates(autoUpdater, window, app).catch((e) => {
       log.warn('manual update:check failed:', e?.message || e);
     });
     return { ok: true };
@@ -146,7 +197,7 @@ function setup(window, { app, ipcMain }) {
   // Стартовая проверка с небольшой задержкой — пусть UI прогрузится,
   // window-listener'ы навесятся, потом начинаем шуметь сетью.
   setTimeout(() => {
-    autoUpdater.checkForUpdates().catch(() => {
+    safeCheckForUpdates(autoUpdater, window, app).catch(() => {
       /* свалимся в error-event */
     });
   }, STARTUP_DELAY);
@@ -154,7 +205,7 @@ function setup(window, { app, ipcMain }) {
   // Периодическая проверка. clearInterval не нужен — процесс завершится
   // вместе с окном; node таймеры не держат event loop при app.quit().
   pollTimer = setInterval(() => {
-    autoUpdater.checkForUpdates().catch(() => {
+    safeCheckForUpdates(autoUpdater, window, app).catch(() => {
       /* swallow */
     });
   }, ONE_HOUR);
