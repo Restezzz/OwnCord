@@ -13,6 +13,7 @@ import {
   type MicScreenMixer,
 } from '../utils/audioProcessing';
 import { onShortcutEvent } from '../utils/desktop';
+import { startRtcDiag, buildRtcConfig } from '../utils/rtcDiag';
 import { useSpeakingDetector } from './useSpeakingDetector';
 
 /**
@@ -101,6 +102,9 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
   // Watchdog ICE на каждого пира — иначе мобильные/Yandex могут залипать в
   // checking-state без 'failed'. peerId -> timeout id.
   const iceTimeoutsRef = useRef(new Map());
+  // peerId -> stop функция rtc-diag, чтобы в closePeer/cleanup корректно
+  // снять diag-цикл. Без этого setInterval жил бы до закрытия окна.
+  const rtcDiagStopsRef = useRef<Map<number, () => void>>(new Map());
   const ICE_CONNECT_TIMEOUT_MS = 45_000;
 
   // Какой трек сейчас должен идти на video-сендер (экран приоритетнее камеры).
@@ -198,6 +202,15 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
         clearTimeout(tid);
         iceTimeoutsRef.current.delete(userId);
       }
+      const stopDiag = rtcDiagStopsRef.current.get(userId);
+      if (stopDiag) {
+        try {
+          stopDiag();
+        } catch {
+          /* */
+        }
+        rtcDiagStopsRef.current.delete(userId);
+      }
       clearRemoteForPeer(userId);
     },
     [clearRemoteForPeer],
@@ -215,6 +228,16 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
       clearTimeout(tid);
     }
     iceTimeoutsRef.current.clear();
+    // closePeer выше уже снял каждый diag, но если по какой-то причине
+    // в карте остались висящие stop'ы — гарантированно ронять их.
+    for (const stop of rtcDiagStopsRef.current.values()) {
+      try {
+        stop();
+      } catch {
+        /* */
+      }
+    }
+    rtcDiagStopsRef.current.clear();
 
     // остановить треки. Pipeline сам остановит свои raw-треки и закроет
     // AudioContext в destroy() — поэтому делаем destroy ДО обнуления refs.
@@ -339,10 +362,22 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
   // чтобы прикрепить их через addTrack. Если их нет — медиа не польётся.
   const createPeerConnection = useCallback(
     (peerId, isInitiator) => {
-      const pc = new RTCPeerConnection({
-        iceServers: iceServersRef.current || [{ urls: 'stun:stun.l.google.com:19302' }],
-      });
+      const pc = new RTCPeerConnection(
+        buildRtcConfig(iceServersRef.current, {
+          forceTurnRelay: !!settings?.forceTurnRelay,
+        }),
+      );
       pcsRef.current.set(peerId, pc);
+      // На каждый peer-pc — отдельный diag-цикл. Снимается в closePeer/cleanup.
+      const prevStop = rtcDiagStopsRef.current.get(peerId);
+      if (prevStop) {
+        try {
+          prevStop();
+        } catch {
+          /* */
+        }
+      }
+      rtcDiagStopsRef.current.set(peerId, startRtcDiag(pc, `group#${peerId}`));
 
       // ВСЕГДА addTrack с реальным MediaStreamTrack (или placeholder).
       // Без этого Chrome не fire-ит ontrack у пира при последующем
@@ -483,7 +518,7 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
 
       return pc;
     },
-    [closePeer, emitMyMedia, socket],
+    [closePeer, emitMyMedia, socket, settings?.forceTurnRelay],
   );
 
   // --- public API --------------------------------------------------------

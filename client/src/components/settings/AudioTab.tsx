@@ -10,13 +10,13 @@ import {
   Play,
   Sliders,
   Video,
-  MonitorUp,
   Activity,
   ChevronDown,
   ChevronRight,
   Sparkles,
   RefreshCw,
   Check,
+  Network,
 } from 'lucide-react';
 import {
   createMicPipeline,
@@ -59,7 +59,6 @@ export function AudioTab() {
   const [permissions, setPermissions] = useState({
     microphone: 'unknown',
     camera: 'unknown',
-    screen: 'prompt',
   });
   const [permissionBusy, setPermissionBusy] = useState<string | null>(null);
   const [permissionError, setPermissionError] = useState('');
@@ -110,7 +109,6 @@ export function AudioTab() {
     setPermissions({
       microphone,
       camera,
-      screen: 'prompt',
     });
   };
 
@@ -120,11 +118,7 @@ export function AudioTab() {
 
   const requestPermission = async (kind: string) => {
     const mediaDevices = navigator.mediaDevices;
-    if (!mediaDevices) {
-      setPermissionError('Браузер не поддерживает доступ к медиаустройствам.');
-      return;
-    }
-    if (kind !== 'screen' && !mediaDevices.getUserMedia) {
+    if (!mediaDevices?.getUserMedia) {
       setPermissionError('Браузер не поддерживает доступ к микрофону и камере.');
       return;
     }
@@ -141,12 +135,6 @@ export function AudioTab() {
       } else if (kind === 'media') {
         stream = await mediaDevices.getUserMedia({ audio: true, video: true });
         toast.success('Доступ к микрофону и камере разрешён');
-      } else if (kind === 'screen') {
-        if (!mediaDevices.getDisplayMedia) {
-          throw new Error('Браузер не поддерживает демонстрацию экрана.');
-        }
-        stream = await mediaDevices.getDisplayMedia({ video: true, audio: true });
-        toast.success('Доступ к демонстрации экрана проверен');
       }
       stopMediaStream(stream);
       await refreshPermissions();
@@ -430,14 +418,6 @@ export function AudioTab() {
             status={permissions.camera}
             busy={permissionBusy === 'camera' || permissionBusy === 'media'}
             onRequest={() => requestPermission('camera')}
-          />
-          <PermissionRow
-            icon={<MonitorUp size={16} />}
-            title="Демонстрация экрана"
-            description="Браузер спрашивает доступ каждый раз при запуске показа"
-            status={permissions.screen}
-            busy={permissionBusy === 'screen'}
-            onRequest={() => requestPermission('screen')}
           />
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -835,6 +815,31 @@ export function AudioTab() {
             </div>
           </div>
         )}
+      </div>
+
+      <div className="h-px bg-border" />
+
+      {/* Сеть и соединение. forceTurnRelay — спасательный круг для юзеров
+          за симметричным NAT/CGNAT: ICE через STUN иногда «зеленеет», но
+          реальный RTP не доезжает, и звук пропадает у обоих. Принудительный
+          relay через TURN решает это ценой задержки и трафика, поэтому
+          по дефолту off. */}
+      <div className="space-y-2">
+        <label className="text-xs text-slate-400 uppercase tracking-wider">Соединение</label>
+        <div className="rounded-lg border border-border bg-bg-2 p-3">
+          <ToggleRow
+            icon={<Network size={16} />}
+            title="Принудительно через TURN (relay)"
+            description="Включай, если в звонках тишина у обоих, хотя соединение «установилось». Гонит медиа-трафик через relay-сервер — обходит симметричный NAT и мобильный CGNAT. Цена: чуть выше задержка."
+            checked={!!settings.forceTurnRelay}
+            onChange={(v) => update({ forceTurnRelay: v })}
+          />
+        </div>
+        <div className="text-[11px] text-slate-500 leading-snug">
+          Диагностика: открой DevTools (Ctrl+Shift+I) → Console во время
+          звонка. Каждые 3 сек выводятся записи <code>[rtc-diag …]</code>
+          с типом ICE-кандидата (host/srflx/relay) и счётчиками RTP-пакетов.
+        </div>
       </div>
     </section>
   );
