@@ -99,26 +99,27 @@ export default function SettingsPanel({ open, onClose }: { open: boolean; onClos
     updateState?.kind === 'progress';
   const updateReady = updateState?.kind === 'downloaded';
 
-  // Watchdog: если за 60 секунд после последнего in-flight-события не
-  // пришло никакого нового апдейта статуса — считаем, что main завис
-  // (нет сети, electron-updater молчит, latest.yml не отдаётся, etc.)
-  // и аварийно возвращаем UI в кликабельное состояние с понятной
-  // ошибкой. Без этого «Проверяю…» висит вечно — IPC ответил {ok:true},
-  // но broadcast 'update:event' так и не пришёл.
-  // Перезапускается на каждый новый event (зависимость от updateState),
-  // так что в норме (event'ы летят) таймер не успевает дотикать.
-  useEffect(() => {
-    if (!desktop) return;
-    if (!updateInFlight) return;
-    const t = setTimeout(() => {
-      setChecking(false);
-      setUpdateState({
-        kind: 'error',
-        message: 'Нет ответа от сервера обновлений (60 сек)',
-      });
-    }, 60_000);
-    return () => clearTimeout(t);
-  }, [desktop, updateInFlight, updateState]);
+  // Раньше здесь был watchdog на 60 секунд, который аварийно показывал
+  // «Нет ответа от сервера обновлений», если за минуту не приходило ни
+  // одного апдейта статуса. На практике этот таймаут срабатывал ЛОЖНО:
+  //
+  //   - Между fallback'ом differential download → full download есть
+  //     пауза в несколько секунд, и electron-updater временно не шлёт
+  //     'download-progress' event'ы.
+  //   - 'checking-for-update' эмитится один раз, а потом фоновый download
+  //     может идти 30-90 секунд молча между прогресс-тиками (на медленном
+  //     канале большие куски без подтверждения).
+  //   - Если пользователь нажал «Проверить», когда фоновый poll УЖЕ
+  //     запустил download, второй checkForUpdates() возвращает тот же
+  //     уже идущий downloadPromise, не эмитя новых события — UI ждёт
+  //     то, чего никогда не будет.
+  //
+  // В реальном «нет сети / сервер не отвечает» electron-updater САМ
+  // эмитит 'error' event через свой внутренний таймаут, и мы получим
+  // нормальный UI-стейт error без необходимости в собственном watchdog'е.
+  // Так что просто удалили — UI теперь честно показывает текущую стадию
+  // и переходит в downloaded/error/none только когда action-флоу
+  // реально завершится.
 
   const onUpdateButton = useCallback(async () => {
     if (updateReady) {

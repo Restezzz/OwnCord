@@ -209,15 +209,28 @@ function setup(window, { app, ipcMain }) {
   // прилетают в renderer через broadcast 'update:event' — их и слушает
   // UI для перехода из 'checking' в терминальный стейт.
   ipcMain.handle('update:check', () => {
-    // Если уже есть кэшированный 'downloaded' — сразу переэмитим его в
-    // renderer (он мог потерять оригинальный event из-за гонки при boot'е),
-    // и не запускаем повторный checkForUpdates() — он для файла, лежащего
-    // в pending, молчит и кнопка зависает в watchdog'е на 60 сек.
-    if (lastUpdateState && lastUpdateState.kind === 'downloaded') {
-      broadcast(window, 'downloaded', {
-        version: lastUpdateState.version,
-        releaseDate: lastUpdateState.releaseDate,
-      });
+    // Если в кэше уже есть значимое состояние — переэмитим его и НЕ
+    // запускаем повторный checkForUpdates(). Это закрывает сразу
+    // несколько проблем:
+    //
+    //   - 'downloaded' в кэше: файл уже в pending, повторный
+    //     checkForUpdates() для него ничего нового не эмитит, UI бы
+    //     ждал вечно. Здесь сразу показываем кнопку «Перезапустить».
+    //   - 'available' в кэше: фоновый poll УЖЕ запустил download,
+    //     повторный checkForUpdates() возвращает тот же идущий
+    //     downloadPromise без эмита новых event'ов. Здесь сразу
+    //     показываем «скачивается», и UI получит штатный 'downloaded'
+    //     event, когда download закончится.
+    //   - 'error' в кэше: не пытаемся повторять сразу, отдаём прошлую
+    //     ошибку. Юзер может попробовать позже, или фоновый часовой
+    //     poll переоткроет ситуацию.
+    if (
+      lastUpdateState &&
+      (lastUpdateState.kind === 'downloaded' ||
+        lastUpdateState.kind === 'available' ||
+        lastUpdateState.kind === 'error')
+    ) {
+      broadcast(window, lastUpdateState.kind, lastUpdateState);
       return { ok: true };
     }
     safeCheckForUpdates(autoUpdater, window, app).catch((e) => {
