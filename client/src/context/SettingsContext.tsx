@@ -33,6 +33,16 @@ const DEFAULTS = {
   // отдельные ползунки; дропдаун показывает «(Пользовательский)», и при
   // следующем выборе пресета все значения перезапишутся.
   micFilterPreset: 'standard', // 'off' | 'standard' | 'aggressive' | 'custom'
+  // Глобальный «рубильник» исходящего pipeline'а. Когда false — в RTC
+  // уходит СЫРОЙ track из getUserMedia, без AudioContext-обёртки. Это
+  // спасает Electron-десктоп: createMediaStreamDestination там
+  // периодически отдаёт «немой» трек (AudioContext успевает уйти в
+  // suspended, пока промис getUserMedia резолвится), и пир слышит тишину,
+  // хотя локальный тест микро через тот же pipeline работает (там
+  // resume() идёт в одном тике user-click). По дефолту ON — большинство
+  // юзеров на вебе с этим не сталкиваются; галочку покажем в Audio-табе
+  // как «спасательный круг» при тишине у пира.
+  audioFiltersEnabled: true,
   noiseSuppression: true, // включить шумовые ворота (gate)
   noiseThreshold: -55, // порог ворот в дБ (-100..0)
   noiseGateHoldMs: 200, // hangover после падения ниже порога, мс

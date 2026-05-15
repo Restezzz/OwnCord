@@ -569,15 +569,38 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
         // Compressor → NoiseGate → MakeupGain). На sender'ы попадает
         // processed-трек; raw-mic живёт внутри pipeline и завершится в
         // pipeline.destroy().
+        //
+        // audioFiltersEnabled === false — глобальный bypass pipeline'а
+        // для Electron-десктопа (см. useCall.ts/SettingsContext: там же
+        // описание бага с suspended AudioContext).
         let processedMic = rawMic;
-        if (rawMic) {
+        const wantPipeline = rawMic && settings?.audioFiltersEnabled !== false;
+        if (wantPipeline) {
           try {
             const pipeline = await createMicPipeline(
               new MediaStream([rawMic]),
               pickAudioFilterSettings(settings),
             );
-            micPipelineRef.current = pipeline;
-            processedMic = pipeline.outputTrack;
+            // Watchdog: AudioContext должен быть в running-state, иначе
+            // MediaStreamDestination отдаёт «немой» трек. Даём 150 мс
+            // на стабилизацию resume(), потом проверяем.
+            await new Promise((resolve) => setTimeout(resolve, 150));
+            if (pipeline.context.state !== 'running') {
+              console.warn(
+                '[useGroupCall] mic pipeline AudioContext не запустился (state=',
+                pipeline.context.state,
+                ') — fallback на сырой mic-трек',
+              );
+              try {
+                pipeline.destroy();
+              } catch {
+                /* */
+              }
+              processedMic = rawMic;
+            } else {
+              micPipelineRef.current = pipeline;
+              processedMic = pipeline.outputTrack;
+            }
           } catch (e) {
             console.warn('Mic pipeline failed, falling back to raw track:', e);
             processedMic = rawMic;
@@ -688,13 +711,15 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
   }, [emitMyMedia, sounds]);
 
   // Глобальные хоткеи десктопа. Подписка зеркалит useCall.ts —
-  // см. там подробный комментарий.
+  // см. там подробный комментарий. Гейтим listener за state, иначе
+  // toggleDeafen бы срабатывал и в idle (у него нет трекового гейта).
   useEffect(() => {
+    if (state !== 'in-call' && state !== 'joining') return undefined;
     return onShortcutEvent((action) => {
       if (action === 'toggleMute') toggleMute();
       else if (action === 'toggleDeafen') toggleDeafen();
     });
-  }, [toggleMute, toggleDeafen]);
+  }, [toggleMute, toggleDeafen, state]);
 
   const toggleCamera = useCallback(() => {
     const t = videoTrackRef.current;

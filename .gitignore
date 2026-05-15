@@ -8,3 +8,7 @@ uploads/
 *.sqlite-journal
 .DS_Store
 .claude/
+# Trigger-токен для GitLab pipeline (см. scripts/trigger-pipeline.ps1).
+# Содержит секрет, дающий право пинать deploy на наш сервер.
+# Шаблон значений — в .gitlab-trigger-token.example (его коммитим).
+.gitlab-trigger-token
