@@ -14,7 +14,7 @@ import {
   createMicScreenMixer,
   type MicScreenMixer,
 } from '../utils/audioProcessing';
-import { onShortcutEvent } from '../utils/desktop';
+import { onShortcutEvent, isDesktop } from '../utils/desktop';
 import { startRtcDiag, buildRtcConfig } from '../utils/rtcDiag';
 
 /**
@@ -550,10 +550,21 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       const videoTrack = rawStream.getVideoTracks()[0] || null;
 
       let micTrack = rawMic;
-      // audioFiltersEnabled === false — глобальный bypass pipeline'а
-      // (см. SettingsContext: спасательный круг для Electron-десктопа,
-      // где MediaStreamDestination иногда отдаёт немой трек).
-      const wantPipeline = rawMic && settings?.audioFiltersEnabled !== false;
+      // В Electron-десктопе всегда обходим AudioContext-pipeline для
+      // RTC-sender'а: даже если ctx в 'running'-state, RTCRtpSender
+      // энкодит трек от MediaStreamDestination в тишину (известный
+      // квикс Chromium-в-Electron, см. utils/media.ts:86 — эту же
+      // проблему уже ловили в прошлом). Локальный тест микро через
+      // тот же pipeline работает, потому что он играет outputStream
+      // через <audio>, минуя RTP-конвейер. На вебе же RTC корректно
+      // обрабатывает такие треки, поэтому pipeline остаётся включённым
+      // (его убирает только тогл «Применять фильтры микрофона»).
+      // Цена: в десктопе кастомные OBS-style фильтры (HighPass /
+      // Compressor / Gate / MakeupGain) не применяются — звук идёт
+      // сырой, но с нативной обработкой Chromium (echoCancellation /
+      // noiseSuppression / autoGainControl), которая по качеству
+      // близка к NS3 от Google и для голосового чата более чем хватает.
+      const wantPipeline = rawMic && settings?.audioFiltersEnabled !== false && !isDesktop();
       if (wantPipeline) {
         try {
           const pipeline = await createMicPipeline(
