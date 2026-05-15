@@ -8,6 +8,10 @@ export type User = {
   createdAt?: number;
   lastActivityAt?: number | null;
   online?: boolean;
+  // away — юзер онлайн, но неактивен более 5 минут (idle на хотя бы
+  // одном из своих клиентов — см. серверную presence.js с awayUsers Set'ом).
+  // UI показывает жёлтый кружок вместо зелёного (при online=true).
+  away?: boolean;
   deleted?: boolean;
   self?: boolean;
   isAdmin?: boolean;
@@ -247,6 +251,11 @@ export type ClientToServerEvents = {
     ) => void,
   ) => void;
   'groupcall:leave': (payload: { groupId: number }, ack?: (ack: ApiAck) => void) => void;
+  // Idle/away: клиент шлёт presence:away после 5 мин неактивности и
+  // presence:active при любой активности (mousemove/keydown/...). Сервер
+  // агрегирует и бродкастит всем в presence с полем away.
+  'presence:away': () => void;
+  'presence:active': () => void;
   'groupcall:state': (
     payload: { groupId: number },
     ack?: (
@@ -267,8 +276,12 @@ export type ClientToServerEvents = {
 
 export type ServerToClientEvents = {
   connect: () => void;
-  'presence:list': (payload: { online: number[] }) => void;
-  presence: (payload: { userId: number; online: boolean }) => void;
+  // Начальный снапшот при коннекте: онлайн-id и подмножество тех, кто away.
+  // Поле away опционально для совместимости со старым сервером (до 0.8.11).
+  'presence:list': (payload: { online: number[]; away?: number[] }) => void;
+  // Изменение presence одного юзера. away=true/false валидно только
+  // при online=true; при оффлайне сервер всегда шлёт away=false.
+  presence: (payload: { userId: number; online: boolean; away?: boolean }) => void;
   'dm:new': (message: Message) => void;
   'dm:update': (message: Message) => void;
   'dm:delete': (payload: {

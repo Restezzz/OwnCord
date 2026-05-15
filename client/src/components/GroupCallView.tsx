@@ -397,8 +397,17 @@ export default function GroupCallView({
   const pinnedTile = pinnedKey ? tiles.find((t) => t.key === pinnedKey) : null;
   const otherTiles = pinnedTile ? tiles.filter((t) => t.key !== pinnedKey) : tiles;
 
-  // Grid cols для «не пин-режима» — адаптивно по количеству.
+  // Grid для «не пин-режима» — адаптивно по количеству. ВАЖНО: задаём
+  // и cols, и rows явно через repeat(N, minmax(0, 1fr)) — иначе rows
+  // получают auto-height (= max-content от <video>), и плитки разной
+  // высоты разбегаются друг с другом (особенно когда у одного пира
+  // placeholder 320×180, а у другого реальная картинка 1920×1080).
+  // С gridTemplateRows все плитки одинакового размера = container/N.
+  //
+  // Если tiles.length не заполняет всю сетку (например 3 в 2×2) —
+  // одна ячейка остаётся пустой, но плитки сохраняют пропорции.
   const gridCols = tiles.length <= 1 ? 1 : tiles.length <= 4 ? 2 : tiles.length <= 9 ? 3 : 4;
+  const gridRows = Math.max(1, Math.ceil(tiles.length / gridCols));
 
   // См. комментарий в CallView.tsx — embedded даёт блок-в-чате; иначе
   // fullscreen-overlay (старое поведение, оставлено на случай если
@@ -432,9 +441,12 @@ export default function GroupCallView({
         ) : (
           <div
             className="grid gap-2 w-full h-full"
-            style={{ gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))` }}
+            style={{
+              gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`,
+              gridTemplateRows: `repeat(${gridRows}, minmax(0, 1fr))`,
+            }}
           >
-            {tiles.map((t) => renderTile(t))}
+            {tiles.map((t) => renderTile(t, { className: 'w-full h-full min-w-0 min-h-0' }))}
           </div>
         )}
 
