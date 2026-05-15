@@ -5,7 +5,17 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { Bell, Headphones, KeyRound, Keyboard, Lock, ShieldCheck, User, X } from 'lucide-react';
+import {
+  AppWindow,
+  Bell,
+  Headphones,
+  KeyRound,
+  Keyboard,
+  Lock,
+  ShieldCheck,
+  User,
+  X,
+} from 'lucide-react';
 import { modalVariants, overlayVariants, reducedVariants } from '../../utils/motion';
 import { useAuth } from '../../context/AuthContext';
 import {
@@ -24,6 +34,7 @@ import { NotificationsTab } from './NotificationsTab';
 import { KeybindsTab } from './KeybindsTab';
 import { PrivacyTab } from './PrivacyTab';
 import { InvitesTab } from './InvitesTab';
+import { AppTab } from './AppTab';
 
 // adminOnly — видна только админам; desktopOnly — только в Electron-обёртке.
 // Логика фильтрации в render'е панели (см. TABS).
@@ -33,6 +44,7 @@ const ALL_TABS = [
   { id: 'audio', label: 'Звук', icon: Headphones },
   { id: 'notifications', label: 'Уведомления', icon: Bell },
   { id: 'keybinds', label: 'Горячие клавиши', icon: Keyboard, desktopOnly: true },
+  { id: 'app', label: 'Приложение', icon: AppWindow, desktopOnly: true },
   { id: 'privacy', label: 'Приватность', icon: ShieldCheck },
   { id: 'invites', label: 'Приглашения', icon: KeyRound, adminOnly: true },
 ];
@@ -276,6 +288,7 @@ export default function SettingsPanel({ open, onClose }: { open: boolean; onClos
                 {tab === 'audio' && <AudioTab />}
                 {tab === 'notifications' && <NotificationsTab />}
                 {tab === 'keybinds' && desktop && <KeybindsTab />}
+                {tab === 'app' && desktop && <AppTab />}
                 {tab === 'privacy' && <PrivacyTab />}
                 {tab === 'invites' && isAdmin && <InvitesTab />}
               </div>

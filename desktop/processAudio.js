@@ -53,6 +53,29 @@ let libResolved = false;
 
 // Ленивый require пакета: на не-Windows он печатает warn в console,
 // но не падает; нам важно не падать на старте main процесса.
+//
+// В production-сборке (electron-builder + asar) у этого пакета есть
+// специфическая засада. Сам пакет резолвит свои .exe относительно
+// __dirname (см. application-loopback/dist/index.cjs):
+//   path.resolve(__dirname, '../bin', 'win32-x64', 'ProcessList.exe')
+// __dirname в нашем installer'е указывает внутрь app.asar, то есть путь
+// получается:
+//   <install>/resources/app.asar/node_modules/application-loopback/bin/win32-x64/ProcessList.exe
+// child_process.spawn() оттуда невозможен — asar это архив, не папка,
+// и Electron возвращает ENOENT (см. диалог «JavaScript error in main
+// process» при попытке шеринга окна). Бинарники физически лежат в
+// app.asar.unpacked (благодаря asarUnpack-паттерну в package.json), но
+// сам пакет об этом не знает.
+//
+// Лечим через экспортируемый пакетом setExecutablesRoot(): передаём
+// ему путь, в котором 'app.asar' заменён на 'app.asar.unpacked'. Это
+// безопасно и в dev (там app.asar в пути нет — replace no-op'ит).
+//
+// Дополнительно проверяем fs.existsSync на самом exe: антивирус (Defender,
+// Kaspersky и т. п.) часто удаляет ApplicationLoopback.exe и ProcessList.exe
+// потому что они unsigned-семплы из microsoft/Windows-classic-samples. Если
+// файла нет — отдаём null, и captureDisplay fall'кается на встроенный
+// chromium-loopback (системный микшер) вместо краша всего приложения.
 function getLib() {
   if (libResolved) return lib;
   libResolved = true;
@@ -65,6 +88,44 @@ function getLib() {
   } catch (e) {
     libError = e;
     lib = null;
+    return null;
+  }
+  try {
+    const { app } = require('electron');
+    if (app && app.isPackaged && typeof lib.setExecutablesRoot === 'function') {
+      const fs = require('node:fs');
+      // Дефолтный корень пакета: <module>/bin (см. dist/index.cjs).
+      // require.resolve даёт путь до index.cjs внутри asar.
+      const defaultBin = path.resolve(
+        path.dirname(require.resolve('application-loopback')),
+        '..',
+        'bin',
+      );
+      const unpackedBin = defaultBin.replace(
+        `${path.sep}app.asar${path.sep}`,
+        `${path.sep}app.asar.unpacked${path.sep}`,
+      );
+      if (unpackedBin !== defaultBin) {
+        lib.setExecutablesRoot(unpackedBin);
+      }
+      // Проверяем наличие хотя бы одного exe — если AV их удалил, проще
+      // сразу отказаться от per-process loopback'а, чем падать на spawn.
+      const probeExe = path.resolve(unpackedBin, 'win32-x64', 'ProcessList.exe');
+      if (!fs.existsSync(probeExe)) {
+        libError = new Error(
+          `application-loopback binary missing at ${probeExe} ` +
+            `(antivirus quarantine or broken install). ` +
+            `Per-process audio capture disabled, falling back to system loopback.`,
+        );
+        console.warn('[procAudio]', libError.message);
+        lib = null;
+        return null;
+      }
+    }
+  } catch (e) {
+    // Не критично: пакет может работать и без подмены root'а (dev-режим
+    // или неожиданная структура). Сохраняем lib и идём дальше.
+    console.warn('[procAudio] setExecutablesRoot setup failed (non-fatal):', e);
   }
   return lib;
 }
