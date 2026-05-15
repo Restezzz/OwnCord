@@ -2,6 +2,7 @@
 //   - serverUrl     — куда грузим клиент (http://host:port или https://...)
 //   - autoStart     — стартовать ли вместе с ОС (заходит в логин-айтемы).
 //   - hotkeysEnabled — мастер-выключатель глобальных хоткеев.
+//   - closeToTray   — крестик прячет окно в трей вместо закрытия (Discord-like).
 //
 // Зачем не localStorage клиента: serverUrl нужен ДО того, как мы загрузили
 // клиент (иначе непонятно куда грузить), и хоткеи регистрируются в main-
@@ -23,6 +24,10 @@ const DEFAULTS = {
   serverUrl: process.env.OWNCORD_SERVER_URL || 'https://owncord.patgen.ru',
   autoStart: false,
   hotkeysEnabled: true,
+  // По дефолту true: при закрытии окна приложение прячется в трей и
+  // продолжает работать (звонки/уведомления). Юзер может отключить в
+  // настройках, тогда крестик будет реально закрывать приложение.
+  closeToTray: true,
   // Сериализованные биндинги. Главное — main-процесс перерегистрирует
   // shortcut'ы при изменении этого поля. Renderer заполняет его через
   // electronAPI.setShortcuts.
