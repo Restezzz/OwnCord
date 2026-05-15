@@ -12,7 +12,7 @@ import {
   createMicScreenMixer,
   type MicScreenMixer,
 } from '../utils/audioProcessing';
-import { onShortcutEvent } from '../utils/desktop';
+import { onShortcutEvent, isDesktop } from '../utils/desktop';
 import { startRtcDiag, buildRtcConfig } from '../utils/rtcDiag';
 import { useSpeakingDetector } from './useSpeakingDetector';
 
@@ -574,7 +574,12 @@ export function useGroupCall({ socket, selfUser, settings, toast, sounds }) {
         // для Electron-десктопа (см. useCall.ts/SettingsContext: там же
         // описание бага с suspended AudioContext).
         let processedMic = rawMic;
-        const wantPipeline = rawMic && settings?.audioFiltersEnabled !== false;
+        // См. подробный комментарий в useCall.ts (там же логика). Кратко:
+        // в Electron-десктопе RTCRtpSender энкодит трек от
+        // MediaStreamDestination в тишину, даже если AudioContext running.
+        // Поэтому в RTC всегда уходит сырой mic из getUserMedia. Web
+        // остаётся без изменений.
+        const wantPipeline = rawMic && settings?.audioFiltersEnabled !== false && !isDesktop();
         if (wantPipeline) {
           try {
             const pipeline = await createMicPipeline(
