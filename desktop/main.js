@@ -579,6 +579,73 @@ ipcMain.handle('proc-audio:stop', async () => {
   return true;
 });
 
+// --- Run-as-admin (Windows) --------------------------------------------
+//
+// Перезапуск приложения с правами администратора. Нужно для:
+//   - игр и античитов (Battleye/EAC/Vanguard), которые работают в
+//     elevated-режиме и блокируют хоткеи от non-elevated процессов;
+//   - правки HKLM ветки реестра (например, через сторонние утилиты,
+//     которые OwnCord может запускать) — но это редкий кейс.
+//
+// Без сторонних библиотек elevation делаем стандартным Windows-способом:
+// `ShellExecute` с verb 'runas'. Из Node.js удобнее всего через
+// PowerShell: `Start-Process -Verb RunAs`. UAC-prompt покажется юзеру
+// автоматически. Если он откажется — новая копия НЕ запустится, и
+// старая (текущий instance) останется работать; мы это узнаём по
+// отсутствию сигнала и просто не делаем quit (см. таймаут в catch).
+//
+// process.execPath = полный путь до OwnCord.exe в установленной папке
+// (например, C:\Users\Username\AppData\Local\Programs\OwnCord\OwnCord.exe).
+// В dev режиме это будет путь до electron.exe, что для elevated-перезапуска
+// нет смысла — отдаём ошибку.
+ipcMain.handle('app:relaunch-as-admin', async () => {
+  if (process.platform !== 'win32') {
+    return { ok: false, error: 'Доступно только на Windows' };
+  }
+  if (!app.isPackaged) {
+    return { ok: false, error: 'Только для установленной версии (не dev)' };
+  }
+  try {
+    const { spawn } = require('node:child_process');
+    const exe = process.execPath;
+    // Одинарные кавычки в пути экранируем как '' для PowerShell-литерала.
+    const escaped = exe.replace(/'/g, "''");
+    // -NoProfile: не подгружаем профиль юзера (быстрее старт PowerShell).
+    // -WindowStyle Hidden: окно PowerShell не светится (короткое, всё равно).
+    // Start-Process -Verb RunAs: показывает UAC-prompt и стартует процесс
+    //   с elevation, если юзер согласился.
+    const child = spawn(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-WindowStyle',
+        'Hidden',
+        '-Command',
+        `Start-Process -FilePath '${escaped}' -Verb RunAs`,
+      ],
+      { detached: true, stdio: 'ignore' },
+    );
+    child.unref();
+    // Не делаем app.quit() мгновенно: если юзер откажется от UAC-prompt'а,
+    // нам нужно остаться работать. Но и долго ждать тоже нельзя — UAC
+    // window сам по себе блокирует UI до решения юзера. Дадим 800 мс
+    // на запуск нового процесса (включая UAC-flicker), после чего тушим
+    // текущий instance. Если новая копия НЕ запустится из-за отказа от
+    // UAC — пользователь увидит, что приложение просто закрылось.
+    // (TODO: можно подписаться на child.on('exit'), но при detached оно
+    //  не репортит exit нашего нового elevated-процесса — это уже не
+    //  наш subprocess. Ограничимся timeout-ом.)
+    setTimeout(() => {
+      isQuitting = true;
+      app.quit();
+    }, 800);
+    return { ok: true };
+  } catch (e) {
+    console.error('relaunch as admin failed:', e);
+    return { ok: false, error: e?.message || String(e) };
+  }
+});
+
 app.on('window-all-closed', () => {
   // С tray-mode (closeToTray=true по дефолту) обычный close прячет окно,
   // а не закрывает его — getAllWindows().length остаётся 1, и сюда мы

@@ -19,10 +19,10 @@
 // closeToTray — просто перечитывает поле в close-handler'е.
 
 import { useEffect, useState } from 'react';
-import { Power, MinusSquare } from 'lucide-react';
+import { Power, MinusSquare, ShieldAlert } from 'lucide-react';
 import { ToggleRow } from './shared';
 import { useToast } from '../../context/ToastContext';
-import { isDesktop } from '../../utils/desktop';
+import { isDesktop, relaunchAsAdmin } from '../../utils/desktop';
 
 export function AppTab() {
   const toast = useToast();
@@ -80,6 +80,25 @@ export function AppTab() {
     updateCfg({ closeToTray: v });
   };
 
+  // Run-as-admin: defensive busy-flag, чтобы юзер не нажал кнопку
+  // дважды и не получил два UAC-prompt'а подряд. После 800 мс main-
+  // процесс закроется сам, и весь UI исчезнет вместе с этим стейтом.
+  const [restartBusy, setRestartBusy] = useState(false);
+  const onRestartAsAdmin = async () => {
+    if (restartBusy) return;
+    setRestartBusy(true);
+    const result = await relaunchAsAdmin();
+    if (!result.ok) {
+      // Если ok=true — приложение через ~800 мс закроется само, и юзер
+      // увидит UAC-prompt; никаких toast'ов показывать не нужно.
+      toast.error?.('Не удалось перезапустить: ' + (result.error || 'неизвестная ошибка'));
+      setRestartBusy(false);
+    }
+    // Безопасный fallback: если quit не случился через 3 с (юзер отказался
+    // от UAC, новый процесс не запустился, и main передумал quit'ить), разблокируем кнопку.
+    setTimeout(() => setRestartBusy(false), 3000);
+  };
+
   return (
     <section className="space-y-4">
       <div className="rounded-xl border border-border bg-bg-2 p-4 space-y-4">
@@ -100,6 +119,32 @@ export function AppTab() {
           onChange={onCloseToTrayChange}
           disabled={!loaded}
         />
+        <div className="h-px bg-border" />
+        {/* Run-as-admin — стилизовано под ToggleRow, но вместо тогла — кнопка,
+            потому что elevation нельзя хранить в состоянии; это всегда action «сейчас же». */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="opacity-70 shrink-0">
+              <ShieldAlert size={18} />
+            </span>
+            <div className="min-w-0">
+              <div className="text-sm">Перезапустить от имени администратора</div>
+              <div className="text-xs text-slate-500">
+                Нужно, если хоткеи не работают в играх с античитами
+                (Battleye/EAC/Vanguard). Windows покажет UAC-окно
+                подтверждения. Текущая сессия будет закрыта.
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="btn-ghost h-8 px-3 text-xs whitespace-nowrap disabled:opacity-50"
+            onClick={onRestartAsAdmin}
+            disabled={restartBusy || !loaded}
+          >
+            {restartBusy ? '…' : 'Перезапустить'}
+          </button>
+        </div>
       </div>
     </section>
   );

@@ -1,7 +1,14 @@
 import { Server as IOServer } from 'socket.io';
 import db from './db.js';
 import { verifyToken } from './auth.js';
-import { addUserSocket, removeUserSocket, getOnlineUserIds } from './presence.js';
+import {
+  addUserSocket,
+  removeUserSocket,
+  getOnlineUserIds,
+  setAway,
+  getAwayUserIds,
+  isAway,
+} from './presence.js';
 import { setIO } from './ioHub.js';
 import {
   registerInvite,
@@ -157,10 +164,39 @@ export function attachSocket(httpServer) {
     for (const gid of myGroupIds) socket.join(groupRoomOf(gid));
 
     const becameOnline = addUserSocket(me.id);
-    if (becameOnline) io.emit('presence', { userId: me.id, online: true });
+    if (becameOnline) {
+      // Новый инстанс юзера всегда active (away снимем при оффлайне,
+      // но для свежего коннекта явно флажок away: false в пайлоаде).
+      io.emit('presence', { userId: me.id, online: true, away: false });
+    } else if (isAway(me.id)) {
+      // Юзер был away на другом девайсе, и открыл второй таб/клиент — это явный
+      // сигнал «я снова здесь». Снимаем away и бродкастим.
+      if (setAway(me.id, false)) {
+        io.emit('presence', { userId: me.id, online: true, away: false });
+      }
+    }
 
-    // Отправляем клиенту начальный список онлайнов
-    socket.emit('presence:list', { online: [...getOnlineUserIds()] });
+    // Отправляем клиенту начальный список онлайнов + away
+    socket.emit('presence:list', {
+      online: [...getOnlineUserIds()],
+      away: [...getAwayUserIds()],
+    });
+
+    // --- Idle/away бинды ---
+    // Клиент шлет presence:away после 5 мин неактивности и presence:active
+    // при любой активности (mousemove/keydown/...). Сервер просто агрегирует
+    // в awayUsers + бродкастит всем. setAway() возвращает true только при реальном
+    // изменении — повторные presence:away от одного клиента не флудят сокеты.
+    socket.on('presence:away', () => {
+      if (setAway(me.id, true)) {
+        io.emit('presence', { userId: me.id, online: true, away: true });
+      }
+    });
+    socket.on('presence:active', () => {
+      if (setAway(me.id, false)) {
+        io.emit('presence', { userId: me.id, online: true, away: false });
+      }
+    });
 
     // Список текущих мьютов клиенту, чтобы UI отрисовался корректно при коннекте.
     const muteRows = db
@@ -813,7 +849,7 @@ export function attachSocket(httpServer) {
       }
 
       const wentOffline = removeUserSocket(me.id);
-      if (wentOffline) io.emit('presence', { userId: me.id, online: false });
+      if (wentOffline) io.emit('presence', { userId: me.id, online: false, away: false });
     });
   });
 

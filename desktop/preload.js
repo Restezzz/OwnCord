@@ -22,6 +22,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Возвращает Promise<string>.
   getVersion: () => ipcRenderer.invoke('app:version'),
 
+  // Перезапустить приложение с правами администратора (Windows). Покажет
+  // UAC-prompt; при согласии запустит новый elevated instance и закроет
+  // текущий через ~800 мс. При отказе — текущий instance закрывается,
+  // нового нет (так работает Start-Process -Verb RunAs).
+  // Возвращает { ok: boolean, error?: string }.
+  relaunchAsAdmin: () => ipcRenderer.invoke('app:relaunch-as-admin'),
+
   // --- Конфиг (server URL, autostart, hotkeysEnabled) ---
   getConfig: () => ipcRenderer.invoke('config:get'),
   setConfig: (patch) => ipcRenderer.invoke('config:set', patch),
