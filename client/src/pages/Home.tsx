@@ -32,6 +32,7 @@ import { useCall } from '../hooks/useCall';
 import { useGroupCall } from '../hooks/useGroupCall';
 import { useSounds } from '../hooks/useSounds';
 import { useKeybinds } from '../hooks/useKeybinds';
+import { useIdleDetection } from '../hooks/useIdleDetection';
 import { getAvatarUrl, getDisplayName, isDeletedUser } from '../utils/user';
 import type { Message } from '../types';
 
@@ -143,6 +144,11 @@ export default function Home() {
   const sounds = useSounds(settings);
   const call = useCall({ socket, selfUser, settings, toast, sounds });
   const groupCall = useGroupCall({ socket, selfUser, settings, toast, sounds });
+  // Idle/away детектор: после 5 мин без mouse/keyboard/touch шлёт серверу
+  // 'presence:away'; при возврате активности — 'presence:active'. Сервер
+  // бродкастит другим клиентам, и в их UI у нашего аватара появляется
+  // жёлтый кружок. См. server/src/presence.js для агрегации.
+  useIdleDetection(socket);
   // Регистрация глобальных хоткеев в десктоп-обёртке. На вебе хук
   // — no-op (подробности в utils/desktop.ts и hooks/useKeybinds.ts).
   useKeybinds(settings.keybinds);
@@ -212,15 +218,34 @@ export default function Home() {
   useEffect(() => {
     if (!socket) return undefined;
 
-    const onPresenceList = ({ online }) => {
-      const set = new Set(online);
+    const onPresenceList = ({ online, away }) => {
+      const onlineSet = new Set(online);
+      // away опционален для совместимости со старым сервером (до 0.8.11) —
+      // для этого случая считаем всех онлайн-юзеров active'ными.
+      const awaySet = new Set(away || []);
       setUsers((prev) =>
-        prev.map((u) => ({ ...u, online: set.has(u.id) || u.id === selfUser.id })),
+        prev.map((u) => ({
+          ...u,
+          online: onlineSet.has(u.id) || u.id === selfUser.id,
+          away: awaySet.has(u.id),
+        })),
       );
     };
 
-    const onPresence = ({ userId, online }) => {
-      setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, online } : u)));
+    const onPresence = ({ userId, online, away }) => {
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.id === userId
+            ? {
+                ...u,
+                online,
+                // При оффлайне сбрасываем away в false (сервер все равно со своей
+                // стороны чистит awayUsers при disconnect, но UI бывает впереди broadcast'а).
+                away: online ? !!away : false,
+              }
+            : u,
+        ),
+      );
     };
 
     const onConnect = () => {
@@ -844,12 +869,22 @@ export default function Home() {
               })();
         const prefix = list.length === 1 ? 'Переслано' : `Переслано ${list.length} сообщений`;
         toast.info?.(`${prefix} ${target.kind === 'user' ? '→ ' + targetName : targetName}`);
+
+        // Сразу переключаемся в чат-получатель — иначе юзеру приходится
+        // тыкать в него руками, чтобы увидеть, что переслалось. Не дёргаем
+        // setSelected, если мы уже в этом чате (не сбивать состояние
+        // прокрутки/выделения у того же ChatPanel'а).
+        const sameChat =
+          selected && selected.kind === target.kind && selected.id === target.id;
+        if (!sameChat) {
+          setSelected({ kind: target.kind, id: target.id });
+        }
       } catch (e) {
         toast.error(e.message || 'Не удалось переслать');
         throw e; // чтобы модалка отметила ошибку и не закрылась
       }
     },
-    [forwardingMessages, token, users, groups, toast, socket],
+    [forwardingMessages, token, users, groups, toast, socket, selected],
   );
 
   const handleSendFile = useCallback(

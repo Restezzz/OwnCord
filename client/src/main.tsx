@@ -16,6 +16,20 @@ import './index.css';
 // которое подписан Home.jsx (для открытия нужного чата).
 attachNotificationClickHandler();
 
+// Регистрируем service worker сразу при загрузке (не лениво) — это нужно,
+// чтобы Chrome/Edge показывали «Install app» баннер и работал A2HS на iOS.
+// Существующая ленивая регистрация в utils/push.ts остаётся как fallback —
+// register() идемпотентен, вернёт ту же registration.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register('/sw.js', { scope: '/' })
+      .catch(() => {
+        /* silently ignore — на http (dev без proxy) SW недоступен */
+      });
+  });
+}
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <BrowserRouter>

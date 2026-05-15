@@ -78,6 +78,9 @@ type ProcAudioApi = {
 type ElectronApi = {
   isDesktop: true;
   getVersion?: () => Promise<string>;
+  // Перезапуск с правами администратора (Windows). Опционален, потому что
+  // в старых сборках preload этого метода ещё нет (graceful-fallback).
+  relaunchAsAdmin?: () => Promise<{ ok: boolean; error?: string }>;
   getConfig: () => Promise<any>;
   setConfig: (patch: any) => Promise<any>;
   getShortcuts: () => Promise<Shortcuts>;
@@ -299,6 +302,25 @@ export async function getUpdateState(): Promise<UpdateEvent | null> {
   } catch (e) {
     console.warn('getUpdateState failed:', e);
     return null;
+  }
+}
+
+/**
+ * Перезапуск приложения с правами администратора (Windows). Показывает
+ * UAC-prompt — если юзер согласился, новый elevated-instance запустится,
+ * а текущий через ~800 мс закроется. При отказе текущий instance тоже
+ * закрывается (так работает Start-Process -Verb RunAs).
+ *
+ * На вебе/не-Windows/dev возвращает { ok: false, error }.
+ */
+export async function relaunchAsAdmin(): Promise<{ ok: boolean; error?: string }> {
+  if (!isDesktop()) return { ok: false, error: 'Доступно только в десктоп-приложении' };
+  try {
+    const result = await window.electronAPI!.relaunchAsAdmin?.();
+    return result || { ok: false, error: 'API недоступен в этой сборке' };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: msg };
   }
 }
 

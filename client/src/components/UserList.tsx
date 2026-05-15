@@ -86,7 +86,17 @@ export default function UserList({
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-2 space-y-4">
+      {/*
+        flex-1 + min-h-0 — стандартный fix для «scrollbar в flex-column не работает,
+        контейнер раздвигается контентом и обрезает последний элемент». Без min-h-0
+        flex-child имеет min-height:auto, и список перерастает aside по высоте, а
+        overflow-y-auto не активируется. С min-h-0 контейнер реально ограничен
+        flex-1 share'ом, и нативный скроллбар появляется как только нужно.
+
+        pb-4 (вместо общего p-2) даёт последнему ряду нормальный воздух снизу —
+        иначе он «прилипает» к нижнему краю и под овершот-зону скроллбара.
+      */}
+      <div className="flex-1 min-h-0 overflow-y-auto px-2 pt-2 pb-4 space-y-4">
         {/* --- Группы --- */}
         <div>
           <div className="flex items-center justify-between px-2 pb-1">
@@ -181,6 +191,9 @@ function Section({ title, children }) {
 function UserRow({ user, active, onClick, unreadCount = 0, muted, onContextMenu }) {
   const name = getDisplayName(user);
   const avatarUrl = getAvatarUrl(user);
+  // Статус-надпись синхронна с цветом кружка в Avatar:
+  // away (online && idle) → «не активен», online → «в сети», offline → «не в сети».
+  const statusText = user.online ? (user.away ? 'не активен' : 'в сети') : 'не в сети';
   return (
     <button
       onClick={onClick}
@@ -190,15 +203,20 @@ function UserRow({ user, active, onClick, unreadCount = 0, muted, onContextMenu 
       }}
       className={`list-row w-full text-left ${active ? 'list-row-active' : ''}`}
     >
-      <Avatar name={name} src={avatarUrl} size={36} online={user.online} showStatus />
+      <Avatar
+        name={name}
+        src={avatarUrl}
+        size={36}
+        online={user.online}
+        away={user.away}
+        showStatus
+      />
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm text-slate-100 flex items-center gap-1.5">
           <span className={`truncate ${unreadCount ? 'font-semibold' : ''}`}>{name}</span>
           {muted && <BellOff size={12} className="text-slate-500 shrink-0" />}
         </div>
-        <div className="text-xs text-slate-500 truncate">
-          {user.online ? 'в сети' : 'не в сети'}
-        </div>
+        <div className="text-xs text-slate-500 truncate">{statusText}</div>
       </div>
       {unreadCount > 0 && !muted && (
         <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-accent text-[11px] font-semibold text-white grid place-items-center">

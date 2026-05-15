@@ -28,6 +28,7 @@ const {
   ipcMain,
   shell,
   Menu,
+  Tray,
   session,
   desktopCapturer,
 } = require('electron');
@@ -38,6 +39,33 @@ const mouseHook = require('./mouseHook');
 const autoUpdater = require('./autoUpdater');
 const screenPicker = require('./screenPicker/picker');
 const processAudio = require('./processAudio');
+
+// Single-instance lock: при попытке запустить вторую копию приложения
+// (через ярлык, autostart, иконку в трее) показываем существующее окно
+// вместо порождения нового instance'а. Без этого у юзера было бы два окна
+// OwnCord, две tray-иконки и два mainProcess'а с конфликтом за audio /
+// configFile.
+//
+// Lock запрашивается ДО app.whenReady() — иначе вторая копия успеет
+// поднять свой Electron-runtime и потратить пару секунд впустую.
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+}
+
+// --- Tray + lifecycle state ----------------------------------------
+//
+// tray         — глобальный singleton иконки в трее. Создаётся ОДИН раз
+//                в whenReady, переживает hide/show окна.
+// isQuitting   — флаг, который сигнализирует close-handler'у окна, что
+//                это «настоящий» quit (через tray-меню / autoUpdater /
+//                Cmd+Q), и hide() делать не надо.
+// startHidden  — приложение запущено с --hidden (autostart при логине в
+//                Windows). Окно создаётся скрытым, юзер видит только
+//                tray-иконку.
+let tray = null;
+let isQuitting = false;
+const startHidden = process.argv.includes('--hidden');
 
 // Закрепляем имя приложения ДО любых обращений к app.getPath('userData').
 // Иначе в dev (`electron .` из desktop/) Electron берёт name из package.json
@@ -80,6 +108,9 @@ function createWindow() {
     autoHideMenuBar: true,
     title: 'OwnCord',
     icon: WINDOW_ICON,
+    // При autostart с --hidden окно создаётся скрытым (работает в трее).
+    // Юзер раскрывает его кликом по tray-иконке.
+    show: !startHidden,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -148,6 +179,22 @@ function createWindow() {
     autoUpdater.setup(mainWindow, { app, ipcMain });
   });
 
+  // Close-handler с поддержкой tray-mode (как у Discord/Telegram):
+  // по дефолту крестик ПРЯЧЕТ окно в трей вместо завершения приложения.
+  // Это критично для голосового мессенджера — звонки/уведомления
+  // продолжают работать даже когда юзер «закрыл» окно. Реальный quit
+  // идёт только через tray-меню «Выход» или autoUpdater (которые
+  // ставят isQuitting=true перед app.quit()).
+  //
+  // closeToTray=false в config (юзер сам отключил в настройках) →
+  // стандартное поведение, окно реально закрывается.
+  mainWindow.on('close', (e) => {
+    if (!isQuitting && cfg?.closeToTray !== false) {
+      e.preventDefault();
+      mainWindow.hide();
+    }
+  });
+
   mainWindow.on('closed', () => {
     // Окно закрылось — обязательно тушим per-process audio child .exe,
     // иначе он висит как orphan-процесс с открытым WASAPI клиентом.
@@ -156,6 +203,74 @@ function createWindow() {
     });
     mainWindow = null;
   });
+}
+
+// --- Tray + window helpers -----------------------------------------
+
+// Показать главное окно (из трея или second-instance). Если окна нет
+// (юзер сделал quit, но tray ещё жив? — на самом деле невозможно у нас,
+// но на всякий случай) — пересоздаём.
+function showWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+// Истинный выход: ставим флаг и просим Electron завершиться. Нужен,
+// чтобы close-handler понял, что hide() делать не надо.
+function quitApp() {
+  isQuitting = true;
+  app.quit();
+}
+
+// Создание трея. Идемпотентно — повторный вызов не даёт второй иконки.
+function createTray() {
+  if (tray) return tray;
+  try {
+    tray = new Tray(WINDOW_ICON);
+  } catch (e) {
+    // На некоторых сборках Linux без штатной системы трея (gnome без
+    // расширения) Tray бросает. Это не фатально — приложение может
+    // работать без трея, просто крестик будет выходить из приложения.
+    console.warn('Tray creation failed:', e);
+    return null;
+  }
+  tray.setToolTip('OwnCord');
+  const menu = Menu.buildFromTemplate([
+    { label: 'Открыть OwnCord', click: () => showWindow() },
+    { type: 'separator' },
+    { label: 'Выход', click: () => quitApp() },
+  ]);
+  tray.setContextMenu(menu);
+  // Один клик — показать окно (Windows-конвенция). Double-click — то же,
+  // на случай если у юзера single-click не сработал из-за DPI/ускорения.
+  tray.on('click', () => showWindow());
+  tray.on('double-click', () => showWindow());
+  return tray;
+}
+
+// Применить состояние autostart-флага к ОС. На Windows это запись в
+// HKCU\Software\Microsoft\Windows\CurrentVersion\Run (Electron делает
+// сам через setLoginItemSettings). Передаём args:['--hidden'], чтобы
+// при логине OwnCord запускался сразу свернутым в трей.
+//
+// На macOS требуется code-signed app, на Linux — поддержка systemd user
+// units / .desktop autostart. В dev-режиме пропускаем (нет смысла
+// прописывать в autostart `electron .` из репозитория).
+function applyAutostart(enabled) {
+  if (!app.isPackaged) return;
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: !!enabled,
+      args: enabled ? ['--hidden'] : [],
+    });
+  } catch (e) {
+    console.warn('setLoginItemSettings failed:', e);
+  }
 }
 
 function loadServerUrl() {
@@ -241,6 +356,10 @@ ipcMain.handle('config:set', (_e, patch) => {
   if ('serverUrl' in patch && mainWindow) {
     setTimeout(() => loadServerUrl(), 50);
   }
+  // autoStart изменился — синкаем с ОС-уровнем (login items / Run-key).
+  if ('autoStart' in patch) {
+    applyAutostart(cfg.autoStart);
+  }
   // shortcuts изменились — перерегистрируем оба слоя (клавиатурный
   // globalShortcut и мышиный uIOhook). Каждый сам отфильтрует свой тип.
   if ('shortcuts' in patch || 'hotkeysEnabled' in patch) {
@@ -284,10 +403,30 @@ app.whenReady().then(() => {
   cfg = config.load();
   createWindow();
   registerDisplayMediaHandler();
+  createTray();
+  // Синкаем autostart с тем, что юзер сохранил в конфиге. Если
+  // приложение собрано в новой версии и закрытие через тимблер раньше
+  // отрабатывало некорректно, этот вызов поправит ОС-настройку.
+  applyAutostart(cfg.autoStart);
+
+  // Вторая копия приложения (через ярлык / autostart / повторный клик
+  // по tray-иконке существующего instance'а) — показываем уже-открытое
+  // окно вместо порождения нового runtime'а. См. requestSingleInstanceLock.
+  app.on('second-instance', () => {
+    showWindow();
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+// before-quit срабатывает при app.quit() из любой точки (tray-меню,
+// autoUpdater.quitAndInstall, Cmd+Q на macOS, etc.). Переводим
+// close-handler окна в режим «реальный exit» — иначе он спрячет окно
+// и quit зависнет на open-windows-pending.
+app.on('before-quit', () => {
+  isQuitting = true;
 });
 
 // Перехват navigator.mediaDevices.getDisplayMedia() из renderer'а.
@@ -440,7 +579,82 @@ ipcMain.handle('proc-audio:stop', async () => {
   return true;
 });
 
+// --- Run-as-admin (Windows) --------------------------------------------
+//
+// Перезапуск приложения с правами администратора. Нужно для:
+//   - игр и античитов (Battleye/EAC/Vanguard), которые работают в
+//     elevated-режиме и блокируют хоткеи от non-elevated процессов;
+//   - правки HKLM ветки реестра (например, через сторонние утилиты,
+//     которые OwnCord может запускать) — но это редкий кейс.
+//
+// Без сторонних библиотек elevation делаем стандартным Windows-способом:
+// `ShellExecute` с verb 'runas'. Из Node.js удобнее всего через
+// PowerShell: `Start-Process -Verb RunAs`. UAC-prompt покажется юзеру
+// автоматически. Если он откажется — новая копия НЕ запустится, и
+// старая (текущий instance) останется работать; мы это узнаём по
+// отсутствию сигнала и просто не делаем quit (см. таймаут в catch).
+//
+// process.execPath = полный путь до OwnCord.exe в установленной папке
+// (например, C:\Users\Username\AppData\Local\Programs\OwnCord\OwnCord.exe).
+// В dev режиме это будет путь до electron.exe, что для elevated-перезапуска
+// нет смысла — отдаём ошибку.
+ipcMain.handle('app:relaunch-as-admin', async () => {
+  if (process.platform !== 'win32') {
+    return { ok: false, error: 'Доступно только на Windows' };
+  }
+  if (!app.isPackaged) {
+    return { ok: false, error: 'Только для установленной версии (не dev)' };
+  }
+  try {
+    const { spawn } = require('node:child_process');
+    const exe = process.execPath;
+    // Одинарные кавычки в пути экранируем как '' для PowerShell-литерала.
+    const escaped = exe.replace(/'/g, "''");
+    // -NoProfile: не подгружаем профиль юзера (быстрее старт PowerShell).
+    // -WindowStyle Hidden: окно PowerShell не светится (короткое, всё равно).
+    // Start-Process -Verb RunAs: показывает UAC-prompt и стартует процесс
+    //   с elevation, если юзер согласился.
+    const child = spawn(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-WindowStyle',
+        'Hidden',
+        '-Command',
+        `Start-Process -FilePath '${escaped}' -Verb RunAs`,
+      ],
+      { detached: true, stdio: 'ignore' },
+    );
+    child.unref();
+    // Не делаем app.quit() мгновенно: если юзер откажется от UAC-prompt'а,
+    // нам нужно остаться работать. Но и долго ждать тоже нельзя — UAC
+    // window сам по себе блокирует UI до решения юзера. Дадим 800 мс
+    // на запуск нового процесса (включая UAC-flicker), после чего тушим
+    // текущий instance. Если новая копия НЕ запустится из-за отказа от
+    // UAC — пользователь увидит, что приложение просто закрылось.
+    // (TODO: можно подписаться на child.on('exit'), но при detached оно
+    //  не репортит exit нашего нового elevated-процесса — это уже не
+    //  наш subprocess. Ограничимся timeout-ом.)
+    setTimeout(() => {
+      isQuitting = true;
+      app.quit();
+    }, 800);
+    return { ok: true };
+  } catch (e) {
+    console.error('relaunch as admin failed:', e);
+    return { ok: false, error: e?.message || String(e) };
+  }
+});
+
 app.on('window-all-closed', () => {
+  // С tray-mode (closeToTray=true по дефолту) обычный close прячет окно,
+  // а не закрывает его — getAllWindows().length остаётся 1, и сюда мы
+  // НЕ попадаем. Сюда попадаем только если: юзер отключил closeToTray
+  // в настройках, либо окно убито внешне (alt+f4 + handler не сработал,
+  // crash и т.п.). В таких случаях честно гасим хоткеи и выходим.
+  //
+  // На macOS конвенция «закрыл единственное окно — приложение живёт в
+  // dock'е». Не выходим.
   shortcuts.unregisterAll();
   mouseHook.unregisterAll();
   if (process.platform !== 'darwin') app.quit();

@@ -1,0 +1,17 @@
+# Конфиг для scripts/trigger-pipeline.ps1
+#
+# Скопируй этот файл в .gitlab-trigger-token (без .example) и впиши
+# свои значения. Реальный .gitlab-trigger-token уже добавлен в .gitignore —
+# его НЕ нужно коммитить ни при каких обстоятельствах.
+#
+# GITLAB_TRIGGER_TOKEN — обязательно. Создаётся в GitLab UI:
+#   Settings → CI/CD → Pipeline trigger tokens → Add new token.
+#   Значение начинается с 'glptt-'.
+#
+# GITLAB_PROJECT_ID — опционально. Если не задано, скрипт попробует
+#   автоматически узнать его через GET /projects/<urlencoded-namespace>.
+#   Это работает для публичных репо. Для приватных пропиши руками:
+#   GitLab → Settings → General → Project ID.
+
+GITLAB_TRIGGER_TOKEN=glptt-xxxxxxxxxxxxxxxxxxxx
+# GITLAB_PROJECT_ID=12345678

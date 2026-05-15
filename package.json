@@ -1,6 +1,6 @@
 {
   "name": "owncord",
-  "version": "0.8.7",
+  "version": "0.8.11",
   "private": true,
   "description": "Self-hosted minimal messenger with voice/video calls and screen sharing",
   "license": "MIT",
@@ -31,7 +31,8 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "deploy:trigger": "powershell -ExecutionPolicy Bypass -File scripts/trigger-pipeline.ps1"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",

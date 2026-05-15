@@ -14,7 +14,7 @@ import {
   createMicScreenMixer,
   type MicScreenMixer,
 } from '../utils/audioProcessing';
-import { onShortcutEvent } from '../utils/desktop';
+import { onShortcutEvent, isDesktop } from '../utils/desktop';
 import { startRtcDiag, buildRtcConfig } from '../utils/rtcDiag';
 
 /**
@@ -550,14 +550,50 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
       const videoTrack = rawStream.getVideoTracks()[0] || null;
 
       let micTrack = rawMic;
-      if (rawMic) {
+      // В Electron-десктопе всегда обходим AudioContext-pipeline для
+      // RTC-sender'а: даже если ctx в 'running'-state, RTCRtpSender
+      // энкодит трек от MediaStreamDestination в тишину (известный
+      // квикс Chromium-в-Electron, см. utils/media.ts:86 — эту же
+      // проблему уже ловили в прошлом). Локальный тест микро через
+      // тот же pipeline работает, потому что он играет outputStream
+      // через <audio>, минуя RTP-конвейер. На вебе же RTC корректно
+      // обрабатывает такие треки, поэтому pipeline остаётся включённым
+      // (его убирает только тогл «Применять фильтры микрофона»).
+      // Цена: в десктопе кастомные OBS-style фильтры (HighPass /
+      // Compressor / Gate / MakeupGain) не применяются — звук идёт
+      // сырой, но с нативной обработкой Chromium (echoCancellation /
+      // noiseSuppression / autoGainControl), которая по качеству
+      // близка к NS3 от Google и для голосового чата более чем хватает.
+      const wantPipeline = rawMic && settings?.audioFiltersEnabled !== false && !isDesktop();
+      if (wantPipeline) {
         try {
           const pipeline = await createMicPipeline(
             new MediaStream([rawMic]),
             pickAudioFilterSettings(settings),
           );
-          micPipelineRef.current = pipeline;
-          micTrack = pipeline.outputTrack;
+          // Дать AudioContext ~150 мс на стабилизацию после resume().
+          // Если он остался suspended (Electron теряет user-activation
+          // на async-цепочке getUserMedia → ctx.resume() уходит в void),
+          // MediaStreamDestination отдаёт «немой» track и пир слышит
+          // тишину. В таком случае честнее откатиться на raw, чем
+          // пускать в RTC заведомо мёртвый трек.
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          if (pipeline.context.state !== 'running') {
+            console.warn(
+              '[useCall] mic pipeline AudioContext не запустился (state=',
+              pipeline.context.state,
+              ') — fallback на сырой mic-трек',
+            );
+            try {
+              pipeline.destroy();
+            } catch {
+              /* */
+            }
+            micTrack = rawMic;
+          } else {
+            micPipelineRef.current = pipeline;
+            micTrack = pipeline.outputTrack;
+          }
         } catch (e) {
           // Fallback: если что-то сломалось при сборке pipeline (ноды/ctx),
           // отдаём сырой трек, чтобы звонок всё-таки прошёл. Это лучше,
@@ -831,15 +867,21 @@ export function useCall({ socket, selfUser, settings, toast, sounds }) {
   // даже когда окно OwnCord не в фокусе — для этого мы тут вешаемся
   // на DOM-event 'owncord:shortcut', который шлёт preload.js. На вебе
   // событие никогда не прилетит — onShortcutEvent сам no-op'ом.
-  // Хоткеи действуют только когда есть активный mic-трек: иначе toggle
-  // вернётся раньше времени (см. сами toggleMute/toggleDeafen) — это
-  // ожидаемое поведение: если ты не в звонке, мьютить нечего.
+  //
+  // ВАЖНО: подписываемся ТОЛЬКО когда мы в активной фазе звонка. Иначе
+  // toggleDeafen всё равно переключает deafenedRef/setDeafened (у него нет
+  // трекового гейта, как у toggleMute), и в idle/incoming юзер ловит
+  // фантомный «глухой режим». 'connecting' и 'waiting' оставляем — там
+  // mic-track ещё/уже жив и hotkey должен работать.
   useEffect(() => {
+    if (state !== 'in-call' && state !== 'connecting' && state !== 'waiting') {
+      return undefined;
+    }
     return onShortcutEvent((action) => {
       if (action === 'toggleMute') toggleMute();
       else if (action === 'toggleDeafen') toggleDeafen();
     });
-  }, [toggleMute, toggleDeafen]);
+  }, [toggleMute, toggleDeafen, state]);
 
   const turnOffVideoSender = useCallback(async () => {
     if (!videoSenderRef.current) return;
