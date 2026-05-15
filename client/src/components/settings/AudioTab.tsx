@@ -826,13 +826,29 @@ export function AudioTab() {
           по дефолту off. */}
       <div className="space-y-2">
         <label className="text-xs text-slate-400 uppercase tracking-wider">Соединение</label>
-        <div className="rounded-lg border border-border bg-bg-2 p-3">
+        <div className="rounded-lg border border-border bg-bg-2 p-3 space-y-3">
           <ToggleRow
             icon={<Network size={16} />}
             title="Принудительно через TURN (relay)"
             description="Включай, если в звонках тишина у обоих, хотя соединение «установилось». Гонит медиа-трафик через relay-сервер — обходит симметричный NAT и мобильный CGNAT. Цена: чуть выше задержка."
             checked={!!settings.forceTurnRelay}
             onChange={(v) => update({ forceTurnRelay: v })}
+          />
+          <div className="h-px bg-border/60" />
+          {/* «Сырой микрофон» — спасательный круг для Electron-десктопа,
+              где AudioContext periodически уходит в suspended после
+              async-цепочки getUserMedia и MediaStreamDestination отдаёт
+              немой трек. Тест микро использует тот же pipeline и работает
+              (resume() в одном тике user-click), а звонок ломается.
+              Выключение тогла = в RTC уходит сырой track из getUserMedia,
+              без AudioContext-обёртки → пир гарантированно вас слышит,
+              но без HighPass/Compressor/Gate. */}
+          <ToggleRow
+            icon={<Mic size={16} />}
+            title="Применять фильтры микрофона"
+            description="Если собеседник вас не слышит (особенно в десктопе), выключите. Микрофон пойдёт сырым, без HighPass/Compressor/Gate — пир гарантированно вас услышит, но обработка не применится."
+            checked={settings.audioFiltersEnabled !== false}
+            onChange={(v) => update({ audioFiltersEnabled: v })}
           />
         </div>
         <div className="text-[11px] text-slate-500 leading-snug">

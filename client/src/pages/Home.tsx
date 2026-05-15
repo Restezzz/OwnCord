@@ -844,12 +844,22 @@ export default function Home() {
               })();
         const prefix = list.length === 1 ? 'Переслано' : `Переслано ${list.length} сообщений`;
         toast.info?.(`${prefix} ${target.kind === 'user' ? '→ ' + targetName : targetName}`);
+
+        // Сразу переключаемся в чат-получатель — иначе юзеру приходится
+        // тыкать в него руками, чтобы увидеть, что переслалось. Не дёргаем
+        // setSelected, если мы уже в этом чате (не сбивать состояние
+        // прокрутки/выделения у того же ChatPanel'а).
+        const sameChat =
+          selected && selected.kind === target.kind && selected.id === target.id;
+        if (!sameChat) {
+          setSelected({ kind: target.kind, id: target.id });
+        }
       } catch (e) {
         toast.error(e.message || 'Не удалось переслать');
         throw e; // чтобы модалка отметила ошибку и не закрылась
       }
     },
-    [forwardingMessages, token, users, groups, toast, socket],
+    [forwardingMessages, token, users, groups, toast, socket, selected],
   );
 
   const handleSendFile = useCallback(
