@@ -12,6 +12,7 @@ import UpdateToast from './components/UpdateToast';
 import TitleBar from './components/TitleBar';
 import { attachNotificationClickHandler } from './utils/push';
 import { isDesktop } from './utils/desktop';
+import '@fontsource-variable/inter';
 import './index.css';
 
 // Маркируем body для CSS, который оставляет 32px паддинга под кастомный
