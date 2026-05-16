@@ -158,19 +158,31 @@ function createWindow() {
   // Скрываем стандартное меню (File/Edit/...) — у нас своё UI.
   Menu.setApplicationMenu(null);
 
-  // DevTools-хоткеи временно отключены: продакшен-юзеру они без надобности,
-  // а для разработки можно раскомментить блок ниже либо открывать консоль
-  // программно из main (`mainWindow.webContents.openDevTools()`).
-  //
-  // mainWindow.webContents.on('before-input-event', (_e, input) => {
-  //   if (input.type !== 'keyDown') return;
-  //   const isF12 = input.key === 'F12';
-  //   const isCtrlShiftI =
-  //     (input.control || input.meta) && input.shift && (input.key === 'I' || input.key === 'i');
-  //   if (isF12 || isCtrlShiftI) {
-  //     mainWindow.webContents.toggleDevTools();
-  //   }
-  // });
+  // DevTools и reload-хоткеи: F12 / Ctrl+Shift+I открывают консоль,
+  // Ctrl+R / F5 — обычный reload, Ctrl+Shift+R — hard reload с очисткой кеша.
+  mainWindow.webContents.on('before-input-event', (_e, input) => {
+    if (input.type !== 'keyDown') return;
+    const ctrl = input.control || input.meta;
+    const isF12 = input.key === 'F12';
+    const isCtrlShiftI = ctrl && input.shift && (input.key === 'I' || input.key === 'i');
+    if (isF12 || isCtrlShiftI) {
+      mainWindow.webContents.toggleDevTools();
+      return;
+    }
+    const isF5 = input.key === 'F5';
+    const isCtrlR = ctrl && !input.shift && (input.key === 'R' || input.key === 'r');
+    const isCtrlShiftR = ctrl && input.shift && (input.key === 'R' || input.key === 'r');
+    if (isCtrlShiftR) {
+      // Hard reload: чистим HTTP-кеш сессии и грузим страницу заново.
+      mainWindow.webContents.session.clearCache().finally(() => {
+        mainWindow.webContents.reloadIgnoringCache();
+      });
+      return;
+    }
+    if (isF5 || isCtrlR) {
+      mainWindow.webContents.reload();
+    }
+  });
 
   loadServerUrl();
 
